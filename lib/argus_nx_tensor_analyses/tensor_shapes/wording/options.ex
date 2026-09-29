@@ -8,6 +8,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
 
   use ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   @rules Path.expand("../../../../priv/tensor_shapes/options.dl", __DIR__)
   @external_resource @rules
   @source File.read!(@rules)
@@ -94,7 +96,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
 
   @impl true
   def call_error("unknown_option", key, operation) do
-    name = function_name(operation)
+    name = without_arity(operation)
     keys = Map.get(@option_keys, name, [])
 
     %{
@@ -109,7 +111,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
   end
 
   def call_error("options_not_keyword", list, operation) do
-    name = function_name(operation)
+    name = without_arity(operation)
     keys = Map.get(@option_keys, name, [])
 
     %{
@@ -125,11 +127,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
 
   def call_error("option_form", detail, operation) do
     {key, value} = split_detail(detail)
-    form_wording(key, value, function_name(operation))
+    form_wording(key, value, without_arity(operation))
   end
 
   def call_error("option_value", detail, operation) do
-    name = function_name(operation)
+    name = without_arity(operation)
 
     case split_detail(detail) do
       {"", atom} -> value_wording(name, "padding type", @padding_types, atom)
@@ -273,18 +275,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
     end
   end
 
-  defp function_name(operation), do: String.replace(operation, ~r{/\d+$}, "")
-
   defp spell_keys([]), do: "no options"
-  defp spell_keys(keys), do: keys |> Enum.map(&":#{&1}") |> spell_list("and")
+  defp spell_keys(keys), do: keys |> Enum.map(&":#{&1}") |> join("and")
 
-  defp spell_atoms(atoms), do: spell_list(atoms, "or")
-
-  defp spell_list([one], _conjunction), do: one
-  defp spell_list([one, two], conjunction), do: "#{one} #{conjunction} #{two}"
-
-  defp spell_list(items, conjunction) do
-    {leading, [last]} = Enum.split(items, -1)
-    "#{Enum.join(leading, ", ")} #{conjunction} #{last}"
-  end
+  defp spell_atoms(atoms), do: join(atoms, "or")
 end

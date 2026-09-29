@@ -4,6 +4,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
 
   use ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   # How a value can go negative, by the cause the rules name.
   @negative_causes %{
     "written" => "a written negative number reaches it",
@@ -56,7 +58,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
           "of range.",
       label: "reads the indices here",
       help:
-        "keep the indices of #{name(operation)} in range: replace the ones the code ignores " <>
+        "keep the indices of #{without_arity(operation)} in range: replace the ones the code ignores " <>
           "with a valid index through Nx.select and mask their results, and take a modulo that " <>
           "stays positive as Nx.remainder(i + n, n)",
       frame: "the index can go negative because of this",
@@ -112,7 +114,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "samples an empty range",
       detail:
-        "Its range, #{range}, holds no integer: the maximum is exclusive. #{name(operation)} " <>
+        "Its range, #{range}, holds no integer: the maximum is exclusive. #{without_arity(operation)} " <>
           "takes the remainder of random bits by the maximum less the minimum, which is zero: " <>
           "the binary backend raises dividing by zero, and other backends give what the bits " <>
           "hold.",
@@ -127,7 +129,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "samples a reversed range",
       detail:
-        "Its minimum is above its maximum (#{range}). #{name(operation)} does not check the " <>
+        "Its minimum is above its maximum (#{range}). #{without_arity(operation)} does not check the " <>
           "order: randint takes the remainder by the span as an unsigned integer, which wraps " <>
           "to a huge one and gives values outside the range, and uniform clamps at the " <>
           "minimum, which gives the minimum alone.",
@@ -143,7 +145,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
       title: "samples a range its type cannot hold",
       detail:
         "It samples #{range}, and the type does not hold every value of it. " <>
-          "#{name(operation)} takes the span as an unsigned integer of the type's width and " <>
+          "#{without_arity(operation)} takes the span as an unsigned integer of the type's width and " <>
           "the result in the type, unchecked: a span as wide as the type wraps to zero (the " <>
           "binary backend raises), a wider one wraps short (0 to 300 as u8 gives values " <>
           "below 44), and bounds past the type wrap around it.",
@@ -158,7 +160,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "samples integers of a #{class} type",
       detail:
-        "#{name(operation)} samples integers only, and the type it would make is a #{class}: " <>
+        "#{without_arity(operation)} samples integers only, and the type it would make is a #{class}: " <>
           "the type given, or with none given, the type of a bound written as a #{class}. Nx " <>
           "raises that it expects an integer type.",
       label: "samples here",
@@ -172,7 +174,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "truncates a float bound",
       detail:
-        "A bound is written as a float, and #{name(operation)} makes the integer type it is given: " <>
+        "A bound is written as a float, and #{without_arity(operation)} makes the integer type it is given: " <>
           "it truncates the bound, and samples another range than the code writes.",
       label: "samples here",
       help: "round the bound to the integer meant, or sample floats with Nx.Random.uniform",
@@ -190,7 +192,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
         "divides by a count its ddof leaves #{if(how == "equal", do: "zero", else: "negative")}",
       detail:
         "Its written ddof is #{if(how == "equal", do: "equal to", else: "more than")} the count " <>
-          "of values it reduces, and #{name(operation)} divides by the count less ddof, " <>
+          "of values it reduces, and #{without_arity(operation)} divides by the count less ddof, " <>
           "unchecked. " <> ddof_consequence(how),
       label: "divides here",
       help:
@@ -206,7 +208,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "starts a slice at a #{class}",
       detail:
-        "A start can be a #{class}. #{name(operation)} takes integer starts only, and Nx raises " <>
+        "A start can be a #{class}. #{without_arity(operation)} takes integer starts only, and Nx raises " <>
           "that an index must be of an integer type.",
       label: "gets a #{class} start here",
       help: "make the start an integer: round it and then Nx.as_type(start, :s32)",
@@ -231,7 +233,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "squares complex values rather than their magnitudes",
       detail:
-        "Its operand can be complex, and #{name(operation)} squares each deviation as it is " <>
+        "Its operand can be complex, and #{without_arity(operation)} squares each deviation as it is " <>
           "(x ** 2, not |x| ** 2): the result is complex and not a spread " <>
           "(Nx.variance of [1+i, 0] is 0.5i). Nx does not raise.",
       label: "gets a complex tensor here",
@@ -262,13 +264,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     if String.starts_with?(operation, "Nx.put_slice/"), do: "writes", else: "reads"
   end
 
-  # The function a call calls, without its arity: `Nx.take`.
-  defp name(operation), do: String.replace(operation, ~r{/\d+$}, "")
-
   # What Nx raises for a complex operand of the call, which names the
   # function it rejects it in.
   defp complex_rejection(operation) do
-    case name(operation) do
+    case without_arity(operation) do
       "Nx.rfft" ->
         "Nx raises: Nx.rfft/2 expects a real tensor"
 

@@ -4,6 +4,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
 
   use ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   # How a value comes to be zero, or to the edge of a domain, by the cause
   # the rules name.
   @causes %{
@@ -36,12 +38,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
 
   defp cause(cause), do: Map.get(@causes, cause, "its math takes it there")
 
-  # The function a finding is at, without its arity: `Nx.acos`.
-  defp name(operation), do: String.replace(operation, ~r{/\d+$}, "")
-
   @impl true
   def hazard("infinite_gradient", "spread", operation) do
-    if name(operation) == "Nx.standard_deviation" do
+    if without_arity(operation) == "Nx.standard_deviation" do
       %{
         title: "has a NaN gradient where every value is the same",
         detail:
@@ -73,7 +72,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
   end
 
   def hazard("gradient_at_edge", cause, operation) do
-    {derivative, help} = edge(name(operation))
+    {derivative, help} = edge(without_arity(operation))
 
     %{
       title: "has an infinite gradient at the edge of its domain",
@@ -180,7 +179,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
         "Nx has no derivative for #{operation}, and a gradient flows back through it: " <>
           "computing the gradient raises \"cannot compute gradient for #{operation}\".",
       label: "differentiated here",
-      help: no_gradient_help(name(operation)),
+      help: no_gradient_help(without_arity(operation)),
       frame: "because of this",
       severity: :error
     }

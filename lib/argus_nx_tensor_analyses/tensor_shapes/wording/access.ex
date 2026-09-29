@@ -4,6 +4,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Access do
 
   use ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   @impl true
   def call_error("access_scalar", detail, _operation) do
     %{
@@ -147,7 +149,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Access do
     %{
       title: "gets a tuple of tensors where it takes a tensor",
       detail:
-        "Its #{ordinal(position)} argument is a tuple of tensors, which Nx cannot convert to a " <>
+        "Its #{ordinal(position, 5)} argument is a tuple of tensors, which Nx cannot convert to a " <>
           "tensor, and Nx raises.",
       label: "gets a tuple here",
       help:
@@ -182,12 +184,4 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Access do
   end
 
   def call_error(_kind, _detail, _operation), do: nil
-
-  # An argument's position, counted from 0, as a reader counts it.
-  defp ordinal("0"), do: "first"
-  defp ordinal("1"), do: "second"
-  defp ordinal("2"), do: "third"
-  defp ordinal("3"), do: "fourth"
-  defp ordinal("4"), do: "fifth"
-  defp ordinal(position), do: "#{String.to_integer(position) + 1}th"
 end

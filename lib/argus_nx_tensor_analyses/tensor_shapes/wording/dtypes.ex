@@ -4,6 +4,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
 
   use ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   # The largest whole number up to which each type holds every whole
   # number.
   @limits %{
@@ -30,9 +32,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   def call_error("unsigned_wraparound", type, operation) do
     %{
       title: "can go below zero in #{type}, which wraps around",
-      detail: wraparound_detail(name(operation), type),
+      detail: wraparound_detail(without_arity(operation), type),
       label: "wraps around here",
-      help: wraparound_help(name(operation)),
+      help: wraparound_help(without_arity(operation)),
       frame: "makes it #{type}:",
       severity: :warning
     }
@@ -59,7 +61,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     %{
       title: "adds up or multiplies #{type} values in #{type}",
       detail:
-        "#{name(operation)} keeps #{type} for its sums and products, where Nx.sum/2 would " <>
+        "#{without_arity(operation)} keeps #{type} for its sums and products, where Nx.sum/2 would " <>
           "widen it: past #{limit(type)} they wrap around (the dot product of s8 [100, 100] " <>
           "and [2, 2] is -112).",
       label: "wraps around here",
@@ -289,9 +291,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
 
     %{
       title: "turns #{article(from)} #{from} operand into #{to}",
-      detail: upcast_detail(name(operation), from, to),
+      detail: upcast_detail(without_arity(operation), from, to),
       label: "#{from} becomes #{to} here",
-      help: upcast_help(name(operation)),
+      help: upcast_help(without_arity(operation)),
       frame: "the #{to} operand:",
       severity: :warning
     }
@@ -435,9 +437,4 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       :error -> ""
     end
   end
-
-  defp name(operation), do: String.replace(operation, ~r{/\d+$}, "")
-
-  # The article before a type's name as it is read: an f16, a u8.
-  defp article(name), do: if(String.starts_with?(name, ["f", "s"]), do: "an", else: "a")
 end

@@ -47,6 +47,8 @@ defmodule ArgusNxTensorAnalyses.EMLX do
   alias Argus.Findings
   alias ArgusNxTensorAnalyses.TensorShapes
 
+  import ArgusNxTensorAnalyses.Text
+
   @external_resource Path.expand("../../priv/emlx.dl", __DIR__)
 
   @impl true
@@ -267,8 +269,6 @@ defmodule ArgusNxTensorAnalyses.EMLX do
     do: "the value rounded is a mean of integers, which lies on a half for an even count"
 
   defp half_cause(_cause), do: "the value rounded can lie on a half"
-
-  defp article(name), do: if(String.starts_with?(name, ["f", "s"]), do: "an", else: "a")
 
   @doc """
   Extracts the modules (atoms or `.beam` paths) and solves this analysis's

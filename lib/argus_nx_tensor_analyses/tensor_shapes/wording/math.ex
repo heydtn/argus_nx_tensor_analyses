@@ -4,6 +4,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
 
   use ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   # How a value can be zero, for the causes these rules add.
   @zero_causes %{
     "sample" =>
@@ -281,7 +283,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
   defp constant_types(operation) do
     name =
       operation
-      |> String.replace(~r{/\d+$}, "")
+      |> without_arity()
       |> String.replace_prefix("Nx.Constants.", "")
 
     cond do

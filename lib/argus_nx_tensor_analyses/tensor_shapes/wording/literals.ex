@@ -6,6 +6,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
 
   use ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   @impl true
   def type_error("integer_past_s32", subject, operation) do
     {spelled, _type} = literal(subject)
@@ -42,7 +44,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
             "normalizing it, and Nx.Type.float?/1 has no clause for the short atom " <>
             "#{subject}: it raises FunctionClauseError.",
         else:
-          "#{function_name(operation)} has clauses for a type only in its tuple form, " <>
+          "#{without_arity(operation)} has clauses for a type only in its tuple form, " <>
             "#{tuple}, and raises for the short atom #{subject} (FunctionClauseError, or an " <>
             "ArgumentError from the function it hands the atom to). Most of Nx's functions take " <>
             "either form because they normalize a type with Nx.Type.normalize!/1 first."
@@ -59,12 +61,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
 
   def type_error("atom_type_misread", subject, operation) do
     tuple = tuple_form(subject)
-    {given, expected} = misread(function_name(operation), subject, tuple)
+    {given, expected} = misread(without_arity(operation), subject, tuple)
 
     %{
       title: "gets the type #{subject}, and answers as if for another type",
       detail:
-        "#{function_name(operation)} matches a type only in its tuple form, and falls through " <>
+        "#{without_arity(operation)} matches a type only in its tuple form, and falls through " <>
           "to its catch-all clause for the short atom #{subject}: it returns #{given}, where " <>
           "for #{tuple} it returns #{expected}.",
       label: "returns #{given} here",
@@ -177,9 +179,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
 
   defp data?(operation), do: String.starts_with?(operation, "Nx.tensor/")
 
-  # The function a finding names, without its arity: `Nx.Type.float?`.
-  defp function_name(operation), do: String.replace(operation, ~r{/\d+$}, "")
-
   # A type's name as its family and size: `u8` as `{"u", 8}`.
   defp family_size("f8_e4m3fn"), do: {"f8_e4m3fn", 8}
 
@@ -193,9 +192,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     {family, size} = family_size(type)
     "{:#{family}, #{size}}"
   end
-
-  # The article before a type's name as it is read: an f64, a u8.
-  defp article(type), do: if(String.starts_with?(type, ["f", "s"]), do: "an", else: "a")
 
   defp integer_range("s", size), do: {-Integer.pow(2, size - 1), Integer.pow(2, size - 1) - 1}
   defp integer_range("u", size), do: {0, Integer.pow(2, size) - 1}

@@ -34,6 +34,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   alias ArgusNxTensorAnalyses.TensorShapes.ShapeFlow
   alias ArgusNxTensorAnalyses.TensorShapes.Wording
 
+  import ArgusNxTensorAnalyses.Text
+
   @external_resource Path.expand("../../priv/tensor_shapes.dl", __DIR__)
 
   # Each kind of finding: what the title says the call does, why it fails
@@ -433,7 +435,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
 
     Findings.new(
       if(to_integer(certain) == 1, do: :error, else: :warning),
-      "#{operation} takes integers, and its #{ordinal(to_string(position))} argument can be a #{class}",
+      "#{operation} takes integers, and its #{ordinal(to_string(position), 4)} argument can be a #{class}",
       "#{rejects} Nx raises for a #{class} tensor there.",
       at: Findings.at_instr(id),
       at_label: "gets a #{class} here",
@@ -500,7 +502,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   # What a function that takes only integers raises for anything else, and
   # what to change.
   defp integer_only(operation) do
-    name = String.replace(operation, ~r{/\d+$}, "")
+    name = without_arity(operation)
 
     cond do
       name in ~w(Nx.take Nx.take_along_axis Nx.gather Nx.indexed_add Nx.indexed_put) ->
@@ -516,9 +518,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
          "make the operand an integer tensor, such as Nx.as_type(x, :s32)"}
     end
   end
-
-  # The article before a type's name as it is read: an f64, a u8.
-  defp article(name), do: if(String.starts_with?(name, ["f", "s"]), do: "an", else: "a")
 
   defp to_integer(value) when is_integer(value), do: value
   defp to_integer(value) when is_binary(value), do: String.to_integer(value)
@@ -593,7 +592,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   }
 
   defp domain(operation) do
-    name = String.replace(operation, ~r{/\d+$}, "")
+    name = without_arity(operation)
     "#{name} #{Map.get(@domains, name, "is defined on only part of the line")}"
   end
 
@@ -808,35 +807,20 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   # operand holds several.
   defp gets(""), do: nil
 
-  defp gets(operands) do
-    case String.split(operands, ";") do
-      [shape] ->
-        "gets #{shape}"
-
-      shapes ->
-        leading = shapes |> Enum.drop(-1) |> Enum.join(", ")
-        "gets #{leading} and #{List.last(shapes)}"
-    end
-  end
+  defp gets(operands), do: "gets #{operands |> String.split(";") |> join("and")}"
 
   defp frame_label("call", callee, _position, _shown),
     do: "calls #{function_name(callee)} with these shapes"
 
   defp frame_label(how, operation, position, shown) do
     verb = if how == "made", do: "makes", else: "returns"
-    argument = "the #{ordinal(position)} argument of #{operation}"
+    argument = "the #{ordinal(position, 4)} argument of #{operation}"
 
     case shown do
       "" -> "#{verb} #{argument}"
       shape -> "#{verb} #{shape}, #{argument}"
     end
   end
-
-  defp ordinal("0"), do: "first"
-  defp ordinal("1"), do: "second"
-  defp ordinal("2"), do: "third"
-  defp ordinal("3"), do: "fourth"
-  defp ordinal(position), do: "#{String.to_integer(position) + 1}th"
 
   # A function as its reader writes it: a `defn`'s body, which the compiler
   # names `__defn:name__`, by its name in the source.
