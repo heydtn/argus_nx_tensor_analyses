@@ -414,17 +414,17 @@ may_equal(value, literal) :- value = $Module(literal).
 may_equal(value, literal) :- value = $Object(_context, _object, _mapping), match("[\\[{%].*", literal).
 
 .decl may_differ(value: Value, literal: symbol) inline
-may_differ(value, literal) :- value = $Opaque(_), strlen(literal) >= 0.
+may_differ(value, literal) :- value = $Opaque(_path), strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Term(text, start), term_spelling(text, start, spelled), spelled != literal.
 may_differ(value, literal) :- value = $Integer([known, nil]), known > 0, to_string(known) != literal.
 may_differ(value, literal) :- value = $Integer([coefficient, [_factor, _factors]]), coefficient > 0, strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Integer([0, nil]), strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Module(module), module != literal.
-may_differ(value, literal) :- value = $Object(_, _, _), strlen(literal) >= 0.
-may_differ(value, literal) :- value = $Tensor(_), strlen(literal) >= 0.
-may_differ(value, literal) :- value = $Uniform(_), strlen(literal) >= 0.
-may_differ(value, literal) :- value = $Shape(_), strlen(literal) >= 0.
-may_differ(value, literal) :- value = $Function(_, _, _), strlen(literal) >= 0.
+may_differ(value, literal) :- value = $Object(_context, _object, _mapping), strlen(literal) >= 0.
+may_differ(value, literal) :- value = $Tensor(_tensor), strlen(literal) >= 0.
+may_differ(value, literal) :- value = $Uniform(_tensor), strlen(literal) >= 0.
+may_differ(value, literal) :- value = $Shape(_axes), strlen(literal) >= 0.
+may_differ(value, literal) :- value = $Function(_module, _name, _arity), strlen(literal) >= 0.
 
 // A test some path of the function passes.
 .decl path_test(function: symbol, kind: symbol, source: symbol, literal: symbol, polarity: symbol)
