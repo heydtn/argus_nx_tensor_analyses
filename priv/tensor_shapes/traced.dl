@@ -219,20 +219,17 @@ makes_jitted(site) :-
   match("jit|compile", name),
   !resolves_conflict(site).
 
-// A jit whose options may say what to do when another compilation runs
-// (`on_conflict:`), as `Nx.Defn.jit/2` and `jit_apply/3` take them: any
-// but written ones without the key.
+// A jit whose options may say what to do when another compilation runs:
+// they give `on_conflict:`, or may hold keys the rules cannot read.
 .decl resolves_conflict(site: symbol)
 resolves_conflict(site) :-
-  remote_call(site, function, "Nx.Defn", name, arity),
-  ( name = "jit", arity = 2, position = 1 ; name = "jit_apply", arity = 3, position = 2 ),
-  flow_argument(site, function, position, kind, _),
-  kind != "literal".
+  remote_call(site, _, "Nx.Defn", name, _),
+  match("jit|jit_apply", name),
+  option_given(site, "on_conflict").
 resolves_conflict(site) :-
-  remote_call(site, function, "Nx.Defn", name, arity),
-  ( name = "jit", arity = 2, position = 1 ; name = "jit_apply", arity = 3, position = 2 ),
-  flow_argument(site, function, position, "literal", text),
-  match(".*on_conflict:.*", text).
+  remote_call(site, _, "Nx.Defn", name, _),
+  match("jit|jit_apply", name),
+  options_open(site).
 
 // An Nx call whose result is a tensor: any but those that answer with a
 // number, a shape, a type, a list, a binary or a tuple, or hand back
