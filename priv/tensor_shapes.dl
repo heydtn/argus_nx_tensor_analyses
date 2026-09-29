@@ -60,13 +60,6 @@
 // ahead of this program, from wherever Mix put `argus_beam`
 // (`ArgusNxTensorAnalyses.TensorShapes.solve/3`).
 
-// Soufflé's SubsumptionQualifierTransformer walks the whole program once
-// for every relation, a third of the time Soufflé takes to start here,
-// and only matters to subsumptive (`<=`) clauses, which neither this
-// program nor Argus's words have. Should one be added, Soufflé reports it
-// as an error rather than solving it differently.
-.pragma "disable-transformers" "SubsumptionQualifierTransformer"
-
 // ══ Types ═══════════════════════════════════════════════════════════
 
 // Size variables multiplied together, sorted.
