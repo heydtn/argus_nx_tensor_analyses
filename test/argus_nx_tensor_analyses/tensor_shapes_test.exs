@@ -1713,7 +1713,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :finite}, "Nx.tensor(6.0e-8, type: :f16)"},
     {{:finds, {"tensor_type_error", "literal_flushes", "1.0e-46 as f32"}, :finite},
      "Nx.tensor([1.0e-46], type: :f32)"},
-    {{:finds_none, :finite}, "Nx.tensor([1.0e-40], type: :bf16)"}
+    {{:finds_none, :finite}, "Nx.tensor([1.0e-40], type: :bf16)"},
+    # f8 keeps an f16's top byte: it overflows where f16 does, and flushes
+    # below 2^-16 less half an f16 subnormal
+    {{:finds, {"tensor_type_error", "literal_overflows", "65520.0 as f8"}, :nonfinite},
+     "Nx.tensor([65520.0], type: :f8)"},
+    {{:finds_none, :finite}, "Nx.tensor([65519.0], type: :f8)"},
+    {{:finds, {"tensor_type_error", "literal_flushes", "1.52e-5 as f8"}, :finite},
+     "Nx.tensor([1.52e-5], type: :f8)"},
+    {{:finds_none, :finite}, "Nx.tensor([1.523e-5], type: :f8)"}
   ]
 
   @literal_fixtures ArgusNxTensorAnalyses.TensorShapesTest.LiteralFixtures
@@ -2558,6 +2566,27 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-12 f16"}, :nonfinite},
      "Nx.rsqrt(Nx.add(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-12))"},
     {{:finds_none, :finite}, "Nx.rsqrt(Nx.add(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-4))"},
+    # f8 keeps an f16's top byte, so a number overflows and flushes in it
+    # where it does written as f8 data
+    {{:finds_none, :finite}, "Nx.add(Nx.tensor([1.0], type: :f8), 61440.0)"},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f8"}, :nonfinite},
+     "Nx.add(Nx.tensor([1.0], type: :f8), 65520.0)"},
+    {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-5 f8"}, :finite},
+     "Nx.add(Nx.tensor([0.0], type: :f8), 1.0e-5)"},
+    {{:finds_none, :finite}, "Nx.add(Nx.tensor([0.0], type: :f8), 1.6e-5)"},
+    {{:finds_none, :finite}, "Nx.as_type(Nx.Constants.max_finite(:f16), :f8)"},
+    {{:finds_none, :finite}, "Nx.sum(Nx.broadcast(Nx.tensor(1.0, type: :f8), {62000}))"},
+    {{:finds, {"tensor_nonfinite_result", "float_sum_overflow", "f8 66000"}, :nonfinite},
+     "Nx.sum(Nx.broadcast(Nx.tensor(1.0, type: :f8), {66000}))"},
+    # a number meeting a bf16, f32 or f16 tensor overflows and flushes where
+    # it does written as data of that type
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "bf16"}, :nonfinite},
+     "Nx.add(Nx.bf16([1.0]), 1.0e39)"},
+    {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-46 f32"}, :finite},
+     "Nx.add(Nx.f32([0.0]), 1.0e-46)"},
+    {{:finds, {"tensor_call_error", "literal_underflow", "2.98e-8 f16"}, :finite},
+     "Nx.add(Nx.f16([0.0]), 2.98e-8)"},
+    {{:finds_none, :finite}, "Nx.add(Nx.f16([0.0]), 3.0e-8)"},
     # lower-precision floats made f32 by a fixed f32
     {{:finds, {"tensor_type_error", "upcast", "bf16 f32"}, :accepted},
      "Nx.clip(Nx.bf16([1]), -1.0, 1.0)"},

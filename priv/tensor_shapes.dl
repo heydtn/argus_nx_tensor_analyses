@@ -2753,8 +2753,8 @@ escape_code("\"", 34). escape_code("#", 35). escape_code("\\", 92).
 //
 // What the spelling of a number says of it, for the numbers the rules
 // ask about: its kind, sign, region against ±1 and more
-// (`written_number`), its value and magnitude where Souffle reads them,
-// and the types that cannot hold it (`number_misfit`).
+// (`written_number`), its value where Souffle reads it, and the types
+// that cannot hold it (`number_misfit`).
 //
 // Souffle's numbers are 32 bits and its floats f32s, and `to_number` and
 // `to_float` abort the whole solve on a spelling outside their range. So
@@ -2849,11 +2849,6 @@ written_number(spelled, "range", "below_f32") :-
 .decl number_value(spelled: symbol, value: number)
 number_value(spelled, to_number(spelled)) :- written_number(spelled, "range", "s32").
 
-// A written number's magnitude as an f32, where `to_float` reads it.
-.decl number_magnitude(spelled: symbol, magnitude: float)
-number_magnitude(spelled, max(to_float(spelled), -to_float(spelled))) :-
-  written_number(spelled, "range", "f32").
-
 // A type that cannot hold a written number, and what Nx makes of it:
 //
 //   * "wraps": an integer outside an integer type's range, which Nx
@@ -2941,18 +2936,21 @@ digits_at_least(digits, bound) :- strlen(digits) = strlen(bound), digits >= boun
 //     3.4028235677973366e38, and bf16 (which keeps f32's exponent) and
 //     c64 (whose parts are f32s) with it;
 //   * f16 flushes to zero at or below 2.98e-8 (half its smallest
-//     subnormal, 2.9802322387695312e-8), f8 below 1.52e-5, bf16 below
-//     9.18e-41, and f32 and c64 at or below 7.0e-46 (half of
-//     1.401298464324817e-45).
+//     subnormal, 2.9802322387695312e-8); f8 below 1.52289e-5, as Nx keeps
+//     an f16's top byte, which is zero below 2^-16 (f8's smallest
+//     subnormal), and a number rounds up to 2^-16 as an f16 from half an
+//     f16 subnormal below it, 1.5228986740112305e-5; bf16 below 9.18e-41;
+//     and f32 and c64 at or below 7.0e-46 (half of 1.401298464324817e-45).
 //
-// f64 and c128 hold any float literal, and f8_e4m3fn, which saturates,
-// is not checked.
+// f64 and c128 hold any float literal, though a number meeting a tensor
+// of either is made an f32 first, which is not checked; f8_e4m3fn, which
+// saturates, is not checked either.
 .decl float_limit(names: symbol, outcome: symbol, pattern: symbol)
 float_limit("f16|f8", "overflows", "-?([1-9][0-9]{5,}|6552[0-9]|655[3-9][0-9]|65[6-9][0-9]{2}|6[6-9][0-9]{3}|[7-9][0-9]{4})\\.[0-9]+").
 float_limit("f16|f8", "overflows", "-?([1-9]\\.[0-9]+e([5-9]|[1-9][0-9]+)|(6\\.55[2-9]|6\\.5[6-9]|6\\.[6-9]|[7-9]\\.)[0-9]*e4)").
 float_limit("bf16|f32|c64", "overflows", "-?([1-9]\\.[0-9]+e(39|[4-9][0-9]|[1-9][0-9]{2,})|(3\\.4028236|3\\.402823[7-9]|3\\.40282[4-9]|3\\.4028[3-9]|3\\.4029|3\\.40[3-9]|3\\.4[1-9]|3\\.[5-9]|[4-9]\\.)[0-9]*e38)").
 float_limit("f16", "flushes", "-?([1-9]\\.[0-9]+e-(9|[1-9][0-9]+)|(1\\.[0-9]+|2\\.[0-8][0-9]*|2\\.9|2\\.9[0-7][0-9]*|2\\.98)e-8)").
-float_limit("f8", "flushes", "-?([1-9]\\.[0-9]+e-([6-9]|[1-9][0-9]+)|(1\\.[0-4][0-9]*|1\\.5|1\\.5[01][0-9]*)e-5)").
+float_limit("f8", "flushes", "-?([1-9]\\.[0-9]+e-([6-9]|[1-9][0-9]+)|(1\\.[0-4][0-9]*|1\\.5|1\\.5[01][0-9]*|1\\.52|1\\.52[01][0-9]*|1\\.522|1\\.522[0-7][0-9]*|1\\.5228|1\\.5228[0-8][0-9]*)e-5)").
 float_limit("bf16", "flushes", "-?([1-9]\\.[0-9]+e-(4[2-9]|[5-9][0-9]|[1-9][0-9]{2,})|([1-8]\\.[0-9]+|9\\.0[0-9]*|9\\.1|9\\.1[0-7][0-9]*)e-41)").
 float_limit("f32|c64", "flushes", "-?([1-9]\\.[0-9]+e-(4[7-9]|[5-9][0-9]|[1-9][0-9]{2,})|([1-6]\\.[0-9]+|7\\.0)e-46)").
 

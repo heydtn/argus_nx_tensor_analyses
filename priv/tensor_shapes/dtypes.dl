@@ -327,7 +327,7 @@ integer_determinant(context, site, type, origin) :-
 literal_overflow(context, site, concrete) :-
   casts_written_number(context, site, type, number),
   type_instance(type, concrete),
-  number_misfit(number, concrete, "past_largest").
+  number_misfit(number, concrete, "overflows").
 
 // A written number too small for the float type it is made, which rounds
 // it to zero (an epsilon of 1.0e-12 in f16): whatever it was to keep away
@@ -336,7 +336,7 @@ literal_overflow(context, site, concrete) :-
 literal_underflow(context, site, number, concrete) :-
   casts_written_number(context, site, type, number),
   type_instance(type, concrete),
-  number_misfit(number, concrete, "below_smallest").
+  number_misfit(number, concrete, "flushes").
 
 // A value holding a number beyond a float type's range made that type: a
 // number written where it is made (-1.0e9), or a constant at the edge of a
@@ -535,33 +535,19 @@ multiplied_out(context, site) :-
   size >= 2,
   size <= 3.
 
-// A written number at or past the magnitude a float type rounds to
-// infinity ("past_largest"), and one, not zero, below the magnitude it
-// rounds to zero ("below_smallest").
-number_misfit(number, type, "past_largest") :-
-  number_magnitude(number, magnitude),
-  float_range(type, _, overflow, _),
-  overflow > 0.0,
-  magnitude >= overflow.
-number_misfit(number, type, "below_smallest") :-
-  number_magnitude(number, magnitude),
-  float_range(type, _, _, underflow),
-  magnitude != 0.0,
-  magnitude < underflow.
-
 // A call that makes a value holding a number past what a float type
 // holds: a number written there, or a constant at the edge of a wider
 // type's range.
 .decl makes_value_past_largest(site: symbol, type: symbol)
 makes_value_past_largest(site, type) :-
   argument_number(_, site, _, number),
-  number_misfit(number, type, "past_largest").
+  number_misfit(number, type, "overflows").
 makes_value_past_largest(site, type) :-
   remote_call(site, _, "Nx.Constants", name, _),
   ( name = "min_finite" ; name = "max_finite" ),
   call_type(_, site, wider, _),
-  float_range(wider, largest, _, _),
-  float_range(type, _, overflow, _),
+  float_range(wider, largest, _),
+  float_range(type, _, overflow),
   overflow > 0.0,
   largest >= overflow.
 
@@ -934,14 +920,14 @@ sequence_outgrows([coefficient, factors], type) :-
 .decl sum_outgrows(size: Size, type: symbol)
 sum_outgrows([length, nil], type) :-
   outgrow_demand([length, nil], type),
-  float_range(type, _, overflow, _),
+  float_range(type, _, overflow),
   overflow > 0.0,
   to_float(length) >= overflow.
 sum_outgrows([coefficient, factors], type) :-
   outgrow_demand([coefficient, factors], type),
   factors != nil,
   coefficient > 0,
-  float_range(type, _, overflow, _),
+  float_range(type, _, overflow),
   overflow > 0.0.
 
 // The sizes compared with a type, which are spelled.
@@ -969,15 +955,14 @@ size_demand(size) :- outgrow_demand(size, _).
 type_instance(type, type) :- nx_dtype(type, _, _, _).
 type_instance("configured", concrete) :- float_type(concrete).
 
-// A float type's largest finite value (as far as an f32 reaches), the
-// magnitude from which it rounds a number to infinity, and the one below
-// which to zero, 0.0 where those are past an f32's.
-.decl float_range(type: symbol, largest: float, overflow: float, underflow: float)
-float_range("f16", 65504.0, 65520.0, to_float("2.98e-8")).
-float_range("f8", 57344.0, 61440.0, to_float("7.63e-6")).
-float_range("bf16", to_float("3.3895314e38"), 0.0, 0.0).
-float_range("f32", to_float("3.4e38"), 0.0, 0.0).
-float_range("f64", to_float("3.4e38"), 0.0, 0.0).
+// A float type's largest finite value (as far as an f32 reaches), and the
+// magnitude from which it rounds a number to infinity, 0.0 where that is
+// past an f32's. f8 takes an f16's top byte, dropping the rest of the
+// fraction, so it overflows where f16 does.
+.decl float_range(type: symbol, largest: float, overflow: float)
+float_range("f16", 65504.0, 65520.0). float_range("f8", 57344.0, 65520.0).
+float_range("bf16", to_float("3.3895314e38"), 0.0).
+float_range("f32", to_float("3.4e38"), 0.0). float_range("f64", to_float("3.4e38"), 0.0).
 
 // `Nx.Type.merge/2` over every pair of types: one family keeps the larger
 // size; an unsigned meeting a signed type, or a float a complex one,
