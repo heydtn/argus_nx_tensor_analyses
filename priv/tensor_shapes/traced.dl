@@ -643,14 +643,6 @@ reported_function(function) :- jit_in_trace(_, function, _).
 reported_function(function) :- tensor_truth_tested(_, function, _).
 reported_function(function) :- template_computed(_, function, _, _).
 
-// The context a function is analyzed in over its own names, where a
-// finding that holds however the function is called is reported.
-.decl own_context(function: symbol, context: Context)
-own_context(function, $Canonical(function, arguments)) :-
-  reported_function(function),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments).
-
 // The findings, in the context they hold in: a data read's origin is the
 // Nx call that makes what it reads, or none.
 call_error(context, site, "data_read_in_trace", how, origin) :-

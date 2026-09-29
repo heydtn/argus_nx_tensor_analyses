@@ -472,11 +472,15 @@ function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 // The function is analyzed in the context: every function that handles
 // tensors over its own names, and every function a call runs.
 .decl active(context: Context, function: symbol)
-active($Canonical(function, arguments), function) :-
-  tensor_function(function),
+active(context, function) :- tensor_function(function), own_context(function, context).
+active(callee_context, callee) :- invocation(_, _, callee, callee_context).
+
+// The function's canonical context over its own names: where a finding
+// that holds however the function is called is reported.
+.decl own_context(function: symbol, context: Context) inline
+own_context(function, $Canonical(function, arguments)) :-
   function_def(function, _, _, arity, _),
   own_names(arity, 0, arguments).
-active(callee_context, callee) :- invocation(_, _, callee, callee_context).
 
 // Parameters named by their own positions, from `position` on.
 .decl own_names(arity: number, position: number, arguments: Arguments)
@@ -10092,10 +10096,9 @@ combinations(context, site, instances + lists) :-
 // arguments at each call: a function analyzed over its own names, and a
 // context a call in a certain one enters where it enters no other.
 .decl certain_context(context: Context)
-certain_context($Canonical(function, arguments)) :-
-  active($Canonical(function, arguments), function),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments).
+certain_context(context) :-
+  active(context, function),
+  own_context(function, context).
 certain_context(callee_context) :-
   certain_context(context),
   invocation(context, site, _, callee_context),

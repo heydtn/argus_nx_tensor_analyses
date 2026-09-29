@@ -418,30 +418,25 @@ freed_tensor_used(use, freed, origin, function, kind, how) :-
 //
 // Each in the context of its function over its own names.
 
-call_error($Canonical(function, arguments), second, "reused_key", cat(shown, " after ", first_shown), origin) :-
+call_error(context, second, "reused_key", cat(shown, " after ", first_shown), origin) :-
   reused_key(first, second, function),
   consumes_key(second, function, _, _, shown),
   consumes_key(first, function, _, _, first_shown),
   draw_origin(first, origin),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments).
-call_error($Canonical(body, arguments), draw, "captured_loop_key", shown, loop) :-
+  own_context(function, context).
+call_error(context, draw, "captured_loop_key", shown, loop) :-
   key_captured_by_loop(draw, loop, body),
   consumes_key(draw, body, _, _, shown),
-  function_def(body, _, _, arity, _),
-  own_names(arity, 0, arguments).
-call_error($Canonical(body, arguments), draw, "passed_back_key", shown, loop) :-
+  own_context(body, context).
+call_error(context, draw, "passed_back_key", shown, loop) :-
   key_passed_back(draw, loop, body),
   consumes_key(draw, body, _, _, shown),
-  function_def(body, _, _, arity, _),
-  own_names(arity, 0, arguments).
-call_error($Canonical(function, arguments), return, "spent_key_returned", shown, origin) :-
+  own_context(body, context).
+call_error(context, return, "spent_key_returned", shown, origin) :-
   spent_key_returned(return, draw, function),
   consumes_key(draw, function, _, _, shown),
   draw_origin(draw, origin),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments).
-call_error($Canonical(function, arguments), use, kind, how, origin) :-
+  own_context(function, context).
+call_error(context, use, kind, how, origin) :-
   freed_tensor_used(use, _, origin, function, kind, how),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments).
+  own_context(function, context).

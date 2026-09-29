@@ -453,10 +453,10 @@ call_error(context, site, "tensor_as_integer", slot, "") :-
 // runs it in when called from outside a `defn`, where `defn` makes every
 // argument a tensor but a list or a function.
 .decl entry_body(body: symbol, context: Context)
-entry_body(body, $Canonical(body, arguments)) :-
+entry_body(body, context) :-
   defn_wrapper(wrapper, body),
-  function_def(wrapper, _, _, arity, 1),
-  own_names(arity, 0, arguments).
+  function_def(wrapper, _, _, _, 1),
+  own_context(body, context).
 
 // A source of such a body that holds a tensor made of its arguments: a
 // parameter, an element of a tuple one holds, and what an Nx call computes

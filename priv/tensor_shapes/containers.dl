@@ -230,16 +230,14 @@ reads_source_field(caller, "result", call, field, substr(load, 0, strlen(load) -
 .decl jitted_struct_result(context: Context, call: symbol, caller: symbol, struct: symbol)
 jitted_struct_result(context, call, caller, struct) :-
   jitted_call(call, caller, function, _),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments),
-  return_value($Canonical(function, arguments), function, $Object(_, object, _)),
+  own_context(function, own),
+  return_value(own, function, $Object(_, object, _)),
   struct_built(object, struct),
   site_active(context, call).
 jitted_struct_result(context, call, caller, struct) :-
   jitted_call(call, caller, function, offset),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments),
-  return_value($Canonical(function, arguments), function, $Opaque(path)),
+  own_context(function, own),
+  return_value(own, function, $Opaque(path)),
   argument_value(context, call, position, $Object(_, object, _)),
   path = cat("$", to_string(offset + position)),
   struct_built(object, struct).
@@ -303,16 +301,14 @@ entry_context(context, site, caller) :-
 entry_context(context, site, caller) :-
   listing_call(site, caller, _, _),
   site_active(context, site).
-entry_context($Canonical(caller, arguments), site, caller) :-
+entry_context(context, site, caller) :-
   defn_call(site, caller),
   !active(_, caller),
-  function_def(caller, _, _, arity, _),
-  own_names(arity, 0, arguments).
-entry_context($Canonical(caller, arguments), site, caller) :-
+  own_context(caller, context).
+entry_context(context, site, caller) :-
   listing_call(site, caller, _, _),
   !active(_, caller),
-  function_def(caller, _, _, arity, _),
-  own_names(arity, 0, arguments).
+  own_context(caller, context).
 
 // What a source may hold in the context: what the rules follow it to, and
 // the terms it builds and the literals it writes, in a context the rules
@@ -585,11 +581,10 @@ differentiates(site, caller, "load", load, cat(path, suffix)) :-
   flow_load(caller, load, selector, kind, source),
   selector_suffix(selector, suffix).
 
-call_error($Canonical(function, arguments), site, "captured_gradient", path, "") :-
+call_error(context, site, "captured_gradient", path, "") :-
   captured_gradient(site, path),
   site_function(site, function),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments).
+  own_context(function, context).
 
 // ══ Fields visited in two orders ════════════════════════════════════
 
@@ -625,9 +620,8 @@ visit_call(function, field, visit, index) :-
   flow_load(function, load, field, "param", "0"),
   instruction(visit, function, index, _).
 
-call_error($Canonical(function, arguments), visit, "container_order", detail, "") :-
+call_error(context, visit, "container_order", detail, "") :-
   misordered_field(visit, struct, field),
   instruction(visit, function, _, _),
-  function_def(function, _, _, arity, _),
-  own_names(arity, 0, arguments),
+  own_context(function, context),
   detail = cat(struct, ".", substr(field, 1, strlen(field) - 1)).
