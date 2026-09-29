@@ -8633,139 +8633,139 @@ zero_kept(site, origin, cause, here, origin, cause) :-
 zero_kept(site, origin, cause, here, site, here) :-
   cause = "input", strlen(origin) >= 0, strlen(site) > 0, strlen(here) > 0.
 
-// A class's result signs. `positive`: exp, sigmoid, cosh.
-may_have_sign(context, function, "result", site, "positive", "", "") :- signed_call(context, site, function, "positive").
+// A class's result signs, by the rows of its rules (`sign_image`): the
+// result can have a row's sign where the operands the row names can have
+// the signs it names, but where the form of the call rules the row out
+// (`sign_blocked`). A zero is the operand's in the row's first slot, or
+// the call's own; a zero only some elements hold is none for a call that
+// sums them all (`whole_sum_past`).
+may_have_sign(context, function, "result", site, sign, "", "") :-
+  slot_sign(context, site, slot, from, _, _),
+  signed_call(context, site, function, class),
+  sign_image(class, slot, from, other, other_from, sign, ""),
+  slot_sign(context, site, other, other_from, _, _),
+  !sign_blocked(site, slot, from, sign).
+may_have_sign(context, function, "result", site, "zero", origin, cause) :-
+  slot_sign(context, site, slot, "zero", origin, cause),
+  signed_call(context, site, function, class),
+  sign_image(class, slot, "zero", other, other_from, "zero", "kept"),
+  slot_sign(context, site, other, other_from, _, _),
+  !sign_blocked(site, slot, "zero", "zero"),
+  !whole_sum_past(site, cause).
+may_have_sign(context, function, "result", site, "zero", site, cause) :-
+  slot_sign(context, site, slot, from, _, _),
+  signed_call(context, site, function, class),
+  sign_image(class, slot, from, other, other_from, "zero", cause),
+  cause != "kept",
+  slot_sign(context, site, other, other_from, _, _).
+
+// A row at slot 0: the result can have its sign whatever the operands
+// have.
+may_have_sign(context, function, "result", site, sign, "", "") :-
+  signed_call(context, site, function, class),
+  sign_image(class, 0, _, _, _, sign, "").
+may_have_sign(context, function, "result", site, "zero", site, cause) :-
+  signed_call(context, site, function, class),
+  sign_image(class, 0, _, _, _, "zero", cause).
+
+// The rows of a class's rules: its result can have `sign` where the
+// operand it reads in `slot` can have `from` and the one in `other` can
+// have `other_from`. A row that needs one operand names it twice, and one
+// that needs none names slot 0. `zero` says where a zero comes from: the
+// operand's in `slot` ("kept"), or the call, by that cause; it is "" for
+// the other signs.
+.decl sign_image(class: symbol, slot: number, from: symbol, other: number, other_from: symbol, sign: symbol, zero: symbol)
+
+// A row the form of a call rules out: its operand in `slot` with the sign
+// `from` gives the call no result of the sign `sign`.
+.decl sign_blocked(site: symbol, slot: number, from: symbol, sign: symbol)
+
+// `positive`: exp, sigmoid, cosh.
+sign_image("positive", 0, "", 0, "", "positive", "").
 
 // `preserve`: the result has the operand's signs (a reshape, a slice, an
 // odd function through zero like tanh).
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "preserve").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "preserve").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "preserve").
+sign_image("preserve", 1, "negative", 1, "negative", "negative", "").
+sign_image("preserve", 1, "positive", 1, "positive", "positive", "").
+sign_image("preserve", 1, "zero", 1, "zero", "zero", "kept").
 
 // `negate`.
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "negate").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "negate").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "negate").
+sign_image("negate", 1, "positive", 1, "positive", "negative", "").
+sign_image("negate", 1, "negative", 1, "negative", "positive", "").
+sign_image("negate", 1, "zero", 1, "zero", "zero", "kept").
 
 // `absolute`, `norm`: never negative, zero where the operand is.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, class),
-  ( class = "absolute" ; class = "norm" ).
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, class),
-  ( class = "absolute" ; class = "norm" ).
+sign_image("absolute", 1, "positive", 1, "positive", "positive", "").
+sign_image("absolute", 1, "negative", 1, "negative", "positive", "").
+sign_image("norm", 1, "positive", 1, "positive", "positive", "").
+sign_image("norm", 1, "negative", 1, "negative", "positive", "").
 may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause) :-
   slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, class),
   ( class = "absolute" ; class = "norm" ),
   zero_kept(site, origin, cause, class, kept_origin, kept_cause).
 
 // `root`: a square root, not negative (a negative operand is NaN).
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "root").
+sign_image("root", 1, "positive", 1, "positive", "positive", "").
 may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause) :-
   slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "root"),
   zero_kept(site, origin, cause, "root", kept_origin, kept_cause).
 
 // `reciprocal_root`: positive where its operand is (a zero operand is the
 // division `divides_by` names).
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "reciprocal_root").
+sign_image("reciprocal_root", 1, "positive", 1, "positive", "positive", "").
 
 // `logarithm`: any sign from a positive operand, and negative (an
 // infinity) from zero.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "logarithm").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "logarithm").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "zero", _, _), signed_call(context, site, function, "logarithm").
+sign_image("logarithm", 1, "positive", 1, "positive", "positive", "").
+sign_image("logarithm", 1, "positive", 1, "positive", "negative", "").
+sign_image("logarithm", 1, "zero", 1, "zero", "negative", "").
 may_have_sign(context, function, "result", site, "zero", "", "input") :-
   slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "logarithm").
 
 // `round`: floor, ceil, round keep a sign, and take a value between -1
 // and 1 to zero.
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "round").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "round").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "round").
-may_have_sign(context, function, "result", site, "zero", site, "round") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "round").
-may_have_sign(context, function, "result", site, "zero", site, "round") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "round").
+sign_image("round", 1, "negative", 1, "negative", "negative", "").
+sign_image("round", 1, "positive", 1, "positive", "positive", "").
+sign_image("round", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("round", 1, "positive", 1, "positive", "zero", "round").
+sign_image("round", 1, "negative", 1, "negative", "zero", "round").
 
 // `add`: a sum is zero where both are, or where they cancel.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "add").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 2, "positive", _, _), signed_call(context, site, function, "add").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "add").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 2, "negative", _, _), signed_call(context, site, function, "add").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), slot_sign(context, site, 2, "zero", _, _),
-  signed_call(context, site, function, "add").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 2, "zero", origin, cause), slot_sign(context, site, 1, "zero", _, _),
-  signed_call(context, site, function, "add").
-may_have_sign(context, function, "result", site, "zero", site, "cancel") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, "add").
-may_have_sign(context, function, "result", site, "zero", site, "cancel") :-
-  slot_sign(context, site, 1, "negative", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, "add").
+sign_image("add", 1, "positive", 1, "positive", "positive", "").
+sign_image("add", 2, "positive", 2, "positive", "positive", "").
+sign_image("add", 1, "negative", 1, "negative", "negative", "").
+sign_image("add", 2, "negative", 2, "negative", "negative", "").
+sign_image("add", 1, "zero", 2, "zero", "zero", "kept").
+sign_image("add", 2, "zero", 1, "zero", "zero", "kept").
+sign_image("add", 1, "positive", 2, "negative", "zero", "cancel").
+sign_image("add", 1, "negative", 2, "positive", "zero", "cancel").
 
 // `subtract`: a difference is zero where both are, or where they meet.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "subtract").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 2, "negative", _, _), signed_call(context, site, function, "subtract").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "subtract").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 2, "positive", _, _), signed_call(context, site, function, "subtract").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), slot_sign(context, site, 2, "zero", _, _),
-  signed_call(context, site, function, "subtract").
-may_have_sign(context, function, "result", site, "zero", site, "cancel") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, "subtract").
-may_have_sign(context, function, "result", site, "zero", site, "cancel") :-
-  slot_sign(context, site, 1, "negative", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, "subtract").
+sign_image("subtract", 1, "positive", 1, "positive", "positive", "").
+sign_image("subtract", 2, "negative", 2, "negative", "positive", "").
+sign_image("subtract", 1, "negative", 1, "negative", "negative", "").
+sign_image("subtract", 2, "positive", 2, "positive", "negative", "").
+sign_image("subtract", 1, "zero", 2, "zero", "zero", "kept").
+sign_image("subtract", 1, "positive", 2, "positive", "zero", "cancel").
+sign_image("subtract", 1, "negative", 2, "negative", "zero", "cancel").
 
 // `multiply`, `dot`: a product is zero where either operand is, and a
 // value times itself is a square, never negative.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ).
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ).
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
-  !squares(site).
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
-  !squares(site).
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause),
-  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
-  !squares(site).
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 2, "zero", origin, cause),
-  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
-  !squares(site).
+sign_image("multiply", 1, "positive", 2, "positive", "positive", "").
+sign_image("multiply", 1, "negative", 2, "negative", "positive", "").
+sign_image("multiply", 1, "positive", 2, "negative", "negative", "").
+sign_image("multiply", 1, "negative", 2, "positive", "negative", "").
+sign_image("multiply", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("multiply", 2, "zero", 2, "zero", "zero", "kept").
+sign_image("dot", 1, "positive", 2, "positive", "positive", "").
+sign_image("dot", 1, "negative", 2, "negative", "positive", "").
+sign_image("dot", 1, "positive", 2, "negative", "negative", "").
+sign_image("dot", 1, "negative", 2, "positive", "negative", "").
+sign_image("dot", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("dot", 2, "zero", 2, "zero", "zero", "kept").
+sign_blocked(site, 1, "positive", "negative") :- squares(site).
+sign_blocked(site, 1, "negative", "negative") :- squares(site).
+sign_blocked(site, slot, "zero", "zero") :- squares(site), slot = range(1, 3).
 may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause) :-
   slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "multiply"),
   squares(site),
@@ -8781,101 +8781,59 @@ squares(site) :-
   1 = count : { flow_argument(site, function, 1, _, _) }.
 
 // `divide`: signs as a product's, zero where the dividend is.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause),
-  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
+sign_image("divide", 1, "positive", 2, "positive", "positive", "").
+sign_image("divide", 1, "negative", 2, "negative", "positive", "").
+sign_image("divide", 1, "positive", 2, "negative", "negative", "").
+sign_image("divide", 1, "negative", 2, "positive", "negative", "").
+sign_image("divide", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("quotient", 1, "positive", 2, "positive", "positive", "").
+sign_image("quotient", 1, "negative", 2, "negative", "positive", "").
+sign_image("quotient", 1, "positive", 2, "negative", "negative", "").
+sign_image("quotient", 1, "negative", 2, "positive", "negative", "").
+sign_image("quotient", 1, "zero", 1, "zero", "zero", "kept").
 
 // `quotient`: an integer quotient is also zero where the dividend is
 // smaller than the divisor.
-may_have_sign(context, function, "result", site, "zero", site, "quotient") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "quotient").
-may_have_sign(context, function, "result", site, "zero", site, "quotient") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "quotient").
+sign_image("quotient", 1, "positive", 1, "positive", "zero", "quotient").
+sign_image("quotient", 1, "negative", 1, "negative", "zero", "quotient").
 
 // `remainder`: the dividend's sign, and zero where the division is whole.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "remainder").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "remainder").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "remainder").
-may_have_sign(context, function, "result", site, "zero", site, "remainder") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "remainder").
-may_have_sign(context, function, "result", site, "zero", site, "remainder") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "remainder").
+sign_image("remainder", 1, "positive", 1, "positive", "positive", "").
+sign_image("remainder", 1, "negative", 1, "negative", "negative", "").
+sign_image("remainder", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("remainder", 1, "positive", 1, "positive", "zero", "remainder").
+sign_image("remainder", 1, "negative", 1, "negative", "zero", "remainder").
 
 // `maximum`: positive where either is, negative where both are, and zero
 // where one is and the other is not above it (a clamp at zero).
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "maximum").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 2, "positive", _, _), signed_call(context, site, function, "maximum").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, "maximum").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 1, "zero", _, _), slot_sign(context, site, 2, "zero", _, _),
-  signed_call(context, site, function, "maximum").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 1, "zero", _, _), slot_sign(context, site, 2, "negative", _, _),
-  signed_call(context, site, function, "maximum").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 2, "zero", _, _), slot_sign(context, site, 1, "negative", _, _),
-  signed_call(context, site, function, "maximum").
+sign_image("maximum", 1, "positive", 1, "positive", "positive", "").
+sign_image("maximum", 2, "positive", 2, "positive", "positive", "").
+sign_image("maximum", 1, "negative", 2, "negative", "negative", "").
+sign_image("maximum", 1, "zero", 2, "zero", "zero", "clamp").
+sign_image("maximum", 1, "zero", 2, "negative", "zero", "clamp").
+sign_image("maximum", 2, "zero", 1, "negative", "zero", "clamp").
 
 // `minimum`: the mirror of `maximum`.
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "minimum").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 2, "negative", _, _), signed_call(context, site, function, "minimum").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, "minimum").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 1, "zero", _, _), slot_sign(context, site, 2, "zero", _, _),
-  signed_call(context, site, function, "minimum").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 1, "zero", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, "minimum").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 2, "zero", _, _), slot_sign(context, site, 1, "positive", _, _),
-  signed_call(context, site, function, "minimum").
+sign_image("minimum", 1, "negative", 1, "negative", "negative", "").
+sign_image("minimum", 2, "negative", 2, "negative", "negative", "").
+sign_image("minimum", 1, "positive", 2, "positive", "positive", "").
+sign_image("minimum", 1, "zero", 2, "zero", "zero", "clamp").
+sign_image("minimum", 1, "zero", 2, "positive", "zero", "clamp").
+sign_image("minimum", 2, "zero", 1, "positive", "zero", "clamp").
 
 // `clip`: within [low, high]: positive where high can be and the value
 // or low can be, negative likewise, zero where the range holds zero and
 // the value, low or high can be it.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 3, "positive", _, _), slot_sign(context, site, 1, "positive", _, _),
-  signed_call(context, site, function, "clip").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 3, "positive", _, _), slot_sign(context, site, 2, "positive", _, _),
-  signed_call(context, site, function, "clip").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 2, "negative", _, _), slot_sign(context, site, 1, "negative", _, _),
-  signed_call(context, site, function, "clip").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 2, "negative", _, _), slot_sign(context, site, 3, "negative", _, _),
-  signed_call(context, site, function, "clip").
+sign_image("clip", 3, "positive", 1, "positive", "positive", "").
+sign_image("clip", 3, "positive", 2, "positive", "positive", "").
+sign_image("clip", 2, "negative", 1, "negative", "negative", "").
+sign_image("clip", 2, "negative", 3, "negative", "negative", "").
+sign_image("clip", 2, "zero", 3, "zero", "zero", "clamp").
+sign_image("clip", 2, "zero", 3, "positive", "zero", "clamp").
+sign_image("clip", 3, "zero", 2, "zero", "zero", "clamp").
+sign_image("clip", 3, "zero", 2, "negative", "zero", "clamp").
 may_have_sign(context, function, "result", site, "zero", origin, cause) :-
   slot_sign(context, site, 1, "zero", origin, cause), clip_holds_zero(context, site),
-  signed_call(context, site, function, "clip").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 2, "zero", _, _), clip_reaches_high(context, site),
-  signed_call(context, site, function, "clip").
-may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
-  slot_sign(context, site, 3, "zero", _, _), clip_reaches_low(context, site),
   signed_call(context, site, function, "clip").
 
 // A clip's low bound can be at most zero, and its high at least zero.
@@ -8891,19 +8849,16 @@ clip_holds_zero(context, site) :- clip_reaches_low(context, site), clip_reaches_
 // `power`: an even integer power is a square, an odd one keeps the sign,
 // a zeroth is one; any other power is positive where the base is, and
 // zero where the base is.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "power").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "power"),
-  !odd_power(site).
+sign_image("power", 1, "positive", 1, "positive", "positive", "").
+sign_image("power", 1, "negative", 1, "negative", "positive", "").
+sign_image("power", 1, "negative", 1, "negative", "negative", "").
+sign_image("power", 1, "zero", 1, "zero", "zero", "kept").
+sign_blocked(site, 1, "negative", "positive") :- odd_power(site).
+sign_blocked(site, 1, "negative", "negative") :- even_power(site).
+sign_blocked(site, 1, "zero", "zero") :- even_power(site).
+sign_blocked(site, 1, "zero", "zero") :- power_of(site, 0).
 may_have_sign(context, function, "result", site, "positive", "", "") :-
   signed_call(context, site, function, "power"), power_of(site, 0).
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "power"),
-  !even_power(site).
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "power"),
-  !even_power(site), !power_of(site, 0).
 may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause) :-
   slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "power"),
   even_power(site),
@@ -8922,22 +8877,15 @@ odd_power(site) :- power_of(site, exponent), exponent > 0, exponent % 2 = 1.
 
 // `compare`: a comparison or logical operation is 1 where it holds and 0
 // where it does not.
-may_have_sign(context, function, "result", site, "positive", "", "") :- signed_call(context, site, function, "compare").
-may_have_sign(context, function, "result", site, "zero", site, "comparison") :-
-  signed_call(context, site, function, "compare").
+sign_image("compare", 0, "", 0, "", "positive", "").
+sign_image("compare", 0, "", 0, "", "zero", "comparison").
 
 // `sum`: a sum or mean has its elements' signs, and is zero where they
 // all are, or where they cancel.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "sum").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "sum").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "sum"),
-  !whole_sum_past(site, cause).
-may_have_sign(context, function, "result", site, "zero", site, "cancel") :-
-  slot_sign(context, site, 1, "positive", _, _), slot_sign(context, site, 1, "negative", _, _),
-  signed_call(context, site, function, "sum").
+sign_image("sum", 1, "positive", 1, "positive", "positive", "").
+sign_image("sum", 1, "negative", 1, "negative", "negative", "").
+sign_image("sum", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("sum", 1, "positive", 1, "negative", "zero", "cancel").
 
 // A sum or mean of every element, which a zero only some of them hold
 // does not make zero (a cumulative sum's first element is its operand's).
@@ -8952,63 +8900,46 @@ whole_sum("Nx.sum"). whole_sum("Nx.mean").
 
 // `product`: positive from positives, or from negatives paired; negative
 // where an element is; zero where one is.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "product").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "product").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "product").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "product").
+sign_image("product", 1, "positive", 1, "positive", "positive", "").
+sign_image("product", 1, "negative", 1, "negative", "positive", "").
+sign_image("product", 1, "negative", 1, "negative", "negative", "").
+sign_image("product", 1, "zero", 1, "zero", "zero", "kept").
 
 // `index`, `identity`, `spread`: never negative, and zero by their own
 // math: an index or iota starts at zero, an identity matrix is zero off
 // its diagonal, a variance or standard deviation is zero where every
 // value is the same.
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  signed_call(context, site, function, class),
-  ( class = "index" ; class = "identity" ; class = "spread" ).
-may_have_sign(context, function, "result", site, "zero", site, class) :-
-  signed_call(context, site, function, class),
-  ( class = "index" ; class = "identity" ; class = "spread" ).
+sign_image("index", 0, "", 0, "", "positive", "").
+sign_image("index", 0, "", 0, "", "zero", "index").
+sign_image("identity", 0, "", 0, "", "positive", "").
+sign_image("identity", 0, "", 0, "", "zero", "identity").
+sign_image("spread", 0, "", 0, "", "positive", "").
+sign_image("spread", 0, "", 0, "", "zero", "spread").
 
 // `fill`, `splice`: what either operand the class reads holds.
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, class),
-  ( class = "fill" ; class = "splice" ).
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 2, "negative", _, _), signed_call(context, site, function, "splice").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, class),
-  ( class = "fill" ; class = "splice" ).
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 2, "positive", _, _), signed_call(context, site, function, "splice").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, class),
-  ( class = "fill" ; class = "splice" ).
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 2, "zero", origin, cause), signed_call(context, site, function, "splice").
+sign_image("fill", 1, "negative", 1, "negative", "negative", "").
+sign_image("fill", 1, "positive", 1, "positive", "positive", "").
+sign_image("fill", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("splice", 1, "negative", 1, "negative", "negative", "").
+sign_image("splice", 2, "negative", 2, "negative", "negative", "").
+sign_image("splice", 1, "positive", 1, "positive", "positive", "").
+sign_image("splice", 2, "positive", 2, "positive", "positive", "").
+sign_image("splice", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("splice", 2, "zero", 2, "zero", "zero", "kept").
 
 // `select`: what either branch holds where its predicate takes it. A
 // branch taken only where a comparison of it with zero says it is not
 // zero is not zero, and one taken only where it is positive is not
-// negative either (`select_checks`): `Nx.select(Nx.equal(d, 0), 1, d)`.
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 1, "negative", _, _), signed_call(context, site, function, "select"),
-  !select_checks(site, 1, "positive").
-may_have_sign(context, function, "result", site, "negative", "", "") :-
-  slot_sign(context, site, 2, "negative", _, _), signed_call(context, site, function, "select"),
-  !select_checks(site, 2, "positive").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 1, "positive", _, _), signed_call(context, site, function, "select").
-may_have_sign(context, function, "result", site, "positive", "", "") :-
-  slot_sign(context, site, 2, "positive", _, _), signed_call(context, site, function, "select").
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, "select"),
-  !select_checks(site, 1, _).
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
-  slot_sign(context, site, 2, "zero", origin, cause), signed_call(context, site, function, "select"),
-  !select_checks(site, 2, _).
+// negative either (`select_checks`, whose positions are the branches'
+// slots): `Nx.select(Nx.equal(d, 0), 1, d)`.
+sign_image("select", 1, "negative", 1, "negative", "negative", "").
+sign_image("select", 2, "negative", 2, "negative", "negative", "").
+sign_image("select", 1, "positive", 1, "positive", "positive", "").
+sign_image("select", 2, "positive", 2, "positive", "positive", "").
+sign_image("select", 1, "zero", 1, "zero", "zero", "kept").
+sign_image("select", 2, "zero", 2, "zero", "zero", "kept").
+sign_blocked(site, position, "negative", "negative") :- select_checks(site, position, "positive").
+sign_blocked(site, position, "zero", "zero") :- select_checks(site, position, _).
 
 // The branch of a select (`on_true` at 1, `on_false` at 2) its predicate
 // takes only where the branch's value is not zero, or is positive: the
