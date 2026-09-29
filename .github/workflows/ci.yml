@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  MIX_ENV: test
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.4"
+          otp-version: "28.3"
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+  test:
+    name: Test / Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.18.4"
+            otp: "28.3"
+          - elixir: "1.19.4"
+            otp: "28.3"
+          - elixir: "1.20.4"
+            otp: "29.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Install Souffle
+        run: |
+          sudo wget https://souffle-lang.github.io/ppa/souffle-key.public -O /usr/share/keyrings/souffle-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/souffle-archive-keyring.gpg] https://souffle-lang.github.io/ppa/ubuntu/ stable main" | sudo tee /etc/apt/sources.list.d/souffle.list
+          sudo apt-get update
+          sudo apt-get install -y souffle
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
