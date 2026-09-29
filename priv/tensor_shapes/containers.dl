@@ -36,12 +36,6 @@
 
 // ══ Code that runs as `defn` ════════════════════════════════════════
 
-// A `defn`'s body, which the compiler names `__defn:name__`, or a closure
-// in one: code that runs as `defn` traces it, over what its wrapper or a
-// `jit` hands in.
-.decl traced_function(function: symbol)
-traced_function(function) :- function_def(function, _, name, _, _), match("-?__defn:.*", name).
-
 // A call from outside `defn` that runs code as `defn` compiles it,
 // handing it its arguments: a `defn` called through its wrapper, or the
 // function `Nx.Defn.jit/1,2` returns. A wrapper called while a `defn` is
@@ -57,10 +51,10 @@ defn_call(site, caller) :-
 entering_call(site, caller) :-
   program_call(site, caller, wrapper),
   defn_wrapper(wrapper, _),
-  !traced_function(caller).
+  !in_defn(caller).
 entering_call(site, caller) :-
   jitted_call(site, caller, _, _),
-  !traced_function(caller).
+  !in_defn(caller).
 
 // A function called while a `defn` is traced: a `defn`'s body calls it, or
 // calls what calls it, as Argus's call graph has it or as the rules follow
@@ -68,16 +62,16 @@ entering_call(site, caller) :-
 // Asked of the functions that make the calls above, and of those that
 // build a struct whose container drops a field.
 .decl runs_while_traced(function: symbol)
-runs_while_traced(function) :- trace_reach.reaches(traced, function), traced_function(traced).
+runs_while_traced(function) :- traced_caller_reach.reaches(traced, function), in_defn(traced).
 
-.init trace_reach = CallReach
-trace_reach.seed(caller, caller) :- entering_call(_, caller).
-trace_reach.seed(builder, builder) :-
+.init traced_caller_reach = CallReach
+traced_caller_reach.seed(caller, caller) :- entering_call(_, caller).
+traced_caller_reach.seed(builder, builder) :-
   dropped_field(struct, _, _),
   struct_built(object, struct),
   flow_object(builder, object, "map", _).
-trace_reach.seed(caller, target) :-
-  trace_reach.reaches(callee, target),
+traced_caller_reach.seed(caller, target) :-
+  traced_caller_reach.reaches(callee, target),
   call_made(_, site, callee),
   site_function(site, caller).
 
@@ -163,7 +157,7 @@ struct_built(object, struct) :-
 struct_from_outside(object, struct) :-
   struct_built(object, struct),
   flow_object(builder, object, "map", _),
-  !traced_function(builder),
+  !in_defn(builder),
   !runs_while_traced(builder).
 
 // ══ Fields a container drops ════════════════════════════════════════
@@ -176,7 +170,7 @@ dropped_field_read(context, read, struct, field) :-
   dropped_field(struct, field, _),
   struct_from_outside(object, struct),
   reads_field(context, function, read, field, object),
-  traced_function(function).
+  in_defn(function).
 // ... or a function `jit` runs reads it of a struct its call hands it.
 dropped_field_read(context, read, struct, field) :-
   hands_jitted_struct(context, function, position, struct),

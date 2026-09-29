@@ -341,9 +341,7 @@ tensor_function(function) :- tensor_reach.reaches(function).
 tensor_reach.seed(function) :-
   remote_call(_, function, module, _, _),
   nx_module(module).
-tensor_reach.seed(function) :-
-  function_def(function, _, name, _, _),
-  match("__defn:.*", name).
+tensor_reach.seed(function) :- defn_body(function).
 tensor_reach.seed(function) :- remote_call(_, function, "Nx.Constants", _, _).
 tensor_reach.seed(caller) :-
   implementation_call(_, caller, callee),
@@ -351,6 +349,79 @@ tensor_reach.seed(caller) :-
 tensor_reach.seed(caller) :-
   remote_defn(_, caller, callee),
   tensor_reach.reaches(callee).
+
+// ── Traced code ────────────────────────────────────────────────────
+//
+// Nx computes a `defn`, and a function handed to `Nx.Defn.jit`,
+// `compile` or a grad, by tracing it: it runs the function once over
+// expressions and compiles what they record.
+
+// A `defn`'s body, which the compiler names `__defn:name__` (a
+// `deftransform`'s too).
+.decl defn_body(function: symbol) inline
+defn_body(function) :- function_def(function, _, name, _, _), match("__defn:.*", name).
+
+// A `defn`'s body, or a closure in one, which the compiler names after
+// it (`-__defn:name__/1-fun-0-`): code that runs as `defn` traces it.
+.decl in_defn(function: symbol)
+in_defn(function) :- function_def(function, _, name, _, _), match("-?__defn:.*", name).
+
+// A call of one of `Nx.Defn`'s traces, and the position of the function
+// it traces: "grad" for `grad` and `value_and_grad`, "jit" for `jit`,
+// `jit_apply`, `compile` and `debug_expr`, but a `defn`'s own call of
+// `jit_apply` on its body, which is its "defn".
+.decl trace_call(site: symbol, function: symbol, position: number, how: symbol)
+trace_call(site, function, 0, "jit") :-
+  remote_call(site, function, "Nx.Defn", name, _),
+  match("jit|jit_apply|compile|debug_expr|debug_expr_apply", name),
+  !runs_own_body(site).
+trace_call(site, function, position, "grad") :-
+  remote_call(site, function, "Nx.Defn", name, arity),
+  gradient_function(name, arity, position).
+
+// A `defn`'s call of `jit_apply` on its own body.
+.decl runs_own_body(site: symbol)
+runs_own_body(site) :-
+  remote_call(site, wrapper, "Nx.Defn", "jit_apply", 2),
+  fun_handed(site, wrapper, body, 0),
+  defn_wrapper(wrapper, body).
+
+// The position of the function `Nx.Defn`'s gradient functions take.
+.decl gradient_function(name: symbol, arity: number, position: number)
+gradient_function("grad", 1, 0). gradient_function("grad", 2, 1).
+gradient_function("value_and_grad", 1, 0). gradient_function("value_and_grad", 2, 1).
+gradient_function("value_and_grad", 3, 1).
+
+// A function Nx runs while it traces a computation, by how it traces it
+// ("defn", "jit" or "grad"): a `defn`'s body, a function handed to one of
+// `Nx.Defn`'s traces, and what they call, closures and the program's
+// protocol implementations included, but not a callback Nx runs later on
+// the values computed (`io_call`, `print_value`, `runtime_call`, the
+// functions they take after the tensor). Its roots are the code's own
+// calls and names, never what a solve derives, so rules may negate it.
+.init trace_reach = ForwardCallReachCut
+trace_reach.root("defn", function) :- defn_body(function).
+trace_reach.root(how, function) :-
+  trace_call(site, _, position, how),
+  fun_handed(site, _, function, position).
+trace_reach.reaches(how, callee) :-
+  trace_reach.reaches(how, caller),
+  implementation_call(_, caller, callee).
+trace_reach.cut(caller, callback) :-
+  remote_call(site, caller, module, name, _),
+  match("Nx|Nx\\.Defn\\.Kernel", module),
+  match("io_call|print_value|runtime_call", name),
+  fun_handed(site, caller, callback, position),
+  position > 0.
+
+// A function Nx runs while it traces, however it traces it.
+.decl runs_in_trace(function: symbol)
+runs_in_trace(function) :- trace_reach.reaches(_, function).
+
+// A function a `grad` or `value_and_grad` differentiates: one handed to
+// it, and what that runs while Nx traces it.
+.decl differentiated(function: symbol)
+differentiated(function) :- trace_reach.reaches("grad", function).
 
 // A call that may run a function of the program.
 .decl makes_call(site: symbol)
@@ -8399,23 +8470,6 @@ stopped_gradient(site) :-
   flow_argument(site, function, 0, "result", operand),
   1 = count : { flow_argument(site, function, 0, _, _) },
   operation_site(operand, "Nx.Defn.Kernel.stop_grad", 1).
-
-// A function a `grad` or `value_and_grad` differentiates: one handed to
-// it, and what that calls, closures and funs included.
-.decl differentiated(function: symbol)
-differentiated(function) :- gradient_reach.reaches(_, function).
-
-.init gradient_reach = ForwardCallReach
-gradient_reach.root(function, function) :-
-  remote_call(site, _, "Nx.Defn", name, arity),
-  gradient_function(name, arity, position),
-  fun_handed(site, _, function, position).
-
-// The position of the function `Nx.Defn`'s gradient functions take.
-.decl gradient_function(name: symbol, arity: number, position: number)
-gradient_function("grad", 1, 0). gradient_function("grad", 2, 1).
-gradient_function("value_and_grad", 1, 0). gradient_function("value_and_grad", 2, 1).
-gradient_function("value_and_grad", 3, 1).
 
 // A function defined on only part of the line, by its domain: asin and
 // acos on [-1, 1] (`closed_unit`), atanh and erf_inv inside it, infinite

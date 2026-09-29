@@ -699,9 +699,7 @@ mixing_trace_reach.seed(function, function) :-
   site_function(site, function).
 
 .decl traced_root(function: symbol)
-traced_root(function) :-
-  function_def(function, _, name, _, _),
-  match("__defn:.*", name).
+traced_root(function) :- defn_body(function).
 traced_root(function) :- compile_call(site, _), fun_handed(site, _, function, 0).
 traced_root(function) :- compiles_for(site, _, _), fun_handed(site, _, function, 0).
 

@@ -45,66 +45,25 @@
 .input flow_operand
 
 // ══ Traced code ═════════════════════════════════════════════════════
-
-// A function Nx runs while it traces a computation: a `defn`'s body
-// (`__defn:name__`, a `deftransform`'s too, which a `defn` reaches it
-// through), a function handed to one of `Nx.Defn`'s traces, and what they
-// call, closures and the program's protocol implementations included, but
-// not a callback Nx runs later on the values computed (`io_call`,
-// `print_value`, `runtime_call`, the functions they take after the
-// tensor). Rooted by how Nx traces: "defn", "jit" or "grad".
-.decl runs_in_trace(function: symbol)
-runs_in_trace(function) :- traced_reach.reaches(_, function).
-
-.init traced_reach = ForwardCallReachCut
-traced_reach.root("defn", function) :-
-  function_def(function, _, name, _, _),
-  match("__defn:.*", name).
-traced_reach.root(how, function) :-
-  trace_call(site, _, position, how),
-  fun_handed(site, _, function, position).
-traced_reach.reaches(how, callee) :-
-  traced_reach.reaches(how, caller),
-  implementation_call(_, caller, callee).
-traced_reach.cut(caller, callback) :-
-  remote_call(site, caller, module, name, _),
-  match("Nx|Nx\\.Defn\\.Kernel", module),
-  match("io_call|print_value|runtime_call", name),
-  fun_handed(site, caller, callback, position),
-  position > 0.
-
-// A call of one of `Nx.Defn`'s traces, and the position of the function
-// it traces: "grad" for `grad` and `value_and_grad`, "jit" for `jit`,
-// `jit_apply`, `compile` and `debug_expr`, but a `defn`'s own call of
-// `jit_apply` on its body, which is its "defn".
-.decl trace_call(site: symbol, function: symbol, position: number, how: symbol)
-trace_call(site, function, 0, "jit") :-
-  remote_call(site, function, "Nx.Defn", name, _),
-  match("jit|jit_apply|compile|debug_expr|debug_expr_apply", name),
-  !runs_own_body(site).
-trace_call(site, function, 0, "grad") :-
-  remote_call(site, function, "Nx.Defn", name, 1),
-  match("grad|value_and_grad", name).
-trace_call(site, function, 1, "grad") :-
-  remote_call(site, function, "Nx.Defn", name, arity),
-  arity > 1,
-  match("grad|value_and_grad", name).
+//
+// What Nx runs while it traces is the core's `runs_in_trace`, rooted by
+// how Nx traces it (`trace_reach`).
 
 // How a finding's function is traced: as a `defn` where one reaches it,
 // else by a jit, else by a grad.
 .decl traced_first_as(function: symbol, how: symbol)
 traced_first_as(function, "defn") :-
   reported_function(function),
-  traced_reach.reaches("defn", function).
+  trace_reach.reaches("defn", function).
 traced_first_as(function, "jit") :-
   reported_function(function),
-  traced_reach.reaches("jit", function),
-  !traced_reach.reaches("defn", function).
+  trace_reach.reaches("jit", function),
+  !trace_reach.reaches("defn", function).
 traced_first_as(function, "grad") :-
   reported_function(function),
-  traced_reach.reaches("grad", function),
-  !traced_reach.reaches("defn", function),
-  !traced_reach.reaches("jit", function).
+  trace_reach.reaches("grad", function),
+  !trace_reach.reaches("defn", function),
+  !trace_reach.reaches("jit", function).
 
 // The parameters Nx hands a function it traces: every one of a `defn`'s
 // body, and of a function handed to a trace those before the values a
@@ -112,13 +71,13 @@ traced_first_as(function, "grad") :-
 // which come from where it was made.
 .decl traced_parameter(function: symbol, position: number)
 traced_parameter(function, position) :-
-  traced_reach.root(_, function),
+  trace_reach.root(_, function),
   function_def(function, _, _, arity, _),
   flow_closure(object, function),
   flow_object(_, object, "closure", captured),
   position = range(0, arity - captured).
 traced_parameter(function, position) :-
-  traced_reach.root(_, function),
+  trace_reach.root(_, function),
   function_def(function, _, _, arity, _),
   !flow_closure(_, function),
   position = range(0, arity).
@@ -562,13 +521,6 @@ runs_jitted(site, function, "") :-
   remote_call(site, function, "Nx.Defn", "jit_apply", _),
   !resolves_conflict(site),
   !runs_own_body(site).
-
-// A `defn`'s call of `jit_apply` on its own body.
-.decl runs_own_body(site: symbol)
-runs_own_body(site) :-
-  remote_call(site, wrapper, "Nx.Defn", "jit_apply", 2),
-  fun_handed(site, wrapper, body, 0),
-  defn_wrapper(wrapper, body).
 
 // The template, and its sizes spelled, that the compiled function a call
 // runs takes at `position`: an `Nx.template` call's of sizes all known,

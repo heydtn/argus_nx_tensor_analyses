@@ -200,7 +200,7 @@ container_gradient(site, shape) :-
 // helper one call hands such a value carries it at every call (it errs
 // loud there).
 .decl carries_gradient(function: symbol, kind: symbol, source: symbol)
-carries_gradient(root, "param", "0") :- gradient_reach.root(root, _).
+carries_gradient(root, "param", "0") :- trace_reach.root("grad", root).
 carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
   flow_argument(site, function, _, kind, source),
