@@ -535,22 +535,14 @@ call_error(context, site, "container_leaf", cat("possibly ", leaf, " at ", root,
 // value differentiated ("" for the whole).
 .decl captured_gradient(site: symbol, path: symbol)
 captured_gradient(site, path) :-
-  gradient_call(site, caller),
+  trace_call(site, caller, 1, "grad"),
   captures(site, caller, kind, source),
   differentiates(site, caller, kind, source, path).
-
-// A call of `grad/2` or `value_and_grad/2,3`, which differentiates its
-// first argument through the function its second is.
-.decl gradient_call(site: symbol, caller: symbol)
-gradient_call(site, caller) :-
-  remote_call(site, caller, module, name, arity),
-  gradient_function(name, arity, 1),
-  match("Nx\\.Defn(\\.Kernel)?", module).
 
 // A value the closure the call differentiates through captures.
 .decl captures(site: symbol, caller: symbol, kind: symbol, source: symbol)
 captures(site, caller, kind, source) :-
-  gradient_call(site, caller),
+  trace_call(site, caller, 1, "grad"),
   flow_argument(site, caller, 1, "object", closure),
   flow_object(caller, closure, "closure", _),
   flow_field(caller, closure, _, kind, source),
@@ -561,7 +553,7 @@ captures(site, caller, kind, source) :-
 // reads from them.
 .decl differentiates(site: symbol, caller: symbol, kind: symbol, source: symbol, path: symbol)
 differentiates(site, caller, kind, source, "") :-
-  gradient_call(site, caller),
+  trace_call(site, caller, 1, "grad"),
   flow_argument(site, caller, 0, kind, source),
   kind != "literal".
 differentiates(site, caller, kind, source, cat(path, suffix)) :-

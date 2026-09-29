@@ -304,12 +304,13 @@ other_operand(0, 1). other_operand(1, 0).
 // default backend where a creation call given none makes it. The
 // default backend is the one the code sets with `Nx.default_backend/1`,
 // and EMLX's where it sets none. A tensor whose backend is not followed
-// meets nothing (it errs quiet). The calls in a `defn`, or in a function
-// handed to a compile, build an expression, and whether they mix
-// backends is the compiler's: EMLX's and EXLA's move the arguments to
-// their own backend, and the evaluator runs the calls as eager ones do.
-// Which compiler runs a `defn` called directly is configured outside the
-// code, so they are not reported (it errs quiet there).
+// meets nothing (it errs quiet). The calls in code Nx traces (a `defn`,
+// or a function handed to a jit, a compile or a grad, `runs_in_trace`)
+// build an expression, and whether they mix backends is the compiler's:
+// EMLX's and EXLA's move the arguments to their own backend, and the
+// evaluator runs the calls as eager ones do. Which compiler runs a
+// `defn` called directly, or a trace given none, is configured outside
+// the code, so they are not reported (it errs quiet there).
 
 // An Nx call run eagerly gets two tensors whose backends cannot meet.
 .decl mixed_backends(context: Context, site: symbol, backend: symbol, origin: symbol, other: symbol, other_origin: symbol)
@@ -317,7 +318,7 @@ mixed_backends(context, site, backend, origin, other, other_origin) :-
   operands_on(context, site, backend, origin, other, other_origin),
   backends_conflict(backend, other),
   site_function(site, function),
-  !runs_traced(function).
+  !runs_in_trace(function).
 
 // ── Where the code puts a tensor ───────────────────────────────────
 
@@ -654,27 +655,6 @@ leaves_backend("Nx.template"). leaves_backend("Nx.shape"). leaves_backend("Nx.ra
 leaves_backend("Nx.type"). leaves_backend("Nx.size"). leaves_backend("Nx.byte_size").
 leaves_backend("Nx.names"). leaves_backend("Nx.axes"). leaves_backend("Nx.axis_size").
 leaves_backend("Nx.axis_index").
-
-// ── Traced calls ───────────────────────────────────────────────────
-
-// A function a `defn`'s body runs, or a function handed to a compile:
-// its Nx calls build an expression, which a compiler runs. Asked of the
-// functions where backends would mix, over their callers.
-.decl runs_traced(function: symbol)
-runs_traced(function) :-
-  mixing_trace_reach.reaches(root, function),
-  traced_root(root).
-
-.init mixing_trace_reach = CallReach
-mixing_trace_reach.seed(function, function) :-
-  operands_on(_, site, backend, _, other, _),
-  backends_conflict(backend, other),
-  site_function(site, function).
-
-.decl traced_root(function: symbol)
-traced_root(function) :- defn_body(function).
-traced_root(function) :- compile_call(site, _), fun_handed(site, _, function, 0).
-traced_root(function) :- compiles_for(site, _, _), fun_handed(site, _, function, 0).
 
 // ══ Findings ════════════════════════════════════════════════════════
 

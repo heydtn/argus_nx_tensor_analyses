@@ -90,6 +90,11 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
      "t = if Nx.to_number(Nx.sum(t)) > 0, do: Nx.backend_transfer(t, EXLA.Backend), else: Nx.iota({2})\nNx.add(t, Nx.iota({2}))"},
     {:quiet, "Nx.add(Nx.backend_transfer(Nx.iota({2}), EMLX.Backend), Nx.iota({2}))"},
     {:quiet, "Nx.add(Nx.Defn.jit(&double/1, compiler: EMLX).(Nx.iota({2})), Nx.iota({2}))"},
+    # calls in code Nx traces with the compiler configured outside the code
+    {:quiet,
+     "Nx.Defn.jit(fn x -> Nx.add(x, Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.iota({1}))) end).(t)"},
+    {:quiet,
+     "Nx.Defn.grad(t, fn x -> Nx.sum(Nx.multiply(x, Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.iota({1})))) end)"},
     {:quiet,
      "Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.tensor([1.0], backend: Nx.BinaryBackend))"},
     {:quiet, "Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), 1)"},

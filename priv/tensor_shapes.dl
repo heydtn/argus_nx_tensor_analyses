@@ -409,13 +409,17 @@ in_defn(function) :- function_def(function, _, name, _, _), match("-?__defn:.*",
 
 // A call of one of `Nx.Defn`'s traces, and the position of the function
 // it traces: "grad" for `grad` and `value_and_grad`, "jit" for `jit`,
-// `jit_apply`, `compile` and `debug_expr`, but a `defn`'s own call of
+// `jit_apply`, `compile` and `debug_expr`, and EXLA's, which run
+// `Nx.Defn`'s with EXLA as the compiler, but a `defn`'s own call of
 // `jit_apply` on its body, which is its "defn".
 .decl trace_call(site: symbol, function: symbol, position: number, how: symbol)
 trace_call(site, function, 0, "jit") :-
   remote_call(site, function, "Nx.Defn", name, _),
   match("jit|jit_apply|compile|debug_expr|debug_expr_apply", name),
   !runs_own_body(site).
+trace_call(site, function, 0, "jit") :-
+  remote_call(site, function, "EXLA", name, _),
+  match("jit|jit_apply|compile", name).
 trace_call(site, function, position, "grad") :-
   remote_call(site, function, "Nx.Defn", name, arity),
   gradient_function(name, arity, position).

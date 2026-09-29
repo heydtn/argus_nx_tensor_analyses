@@ -722,6 +722,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :accepted}, "Nx.to_number(Nx.sum(Nx.Defn.jit(fn x -> Nx.add(x, 1) end).(t)))"},
     {{:finds_none, :accepted},
      "scale = Nx.tensor(3)\nNx.Defn.jit(fn x -> Nx.multiply(x, Nx.to_number(scale)) end).(t)"},
+    # EXLA's traces, which run `Nx.Defn`'s with EXLA as the compiler (not
+    # run: this package does not depend on EXLA)
+    {{:finds, {"tensor_call_error", "data_read_in_trace", "jit"}, :any},
+     "EXLA.jit(fn x -> Nx.add(x, Nx.to_number(Nx.sum(x))) end).(t)"},
+    {{:finds_none, :any}, "Nx.to_number(Nx.sum(EXLA.jit(fn x -> Nx.add(x, 1) end).(t)))"},
+    {{:finds, {"tensor_call_error", "captured_tensor", "jit"}, :any},
+     "data = Nx.iota({1})\nEXLA.jit(fn x -> Nx.add(x, data) end).(t)"},
     # conversions of tensors whose shape Nx rejects
     {{:finds, {"tensor_shape_mismatch", "scalar", :any}, :raises},
      "Nx.to_number(Nx.argmax(Nx.iota({1, 5}), axis: -1))"},

@@ -716,10 +716,10 @@ stopped_gradient(site) :-
 // differentiates.
 .decl differentiates_without_transform(site: symbol, function: symbol)
 differentiates_without_transform(site, function) :-
-  remote_call(site, _, "Nx.Defn", name, arity),
-  gradient_function(name, arity, position),
+  trace_call(site, _, position, "grad"),
+  remote_call(site, _, _, _, arity),
   arity < 3,
-  fun_handed(site, _, function, position).
+  fun_argument(site, position, function, _).
 
 // A function returns a tuple or a map (`shape`), on some path.
 .decl returns_container(function: symbol, shape: symbol)
