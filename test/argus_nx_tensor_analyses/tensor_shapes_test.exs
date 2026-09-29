@@ -1046,6 +1046,16 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :accepted}, "Nx.Defn.jit(fn x, _ -> x end).(t, [t, :relu])"},
     {{:finds_none, :accepted},
      "ArgusNxTensorAnalyses.TensorShapesTest.ContainerDefns.scaled(t, factor: 3)"},
+    # a jitted closure takes the call's arguments ahead of what it captured
+    # (each struct built as a map, which a case compiled in the fixtures'
+    # file can build, and not run: Nx takes one only with its container
+    # protocol consolidated again)
+    {{:finds, {"tensor_call_error", "dropped_field_read", :any}, :any},
+     "layer = %{__struct__: ArgusNxTensorAnalyses.TensorShapesTest.DroppingLayer, weight: t, causal: true}\nNx.Defn.jit(fn layer -> if layer.causal, do: Nx.add(layer.weight, config.a), else: layer.weight end).(layer)"},
+    {{:finds_none, :any},
+     "layer = %{__struct__: ArgusNxTensorAnalyses.TensorShapesTest.KeepingLayer, weight: t, causal: true}\nNx.Defn.jit(fn layer -> if layer.causal, do: Nx.add(layer.weight, config.a), else: layer.weight end).(layer)"},
+    {{:finds_none, :any},
+     "flags = %{causal: config.a > 0}\nlayer = %{__struct__: ArgusNxTensorAnalyses.TensorShapesTest.DroppingLayer, weight: t, causal: true}\nNx.Defn.jit(fn layer -> if flags.causal, do: layer.weight, else: 0 end).(layer)"},
     # a gradient's function capturing what it differentiates
     {{:finds, {"tensor_call_error", "captured_gradient", "{1}"}, :accepted},
      "weight = Nx.as_type(t, :f32)\nbias = Nx.add(weight, 1.0)\nNx.Defn.grad({weight, bias}, fn {w, _b} -> Nx.sum(Nx.multiply(w, bias)) end)"},
@@ -2735,6 +2745,21 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "Nx.Serving.run(Nx.Serving.jit(fn x -> Nx.multiply(x, Nx.sum(Nx.dot(x, [0], x, [0]))) end), Nx.Batch.stack([Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0])]))"},
     {{:finds_none, :accepted},
      "Nx.Serving.run(Nx.Serving.jit(fn x -> Nx.multiply(x, Nx.sum(x, axes: [1], keep_axes: true)) end), Nx.Batch.stack([Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0])]))"},
+    # a closure takes the batch, or the request, ahead of what it captured
+    {{:finds, {"tensor_call_error", "serving_mixes_batch", :any}, :accepted},
+     "scale = Nx.add(t, 1)\nNx.Serving.jit(fn x -> Nx.multiply(Nx.subtract(x, Nx.mean(x, axes: [0])), scale) end)"},
+    {{:finds_none, :accepted},
+     "scale = Nx.add(t, 1)\nNx.Serving.jit(fn x -> Nx.multiply(Nx.subtract(x, Nx.mean(x, axes: [1], keep_axes: true)), scale) end)"},
+    {{:finds_none, :accepted},
+     "offsets = Nx.iota({3, 2})\nNx.Serving.jit(fn x -> Nx.add(x, Nx.sum(offsets, axes: [0])) end)"},
+    {{:finds, {"tensor_call_error", "serving_output_batch_axis", :any}, :accepted},
+     "flip = config.a\nNx.Serving.run(Nx.Serving.jit(fn x -> if flip > 0, do: Nx.transpose(x), else: x end), Nx.Batch.stack([Nx.tensor([1, 2, 3]), Nx.tensor([4, 5, 6])]))"},
+    {{:finds_none, :accepted},
+     "flip = config.a\nNx.Serving.run(Nx.Serving.jit(fn x -> if flip > 0, do: Nx.multiply(x, 2), else: x end), Nx.Batch.stack([Nx.tensor([1, 2, 3]), Nx.tensor([4, 5, 6])]))"},
+    {{:finds, {"tensor_call_error", "serving_entry_shape_varies", :any}, :accepted},
+     "serving = Nx.Serving.jit(&Nx.multiply(&1, 2))\n|> Nx.Serving.client_preprocessing(fn input -> {Nx.Batch.stack([input]), config} end)\n[{Nx.Serving, serving: serving, name: Lint}]"},
+    {{:finds_none, :accepted},
+     "serving = Nx.Serving.jit(&Nx.multiply(&1, 2))\n|> Nx.Serving.client_preprocessing(fn input -> {Nx.Batch.stack([Nx.reshape(input, {3})]), config} end)\n[{Nx.Serving, serving: serving, name: Lint}]"},
     # a template compiled for another batch size or type
     {{:finds, {"tensor_call_error", "serving_template_batch_size", :any}, :raises},
      "Nx.Serving.run(Nx.Serving.new(fn options -> Nx.Defn.compile(&Nx.multiply(&1, 2), [Nx.template({4, 3}, :s32)], options) end), Nx.Batch.stack([Nx.tensor([1, 2, 3])]))"},

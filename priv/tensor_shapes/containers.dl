@@ -53,7 +53,7 @@ entering_call(site, caller) :-
   defn_wrapper(wrapper, _),
   !in_defn(caller).
 entering_call(site, caller) :-
-  jitted_call(site, caller, _, _),
+  jitted_call(site, caller, _),
   !in_defn(caller).
 
 // A function called while a `defn` is traced: a `defn`'s body calls it, or
@@ -76,21 +76,21 @@ traced_caller_reach.seed(caller, target) :-
   site_function(site, caller).
 
 // A call of what `Nx.Defn.jit/1,2` returns: it runs `function` as `defn`
-// compiles it, which takes the call's arguments from `offset` on (a closure
-// takes what it captured first). A `defn`'s wrapper runs its body, which
-// it hands its parameters as they are.
-.decl jitted_call(site: symbol, caller: symbol, function: symbol, offset: number)
-jitted_call(site, caller, body, offset) :-
+// compiles it, which takes the call's arguments as they are, ahead of what
+// a closure captured. A `defn`'s wrapper runs its body, which it hands its
+// parameters as they are.
+.decl jitted_call(site: symbol, caller: symbol, function: symbol)
+jitted_call(site, caller, body) :-
   flow_callee(site, caller, "fun", "result", jit),
   flow_dynamic(site, caller, _),
   remote_call(jit, caller, "Nx.Defn", "jit", _),
-  fun_argument(jit, 0, wrapper, offset),
+  fun_argument(jit, 0, wrapper, _),
   defn_wrapper(wrapper, body).
-jitted_call(site, caller, function, offset) :-
+jitted_call(site, caller, function) :-
   flow_callee(site, caller, "fun", "result", jit),
   flow_dynamic(site, caller, _),
   remote_call(jit, caller, "Nx.Defn", "jit", _),
-  fun_argument(jit, 0, function, offset),
+  fun_argument(jit, 0, function, _),
   !defn_wrapper(function, _).
 
 // ══ What a struct's container keeps ═════════════════════════════════
@@ -204,8 +204,8 @@ defn_result(function, "load", load, call) :-
 // A struct built outside `defn` that a call of what `jit` returns hands
 // the function it runs, as its parameter at `position`.
 .decl hands_jitted_struct(context: Context, function: symbol, position: number, struct: symbol)
-hands_jitted_struct(context, function, offset + position, struct) :-
-  jitted_call(site, _, function, offset),
+hands_jitted_struct(context, function, position, struct) :-
+  jitted_call(site, _, function),
   argument_value(context, site, position, $Object(_, object, _)),
   struct_from_outside(object, struct).
 
@@ -226,17 +226,17 @@ reads_source_field(caller, "result", call, field, substr(load, 0, strlen(load) -
 // hands it where it returns that parameter as it is.
 .decl jitted_struct_result(context: Context, call: symbol, caller: symbol, struct: symbol)
 jitted_struct_result(context, call, caller, struct) :-
-  jitted_call(call, caller, function, _),
+  jitted_call(call, caller, function),
   own_context(function, own),
   return_value(own, function, $Object(_, object, _)),
   struct_built(object, struct),
   site_active(context, call).
 jitted_struct_result(context, call, caller, struct) :-
-  jitted_call(call, caller, function, offset),
+  jitted_call(call, caller, function),
   own_context(function, own),
   return_value(own, function, $Opaque(path)),
   argument_value(context, call, position, $Object(_, object, _)),
-  path = cat("$", to_string(offset + position)),
+  path = cat("$", to_string(position)),
   struct_built(object, struct).
 
 call_error(context, read, "dropped_field_read", detail, "") :-

@@ -8,7 +8,7 @@
 // the batch's size, a slice for each caller. The computation is the
 // function `Nx.Serving.jit/1,2` is handed, or the one a builder handed to
 // `Nx.Serving.new/1,2` jits or compiles and returns; it takes the batch as
-// its one argument, after what its closure captures.
+// its one argument, ahead of what its closure captured.
 //
 // Where the program says what a batch holds (the template it compiles the
 // computation for, or entries of known shapes it builds a batch of and
@@ -175,14 +175,14 @@ call_error(context, run, "serving_run_input", "it is handed a tensor, and the se
 
 // A preprocessing returns a batch, not a `{batch, info}` pair.
 call_error(context, setting, "serving_preprocessing_result", "the preprocessing returns a batch, not a {batch, info} pair", "") :-
-  serving_callback(setting, "client_preprocessing", function, _),
+  serving_callback(setting, "client_preprocessing", function),
   returns_batch(function),
   site_active(context, setting).
 
 // A preprocessing returns a tensor first in its pair, where the batch
 // goes.
 call_error(context, setting, "serving_preprocessing_result", "the preprocessing returns a tensor first in its pair, where the batch goes", "") :-
-  serving_callback(setting, "client_preprocessing", function, _),
+  serving_callback(setting, "client_preprocessing", function),
   returns_first(function, "result", made),
   operation_site(made, _, _),
   site_active(context, setting).
@@ -276,32 +276,32 @@ builder_returns(serving, made) :-
   flow_return(builder, _, "result", made).
 
 // A callback `Nx.Serving.client_preprocessing/2` or
-// `client_postprocessing/2` sets, and how many values its closure
-// captures.
-.decl serving_callback(setting: symbol, name: symbol, function: symbol, captured: number)
-serving_callback(setting, name, function, captured) :-
+// `client_postprocessing/2` sets.
+.decl serving_callback(setting: symbol, name: symbol, function: symbol)
+serving_callback(setting, name, function) :-
   remote_call(setting, _, "Nx.Serving", name, 2),
-  fun_argument(setting, 1, function, captured).
+  fun_argument(setting, 1, function, _).
 
 // A canonical context of such a callback, and the path it names the
-// argument Nx hands it by: the request, or the output.
+// argument Nx hands it by, its first parameter, ahead of what its closure
+// captured: the request, or the output.
 .decl callback_input(setting: symbol, name: symbol, context: Context, path: symbol)
-callback_input(setting, name, context, cat("$", to_string(captured))) :-
-  serving_callback(setting, name, function, captured),
+callback_input(setting, name, context, "$0") :-
+  serving_callback(setting, name, function),
   active(context, function),
   context = $Canonical(function, _).
 
 // The preprocessing set on a serving.
 .decl serving_preprocessing(serving: symbol, setting: symbol, function: symbol)
 serving_preprocessing(serving, setting, function) :-
-  serving_callback(setting, "client_preprocessing", function, _),
+  serving_callback(setting, "client_preprocessing", function),
   flow_argument(setting, caller, 0, kind, source),
   on_its_way(caller, kind, source, "serving", serving).
 
 // What a preprocessing returns first in the pair it builds.
 .decl returns_first(function: symbol, kind: symbol, source: symbol)
 returns_first(function, kind, source) :-
-  serving_callback(_, "client_preprocessing", function, _),
+  serving_callback(_, "client_preprocessing", function),
   flow_return(function, _, "object", tuple),
   flow_object(function, tuple, "tuple", 2),
   flow_field(function, tuple, "{0}", kind, source).
@@ -309,7 +309,7 @@ returns_first(function, kind, source) :-
 // A preprocessing returns a batch, which it makes or is handed.
 .decl returns_batch(function: symbol)
 returns_batch(function) :-
-  serving_callback(_, "client_preprocessing", function, _),
+  serving_callback(_, "client_preprocessing", function),
   flow_return(function, _, kind, source),
   comes_from(function, kind, source, batch),
   remote_call(batch, _, "Nx.Batch", _, _).
@@ -333,11 +333,11 @@ batch_without_entries(function, kind, source, empty) :-
 // ══ Words: the computation and its batches ══════════════════════════
 
 // The call that compiles a serving's computation for its batches, the
-// function it compiles, and the position it takes the batch at: the
-// function `Nx.Serving.jit/1,2` is handed, which the call itself jits, or
-// the one a builder `Nx.Serving.new/1,2` is handed jits or compiles and
-// returns.
-.decl serving_computation(serving: symbol, compile: symbol, function: symbol, position: number)
+// function it compiles, and how many values its closure captured, which
+// the function takes after the batch: the function `Nx.Serving.jit/1,2`
+// is handed, which the call itself jits, or the one a builder
+// `Nx.Serving.new/1,2` is handed jits or compiles and returns.
+.decl serving_computation(serving: symbol, compile: symbol, function: symbol, captured: number)
 serving_computation(serving, serving, function, captured) :-
   remote_call(serving, _, "Nx.Serving", "jit", _),
   fun_argument(serving, 0, function, captured).
@@ -346,12 +346,12 @@ serving_computation(serving, compile, function, captured) :-
   fun_argument(compile, 0, function, captured).
 
 // The computation, a function of the program that takes one argument
-// after its captures, compiled at `compile` in a context of the function
+// before its captures, compiled at `compile` in a context of the function
 // that compiles it.
 .decl compiled_for_serving(context: Context, compile: symbol, function: symbol)
 compiled_for_serving(context, compile, function) :-
-  serving_computation(_, compile, function, position),
-  function_def(function, _, _, position + 1, _),
+  serving_computation(_, compile, function, captured),
+  function_def(function, _, _, captured + 1, _),
   site_active(context, compile).
 
 // A literal external fun of one of Nx's reductions, which reduces every
@@ -417,39 +417,37 @@ padded(serving) :-
   on_its_way(function, kind, source, "pad", _).
 
 // The computation's arguments over a batch of a shape the program says:
-// what it captures by its own names, then the batch, whose first axis is
-// the batch size, a free size of the parameter's, ahead of the axes the
-// first tensor of a list that gives the batch its shape gives it, where
-// they name nothing of the context they are in: a stacked entry's axes,
-// and a concatenated entry's or a template's past its first.
-.decl batch_arguments_from(compile: symbol, function: symbol, position: number, arguments: Arguments)
-batch_arguments_from(compile, function, position, [$Tensor([nil, [batch, "nil", axes]]), nil]) :-
-  serving_computation(serving, compile, function, position),
-  function_def(function, _, _, position + 1, _),
+// the batch, whose first axis is the batch size, a free size of the
+// parameter's (`$0#{0}`), ahead of the axes the first tensor of a list
+// that gives the batch its shape gives it, where they name nothing of the
+// context they are in (a stacked entry's axes, and a concatenated entry's
+// or a template's past its first), then what it captured by its own
+// names.
+.decl batch_arguments(compile: symbol, function: symbol, arguments: Arguments)
+batch_arguments(compile, function, [$Tensor([nil, [[1, ["$0#{0}", nil]], "nil", axes]]), captures]) :-
+  serving_computation(serving, compile, function, captured),
+  function_def(function, _, _, captured + 1, _),
   serving_batch(serving, site),
   listed_tensors(_, site, "stack", _, [first, _]),
   nameless($Tensor(first)),
   first = [nil, axes],
-  batch = [1, [cat("$", to_string(position), "#{0}"), nil]].
-.plan 1:(5,4,3,1,2)
-batch_arguments_from(compile, function, position, [$Tensor([nil, [batch, "nil", rest]]), nil]) :-
-  serving_computation(serving, compile, function, position),
-  function_def(function, _, _, position + 1, _),
+  own_names(captured + 1, 1, captures).
+.plan 1:(5,4,3,1,2,6)
+batch_arguments(compile, function, [$Tensor([nil, [[1, ["$0#{0}", nil]], "nil", rest]]), captures]) :-
+  serving_computation(serving, compile, function, captured),
+  function_def(function, _, _, captured + 1, _),
   serving_batch(serving, site),
   listed_tensors(_, site, kind, _, [first, _]),
   kind != "stack",
   nameless($Tensor(first)),
   first = [nil, [_, _, rest]],
-  batch = [1, [cat("$", to_string(position), "#{0}"), nil]].
-.plan 1:(5,4,3,1,2)
-batch_arguments_from(compile, function, next - 1, [$Opaque(cat("$", to_string(next - 1))), rest]) :-
-  batch_arguments_from(compile, function, next, rest),
-  next > 0.
+  own_names(captured + 1, 1, captures).
+.plan 1:(5,4,3,1,2,6)
 
 // The compile runs the computation over the batch, in a canonical context
 // of its own.
 invocation(context, compile, function, $Canonical(function, arguments)) :-
-  batch_arguments_from(compile, function, 0, arguments),
+  batch_arguments(compile, function, arguments),
   site_active(context, compile).
 .plan 1:(2,1)
 
@@ -457,17 +455,14 @@ invocation(context, compile, function, $Canonical(function, arguments)) :-
 // that compiles it.
 .decl batched_run(context: Context, compile: symbol, function: symbol, batched: Context)
 batched_run(context, compile, function, batched) :-
-  batch_arguments_from(compile, function, 0, arguments),
+  batch_arguments(compile, function, arguments),
   invocation(context, compile, function, batched),
   batched = $Canonical(function, arguments).
 
 // A context of the computation over a batch, or of what it calls there,
 // which names the batch size as the computation does.
 .decl in_batched_run(batched: Context, context: Context, size: Size)
-in_batched_run(batched, batched, size) :-
-  batched_run(_, compile, function, batched),
-  serving_computation(_, compile, function, position),
-  size = [1, [cat("$", to_string(position), "#{0}"), nil]].
+in_batched_run(batched, batched, [1, ["$0#{0}", nil]]) :- batched_run(_, _, _, batched).
 in_batched_run(batched, $Called(site, context), size) :-
   in_batched_run(batched, context, size),
   invocation(context, site, _, $Called(site, context)).
@@ -555,10 +550,10 @@ entries_conflict(context, site, first, entry) :-
 // request's shape.
 .decl batches_request(setting: symbol, batch: symbol)
 batches_request(setting, batch) :-
-  serving_callback(setting, "client_preprocessing", function, captured),
+  serving_callback(setting, "client_preprocessing", function),
   tensors_at(batch, position, "stack"),
   flow_argument(batch, function, position, "object", cell),
-  flow_field(function, cell, "head", "param", to_string(captured)).
+  flow_field(function, cell, "head", "param", "0").
 batches_request(setting, batch) :-
   callback_input(setting, "client_preprocessing", context, path),
   tensors_at(batch, position, "stack"),
@@ -632,12 +627,12 @@ operates_along(context, site, operand, axis, "it contracts the batch axis") :-
 
 // ══ Words: the computation over its own names ═══════════════════════
 
-// The computation's parameter that takes the batch, as the path its
-// canonical contexts name it by, there and in the `defn` body a wrapper
-// runs over it.
+// The computation's parameter that takes the batch, its first, as the
+// path its canonical contexts name it by, there and in the `defn` body a
+// wrapper runs over it.
 .decl batch_parameter(context: Context, computation: symbol, path: symbol)
-batch_parameter(context, function, cat("$", to_string(position))) :-
-  serving_computation(_, _, function, position),
+batch_parameter(context, function, "$0") :-
+  serving_computation(_, _, function, _),
   active(context, function),
   context = $Canonical(function, _).
 batch_parameter(context, computation, path) :-
