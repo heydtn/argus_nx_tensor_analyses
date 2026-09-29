@@ -206,8 +206,8 @@ spelling_demand(axes) :- branch_axes(_, _, _, _, axes).
 
 // A value as a tensor's axes: a tensor's, and none for a number.
 .decl value_axes(value: Value, axes: Axes) inline
-value_axes(value, axes) :- value = $Tensor([_, axes]).
-value_axes(value, nil) :- value = $Integer(_).
+value_axes(value, axes) :- value = $Tensor([_vectorized, axes]).
+value_axes(value, nil) :- value = $Integer(_size).
 value_axes(value, nil) :- value = $Term(text, start), term_scalar(text, start).
 
 // What two branches give in one place, the earlier clause's first, and
