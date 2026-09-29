@@ -1179,8 +1179,7 @@ typed_argument(context, site, position, function, kind, source) :-
 // a pair, or its type argument.
 .decl type_argument(site: symbol, function: symbol, kind: symbol, source: symbol)
 type_argument(site, function, kind, source) :-
-  option_pair(site, "type", kind, source),
-  site_function(site, function).
+  option_pair(site, "type", function, kind, source).
 type_argument(site, function, kind, source) :-
   type_position(site, position),
   flow_argument(site, function, position, kind, source).

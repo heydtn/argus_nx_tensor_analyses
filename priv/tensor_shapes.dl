@@ -3118,6 +3118,9 @@ options_at("Nx.reduce", 4, 2).
 options_at("Nx.window_reduce", 5, 3).
 options_at("Nx.window_scatter_max", 5, 4).
 options_at("Nx.window_scatter_min", 5, 4).
+options_at("Nx.Defn.jit", 2, 1).
+options_at("Nx.Defn.compile", 3, 2).
+options_at("Nx.Defn.jit_apply", 3, 2).
 
 .decl options_omitted(operation: symbol, arity: number)
 options_omitted(operation, position) :- trailing_options(operation, position).
@@ -3136,12 +3139,17 @@ option_key("feature_group_size"). option_key("batch_group_size"). option_key("in
 option_key("kernel_permutation"). option_key("output_permutation"). option_key("left_side"). option_key("ord").
 option_key("type").
 
-// Where the call's options come from.
+// Where the call's options come from: the argument `options_at` names for
+// its function, and a constant's last, after its type.
 .decl options_source(site: symbol, function: symbol, kind: symbol, source: symbol)
 options_source(site, function, kind, source) :-
-  operation_site(site, operation, arity),
-  options_at(operation, arity, position),
+  remote_call(site, _, module, name, arity),
+  options_at(cat(module, ".", name), arity, position),
   flow_argument(site, function, position, kind, source).
+options_source(site, function, kind, source) :-
+  remote_call(site, _, "Nx.Constants", _, arity),
+  arity >= 2,
+  flow_argument(site, function, arity - 1, kind, source).
 
 // A keyword list the code builds, cell by cell.
 .decl options_cell(site: symbol, function: symbol, cell: symbol) inline
@@ -3162,9 +3170,10 @@ keyed_pair(function, "literal", text) :-
   term_length(text, 0, 2),
   term_element_atom(text, 0, 0, _).
 
-// An option the code builds a pair for: its key, and its value's source.
-.decl option_pair(site: symbol, key: symbol, kind: symbol, source: symbol)
-option_pair(site, substr(key, 1, strlen(key) - 1), kind, source) :-
+// An option the code builds a pair for: its key, and its value's source in
+// the call's function.
+.decl option_pair(site: symbol, key: symbol, function: symbol, kind: symbol, source: symbol)
+option_pair(site, substr(key, 1, strlen(key) - 1), function, kind, source) :-
   options_cell(site, function, cell),
   flow_field(function, cell, "head", "object", pair),
   keyed_pair(function, "object", pair),
@@ -3212,7 +3221,7 @@ option(site, key, text, value) :-
   options_source(site, _, "literal", text),
   term_keyword(text, 0, key, value).
 option(site, key, text, 0) :-
-  option_pair(site, key, "literal", text),
+  option_pair(site, key, _, "literal", text),
   literal_text(text).
 option(site, substr(atom, 1, strlen(atom) - 1), text, value) :-
   options_cell(site, function, cell),
@@ -3223,7 +3232,7 @@ option(site, substr(atom, 1, strlen(atom) - 1), text, value) :-
 
 .decl option_given(site: symbol, key: symbol)
 option_given(site, key) :- option(site, key, _, _).
-option_given(site, key) :- option_pair(site, key, _, _).
+option_given(site, key) :- option_pair(site, key, _, _, _).
 
 .decl option_absent(site: symbol, key: symbol)
 option_absent(site, key) :-
@@ -9955,9 +9964,8 @@ given_type(context, site, name, class) :-
   type_spelling(spelled, name, class).
 given_type(context, site, name, class) :-
   type_asked(context, site),
-  option_pair(site, "type", kind, source),
+  option_pair(site, "type", function, kind, source),
   kind != "literal",
-  site_function(site, function),
   value_of(context, function, kind, source, $Term(text, start)),
   term_spelling(text, start, spelled),
   type_spelling(spelled, name, class).

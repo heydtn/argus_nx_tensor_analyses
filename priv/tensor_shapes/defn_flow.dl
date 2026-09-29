@@ -506,9 +506,8 @@ integer_part(site, function, kind, source, slot) :-
   flow_argument(site, function, position, kind, source),
   entry_body(function, _).
 integer_part(site, function, kind, source, cat("the :", key, " option")) :-
-  option_pair(site, key, kind, source),
+  option_pair(site, key, function, kind, source),
   integer_option(key),
-  site_function(site, function),
   entry_body(function, _).
 integer_part(site, function, kind, source, slot) :-
   integer_part(site, function, "object", object, slot),

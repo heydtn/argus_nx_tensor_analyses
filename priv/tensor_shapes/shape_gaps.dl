@@ -723,9 +723,7 @@ call_error(context, site, "scaling_factor_rank", cat(factor_spelled, " scaling "
 // The scaling factor's axes, in a context.
 .decl scaling_factor_axes(context: Context, site: symbol, factor: Axes)
 scaling_factor_axes(context, site, axes) :-
-  operation_site(site, "Nx.logsumexp", _),
-  option_pair(site, "exp_scaling_factor", kind, source),
-  site_function(site, function),
+  scaling_factor(site, function, kind, source),
   value_of(context, function, kind, source, $Tensor([_, axes])).
 
 axes_needed(factor) :- scaling_factor_axes(_, _, factor).

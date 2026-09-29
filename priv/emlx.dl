@@ -400,22 +400,6 @@ compile_call(site, "returns") :- remote_call(site, _, "Nx.Defn", "jit", 2).
 compile_call(site, "returns") :- remote_call(site, _, "Nx.Defn", "compile", 3).
 compile_call(site, "runs") :- remote_call(site, _, "Nx.Defn", "jit_apply", 3).
 
-// The options of the calls above, and of the creation calls whose
-// options Nx.Shape's rules do not read, come from their last argument,
-// as an Nx call's do.
-options_source(site, function, kind, source) :-
-  remote_call(site, _, "Nx.Defn", name, arity),
-  ( name = "jit" ; name = "compile" ; name = "jit_apply" ),
-  arity >= 2,
-  flow_argument(site, function, arity - 1, kind, source).
-options_source(site, function, kind, source) :-
-  operation_site(site, "Nx.from_binary", 3),
-  flow_argument(site, function, 2, kind, source).
-options_source(site, function, kind, source) :-
-  remote_call(site, _, "Nx.Constants", _, arity),
-  arity >= 2,
-  flow_argument(site, function, arity - 1, kind, source).
-
 // The backend a compiler's results are on.
 .decl compiler_backend(compiler: symbol, backend: symbol)
 compiler_backend("EXLA", "EXLA.Backend").

@@ -407,8 +407,7 @@ unchecked(context, site, "unchecked_logarithm", cause, origin) :-
 .decl scaling_factor(site: symbol, function: symbol, kind: symbol, source: symbol)
 scaling_factor(site, function, kind, source) :-
   operation_site(site, "Nx.logsumexp", 2),
-  option_pair(site, "exp_scaling_factor", kind, source),
-  site_function(site, function).
+  option_pair(site, "exp_scaling_factor", function, kind, source).
 
 sign_demand(context, function, kind, source) :-
   scaling_factor(site, function, kind, source),

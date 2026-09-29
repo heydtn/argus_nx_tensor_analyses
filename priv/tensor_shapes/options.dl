@@ -214,11 +214,6 @@ options_at("Nx.Random.choice", 3, 2).
 options_at("Nx.Random.choice", 4, 3).
 options_at("Nx.Random.gumbel", 2, 1).
 
-// A constant's options, its second argument.
-options_source(site, function, kind, source) :-
-  remote_call(site, _, "Nx.Constants", _, 2),
-  flow_argument(site, function, 1, kind, source).
-
 // The key is not one the function takes.
 .decl takes_no_option(operation: symbol, key: symbol) inline
 takes_no_option(operation, key) :-
@@ -305,18 +300,17 @@ option_term(context, site, key, text, start) :-
 // has one source in the function building it.
 .decl option_pair_value(context: Context, site: symbol, key: symbol, value: Value)
 option_pair_value(context, site, key, value) :-
-  sole_option_source(site, key, kind, source),
+  sole_option_source(site, key, function, kind, source),
   site_active(context, site),
-  site_function(site, function),
   value_of(context, function, kind, source, value).
 
 // A checked option's pair whose value has one source: the option is given
 // once, and its value is not merged from branches.
-.decl sole_option_source(site: symbol, key: symbol, kind: symbol, source: symbol)
-sole_option_source(site, key, kind, source) :-
+.decl sole_option_source(site: symbol, key: symbol, function: symbol, kind: symbol, source: symbol)
+sole_option_source(site, key, function, kind, source) :-
   checked_option(key),
-  option_pair(site, key, kind, source),
-  1 = count : { option_pair(site, key, _, _) }.
+  option_pair(site, key, function, kind, source),
+  1 = count : { option_pair(site, key, _, _, _) }.
 
 // A checked option's value in a context, where it is an atom.
 .decl gets_option_atom(context: Context, site: symbol, key: symbol, atom: symbol)
@@ -341,8 +335,7 @@ gets_option_in_form(context, site, key, "integer", "an integer") :-
   option_pair_value(context, site, key, $Integer([coefficient, nil])),
   coefficient <= 0.
 gets_option_in_form(context, site, key, form, cat("a ", form)) :-
-  sole_option_source(site, key, "object", object),
-  site_function(site, function),
+  sole_option_source(site, key, function, "object", object),
   flow_object(function, object, form, _),
   site_active(context, site).
 

@@ -326,10 +326,9 @@ type_term(context, site, -1, text, start) :-
   site_active(context, site).
 type_term(context, site, -1, text, start) :-
   takes_type_option(site),
-  option_pair(site, "type", kind, source),
+  option_pair(site, "type", function, kind, source),
   kind != "literal",
   site_active(context, site),
-  site_function(site, function),
   value_of(context, function, kind, source, $Term(text, start)).
 type_term(context, site, position, text, start) :-
   type_position(site, position),
