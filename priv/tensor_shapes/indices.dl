@@ -4,7 +4,7 @@
 
 // ══ Why a value can be negative ═════════════════════════════════════
 //
-// `can_be_negative` says a value can be negative, whether the code's math
+// `may_have_sign` says a value can be negative, whether the code's math
 // makes it so or it only comes from an input the analysis cannot see into.
 // `can_go_negative` keeps the first alone, with where and how: `origin`,
 // the Nx call whose math takes the value below zero ("" for a written
@@ -37,7 +37,7 @@ sign_demand(context, function, kind, source) :- negative_asked(context, function
 
 negative_asked(context, function, kind, source) :-
   negative_asked(context, function, "result", site),
-  read_operand(site, position),
+  slot_position(site, _, position),
   flow_argument(site, function, position, kind, source).
 negative_asked(from_context, from_function, from_kind, from_source) :-
   negative_asked(context, function, kind, source),
@@ -49,9 +49,8 @@ negative_call(context, site, function, class) :-
   negative_asked(context, function, "result", site),
   sign_rule(site, class).
 
-// The operand a class reads at `slot` (1, 2, 3: `sign_operands`'s first,
-// second and third) can go negative, from `origin`: its own, or this call
-// for a written number.
+// The operand a class reads in `slot` (`slot_position`) can go negative,
+// from `origin`: its own, or this call for a written number.
 .decl operand_goes_negative(context: Context, site: symbol, slot: number, origin: symbol, cause: symbol)
 operand_goes_negative(context, site, slot, origin, cause) :-
   can_go_negative(context, function, kind, source, origin, cause),
@@ -62,24 +61,6 @@ operand_goes_negative(context, site, slot, site, cause) :-
   can_go_negative(context, function, kind, source, "", cause),
   signed_argument(context, site, position, function, kind, source),
   slot_position(site, slot, position).
-
-.decl slot_position(site: symbol, slot: number, position: number)
-slot_position(site, 1, position) :- sign_operands(site, position, _, _).
-slot_position(site, 2, position) :- sign_operands(site, _, position, _), position >= 0.
-slot_position(site, 3, position) :- sign_operands(site, _, _, position), position >= 0.
-
-// What the sign analysis says the operand at `slot` can be ("positive",
-// "negative"), and "any" at slot 0, which every call has.
-.decl operand_sign(context: Context, site: symbol, slot: number, sign: symbol)
-operand_sign(context, site, 0, "any") :- negative_call(context, site, _, _).
-operand_sign(context, site, slot, "positive") :-
-  negative_call(context, site, _, _),
-  slot_position(site, slot, position),
-  argument_can_be_positive(context, site, position).
-operand_sign(context, site, slot, "negative") :-
-  negative_call(context, site, _, _),
-  slot_position(site, slot, position),
-  argument_can_be_negative(context, site, position).
 
 // A written negative number, one a value the rules hold is, and a written
 // list with one in it (`Nx.tensor([0, -1])`).
@@ -132,14 +113,19 @@ stops_negative(site, position) :- select_nonnegative(site, position).
 can_go_negative(context, function, "result", site, origin, cause) :-
   operand_goes_negative(context, site, slot, origin, cause),
   negative_call(context, site, function, class),
+  passes_negative(class, slot, 0, "any"),
+  !stops_negative(site, slot).
+can_go_negative(context, function, "result", site, origin, cause) :-
+  operand_goes_negative(context, site, slot, origin, cause),
+  negative_call(context, site, function, class),
   passes_negative(class, slot, needs, sign),
-  operand_sign(context, site, needs, sign),
+  slot_sign(context, site, needs, sign, _, _),
   !stops_negative(site, slot).
 
 // `subtract`: a value that can be positive taken from one that can be zero.
 can_go_negative(context, function, "result", site, site, "subtract") :-
   negative_call(context, site, function, "subtract"),
-  operand_sign(context, site, 2, "positive"),
+  slot_sign(context, site, 2, "positive", _, _),
   minuend_can_be_zero(context, site).
 
 // What a subtraction takes from can be zero: from its math, or from an
@@ -148,12 +134,12 @@ can_go_negative(context, function, "result", site, site, "subtract") :-
 .decl minuend_can_be_zero(context: Context, site: symbol)
 minuend_can_be_zero(context, site) :-
   negative_call(context, site, _, "subtract"),
-  first_zero(context, site, _, cause),
+  slot_sign(context, site, 1, "zero", _, cause),
   cause != "input".
 minuend_can_be_zero(context, site) :-
   negative_call(context, site, _, "subtract"),
-  first_zero(context, site, _, "input"),
-  sign_operands(site, position, _, _),
+  slot_sign(context, site, 1, "zero", _, "input"),
+  slot_position(site, 1, position),
   argument_value(context, site, position, value),
   !shape_size(value).
 
@@ -161,14 +147,14 @@ minuend_can_be_zero(context, site) :-
 .decl shape_size(value: Value)
 shape_size($Opaque(path)) :-
   negative_call(context, site, _, "subtract"),
-  sign_operands(site, position, _, _),
+  slot_position(site, 1, position),
   argument_value(context, site, position, $Opaque(path)),
   match(".*#[{:].*", path).
 
 // `negate`: a negation of a value that can be positive.
 can_go_negative(context, function, "result", site, site, "negate") :-
   negative_call(context, site, function, "negate"),
-  operand_sign(context, site, 1, "positive").
+  slot_sign(context, site, 1, "positive", _, _).
 
 // `remainder`: the dividend's sign, which a negative dividend keeps.
 can_go_negative(context, function, "result", site, site, "remainder") :-

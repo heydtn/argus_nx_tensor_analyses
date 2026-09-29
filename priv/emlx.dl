@@ -17,7 +17,7 @@
 //
 // It reads the words of the tensor shapes program (`tensor_shapes.dl`,
 // included below): its values and the contexts they are followed in,
-// the signs a value can have (`can_be_negative`), where it lies against
+// the signs a value can have (`may_have_sign`), where it lies against
 // ±1 (`in_region`), what kind of number it is (`argument_class`), and the
 // types tensors are made in (`given_type`). The calls this program asks
 // about join that program's demand: a power, and what a round rounds,
@@ -128,7 +128,7 @@ operand_can_be_negative(context, site, position, 1, origin) :-
   negative_by_math(context, site, position, origin).
 operand_can_be_negative(context, site, position, 0, "") :-
   divergence_negative_asked(site, position),
-  argument_can_be_negative(context, site, position),
+  argument_sign(context, site, position, "negative", _, _),
   !negative_by_math(context, site, position, _).
 
 // Some value reaching the argument can be negative, and can lie at or
@@ -138,7 +138,7 @@ operand_can_be_negative(context, site, position, 0, "") :-
 negative_by_math(context, site, position, origin) :-
   divergence_negative_asked(site, position),
   signed_argument(context, site, position, function, kind, source),
-  can_be_negative(context, function, kind, source),
+  may_have_sign(context, function, kind, source, "negative", _, _),
   in_region(context, function, kind, source, region, origin, cause),
   negative_region(region),
   made_by_math(cause, origin).
@@ -156,7 +156,7 @@ made_by_math(cause, origin) :-
 made_by_math("unbounded", origin) :-
   negative_cause("unbounded", origin),
   sign_rule(origin, "subtract"),
-  argument_can_be_zero(_, origin, 0, _, cause),
+  argument_sign(_, origin, 0, "zero", _, cause),
   cause != "input".
 
 // The causes, and the calls they name, of the regions at or below -1

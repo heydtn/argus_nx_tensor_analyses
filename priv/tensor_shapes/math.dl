@@ -48,7 +48,7 @@ overflowing_logistic(context, site, exponential) :-
 underflowing_log_sigmoid(context, site, sigmoid) :-
   logarithm_of_sigmoid(site, sigmoid),
   site_active(context, site),
-  argument_can_be_negative(context, sigmoid, 0).
+  argument_sign(context, sigmoid, 0, "negative", _, _).
 
 nonfinite(context, site, "exp_overflow", "softplus", exponential) :-
   overflowing_softplus(context, site, exponential).
@@ -95,7 +95,7 @@ plus_exponential(total, function, exponential) :-
 // by its maximum: nothing keeps it from overflowing.
 .decl can_overflow(context: Context, exponential: symbol)
 can_overflow(context, exponential) :-
-  argument_can_be_positive(context, exponential, 0),
+  argument_sign(context, exponential, 0, "positive", _, _),
   !shifted_by_maximum(exponential).
 
 // A logarithm of a sigmoid: `log(sigmoid(x))`.
@@ -122,8 +122,8 @@ sign_site(context, sigmoid) :-
 // A product of fractions over many elements underflows to zero: fifty
 // values of 0.1 multiply to zero in f32. Where it can, the product can be
 // zero, whatever its elements' signs say.
-can_be_zero(context, function, "result", site, site, "product_underflow") :-
-  first_positive(context, site),
+may_have_sign(context, function, "result", site, "zero", site, "product_underflow") :-
+  slot_sign(context, site, 1, "positive", _, _),
   signed_call(context, site, function, "product"),
   product_of_fractions(context, site),
   long_product(context, site).
@@ -197,22 +197,21 @@ product_length(context, site, size) :-
 
 sign_class("Nx.Random.uniform_split", "add").
 sign_class("Nx.Random.randint_split", "add").
-operand_positions(site, 1, 2, -1) :-
-  operation_site(site, operation, _),
-  range_sampler(operation).
+given_slot(site, 1, 1) :- operation_site(site, operation, _), range_sampler(operation).
+given_slot(site, 2, 2) :- operation_site(site, operation, _), range_sampler(operation).
 
 // A sample is exactly its minimum now and then: zero where the minimum
 // can be.
-can_be_zero(context, function, "result", site, site, "sample") :-
-  argument_can_be_zero(context, site, 1, _, _),
+may_have_sign(context, function, "result", site, "zero", site, "sample") :-
+  argument_sign(context, site, 1, "zero", _, _),
   sampler_call(context, site, function).
 
 // A sample read out of a sampler's `{sample, key}`: from zero by default.
-can_be_zero(context, function, "load", load, site, "sample") :-
+may_have_sign(context, function, "load", load, "zero", site, "sample") :-
   sign_demand(context, function, "load", load),
   sample_element(function, load, site),
   samples_from_zero(site).
-can_be_positive(context, function, "load", load) :-
+may_have_sign(context, function, "load", load, "positive", "", "") :-
   sign_demand(context, function, "load", load),
   sample_element(function, load, site),
   samples_from_nonnegative(site).
@@ -220,28 +219,18 @@ can_be_positive(context, function, "load", load) :-
 // Over a range, or from a tensor: the signs the call's sign rule gives
 // its result, a range's as the split samplers', a shuffle's or choice's
 // its tensor's.
-can_be_negative(context, function, "load", load) :-
-  can_be_negative(context, function, "result", site),
-  sample_element(function, load, site),
-  sampled_by_rule(site),
-  sign_demand(context, function, "load", load).
-can_be_positive(context, function, "load", load) :-
-  can_be_positive(context, function, "result", site),
-  sample_element(function, load, site),
-  sampled_by_rule(site),
-  sign_demand(context, function, "load", load).
-can_be_zero(context, function, "load", load, origin, cause) :-
-  can_be_zero(context, function, "result", site, origin, cause),
+may_have_sign(context, function, "load", load, sign, origin, cause) :-
+  may_have_sign(context, function, "result", site, sign, origin, cause),
   sample_element(function, load, site),
   sampled_by_rule(site),
   sign_demand(context, function, "load", load).
 
 // Normal, Gumbel and multivariate normal samples: either sign.
-can_be_negative(context, function, "load", load) :-
+may_have_sign(context, function, "load", load, "negative", "", "") :-
   sign_demand(context, function, "load", load),
   sample_element(function, load, site),
   either_sign_sampler(site).
-can_be_positive(context, function, "load", load) :-
+may_have_sign(context, function, "load", load, "positive", "", "") :-
   sign_demand(context, function, "load", load),
   sample_element(function, load, site),
   either_sign_sampler(site).
@@ -273,16 +262,12 @@ sign_rule(site, "add") :-
   operation_site(site, operation, arity),
   tuple_sampler(operation),
   arity >= 3.
-operand_positions(site, 1, 2, -1) :-
-  operation_site(site, operation, arity),
-  tuple_sampler(operation),
-  arity >= 3.
+given_slot(site, 1, 1) :- operation_site(site, operation, arity), tuple_sampler(operation), arity >= 3.
+given_slot(site, 2, 2) :- operation_site(site, operation, arity), tuple_sampler(operation), arity >= 3.
 sign_rule(site, "preserve") :-
   operation_site(site, operation, _),
   tensor_sampler(operation).
-operand_positions(site, 1, -1, -1) :-
-  operation_site(site, operation, _),
-  tensor_sampler(operation).
+given_slot(site, 1, 1) :- operation_site(site, operation, _), tensor_sampler(operation).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -389,8 +374,8 @@ logarithm_with_base(site) :- operation_site(site, "Nx.log", 2).
 zero_scaled_exponentials(context, site, origin, cause) :-
   scaling_factor(site, function, kind, source),
   site_active(context, site),
-  can_be_zero(context, function, kind, source, origin, cause),
-  !can_be_negative(context, function, kind, source),
+  may_have_sign(context, function, kind, source, "zero", origin, cause),
+  !may_have_sign(context, function, kind, source, "negative", _, _),
   cause != "input",
   !partial_zero(cause).
 
@@ -401,12 +386,12 @@ zero_scaled_exponentials(context, site, origin, cause) :-
 unchecked_scaling(context, site, "", "negative") :-
   scaling_factor(site, function, kind, source),
   site_active(context, site),
-  can_be_negative(context, function, kind, source),
+  may_have_sign(context, function, kind, source, "negative", _, _),
   !definite_site(site).
 unchecked_scaling(context, site, origin, cause) :-
   scaling_factor(site, function, kind, source),
   site_active(context, site),
-  can_be_zero(context, function, kind, source, origin, cause),
+  may_have_sign(context, function, kind, source, "zero", origin, cause),
   !partial_zero(cause),
   !definite_site(site).
 
@@ -444,7 +429,7 @@ compares_with_nan(site, relation, origin) :-
 .decl negative_integer_power(context: Context, site: symbol)
 negative_integer_power(context, site) :-
   integer_power(context, site),
-  argument_can_be_negative(context, site, 1).
+  argument_sign(context, site, 1, "negative", _, _).
 
 // A constant made in a type that has no such value: NaN or an infinity in
 // an integer or complex type, pi or epsilon in anything but a float, the
@@ -610,7 +595,8 @@ type_class("Nx.window_mean", "float").
 sign_class("Nx.median", "preserve"). unit_class("Nx.median", "move").
 type_class("Nx.median", "median").
 sign_class("Nx.diff", "subtract").
-operand_positions(site, 0, 0, -1) :- operation_site(site, "Nx.diff", _).
+given_slot(site, 1, 0) :- operation_site(site, "Nx.diff", _).
+given_slot(site, 2, 0) :- operation_site(site, "Nx.diff", _).
 sign_class("Nx.weighted_mean", "divide"). type_class("Nx.weighted_mean", "float").
 
 // `Nx.weighted_mean/3` divides by the sum of its weights, which is zero

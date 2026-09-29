@@ -107,7 +107,7 @@ exponent_of_negative_base(context, site, "written") :-
   site_active(context, site).
 exponent_of_negative_base(context, site, "negative") :-
   differentiated_exponent(site),
-  argument_can_be_negative(context, site, 0),
+  argument_sign(context, site, 0, "negative", _, _),
   !negative_base_written(site).
 
 // A sigmoid of a sum that adds a written number far below zero to a value
@@ -294,8 +294,8 @@ sign_site(context, coordinates) :-
 .decl both_coordinates_zero(context: Context, coordinates: symbol, origin: symbol, cause: symbol)
 both_coordinates_zero(context, coordinates, origin, cause) :-
   takes_angle(_, coordinates),
-  argument_can_be_zero(context, coordinates, position, origin, cause),
-  argument_can_be_zero(context, coordinates, 1 - position, _, _).
+  argument_sign(context, coordinates, position, "zero", origin, cause),
+  argument_sign(context, coordinates, 1 - position, "zero", _, _).
 
 // ── The edges of a domain ─────────────────────────────────────────────
 
@@ -320,7 +320,7 @@ differentiated_at_edge(context, site, origin, cause) :-
   sign_rule(addition, "add"),
   flow_argument(addition, function, position, "literal", one),
   match("1(\\.0+)?", one),
-  argument_can_be_zero(context, addition, 1 - position, origin, cause),
+  argument_sign(context, addition, 1 - position, "zero", origin, cause),
   cause != "input".
 
 // ── The double where ──────────────────────────────────────────────────

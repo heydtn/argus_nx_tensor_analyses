@@ -445,13 +445,13 @@ family_trait("f8_e4m3fn", "floating").
 .decl difference_can_be_negative(context: Context, site: symbol)
 difference_can_be_negative(context, site) :-
   dtype_call(site, "subtract"),
-  argument_can_be_negative(context, site, 0).
+  argument_sign(context, site, 0, "negative", _, _).
 difference_can_be_negative(context, site) :-
   dtype_call(site, "subtract"),
-  argument_can_be_positive(context, site, 1).
+  argument_sign(context, site, 1, "positive", _, _).
 difference_can_be_negative(context, site) :-
   dtype_call(site, "negate"),
-  argument_can_be_positive(context, site, 0).
+  argument_sign(context, site, 0, "positive", _, _).
 
 // A difference whose first operand is at least 1 and whose second is at
 // most 1, as `1 - mask` is, or whose first is at least every element of
@@ -722,7 +722,7 @@ iota_count(site, size) :-
 .decl cast_operand_can_be_negative(context: Context, site: symbol)
 cast_operand_can_be_negative(context, site) :-
   dtype_call(site, "cast"),
-  argument_can_be_negative(context, site, 0),
+  argument_sign(context, site, 0, "negative", _, _),
   !operand_sign_unknown(context, site).
 cast_operand_can_be_negative(context, site) :- casts_written_negative(context, site).
 
@@ -1354,7 +1354,8 @@ class_trait("aggregate", "unary").
 merge_positions(site, 0, 1, 1) :- dtype_rule(site, class), class_trait(class, "weak").
 merge_positions(site, first, second, 0) :-
   dtype_rule(site, "strict_merge"),
-  sign_operands(site, first, second, _).
+  slot_position(site, 1, first),
+  slot_position(site, 2, second).
 
 // The types two merging operands meet at: each's type, or the number one
 // is, and the merged type.
