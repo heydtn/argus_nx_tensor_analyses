@@ -2738,23 +2738,10 @@ shape_term_from(text, start, index, [[-1, nil], "nil", rest]) :-
 .decl shape_term(text: symbol, start: number, axes: Axes)
 shape_term(text, start, axes) :- shape_term_from(text, start, 0, axes).
 
+// A printable ASCII character and its code, from the space on.
 .decl character_code(glyph: symbol, code: number)
-character_code(" ", 32). character_code("!", 33). character_code("\"", 34). character_code("#", 35). character_code("$", 36). character_code("%", 37).
-character_code("&", 38). character_code("'", 39). character_code("(", 40). character_code(")", 41). character_code("*", 42). character_code("+", 43).
-character_code(",", 44). character_code("-", 45). character_code(".", 46). character_code("/", 47). character_code("0", 48). character_code("1", 49).
-character_code("2", 50). character_code("3", 51). character_code("4", 52). character_code("5", 53). character_code("6", 54). character_code("7", 55).
-character_code("8", 56). character_code("9", 57). character_code(":", 58). character_code(";", 59). character_code("<", 60). character_code("=", 61).
-character_code(">", 62). character_code("?", 63). character_code("@", 64). character_code("A", 65). character_code("B", 66). character_code("C", 67).
-character_code("D", 68). character_code("E", 69). character_code("F", 70). character_code("G", 71). character_code("H", 72). character_code("I", 73).
-character_code("J", 74). character_code("K", 75). character_code("L", 76). character_code("M", 77). character_code("N", 78). character_code("O", 79).
-character_code("P", 80). character_code("Q", 81). character_code("R", 82). character_code("S", 83). character_code("T", 84). character_code("U", 85).
-character_code("V", 86). character_code("W", 87). character_code("X", 88). character_code("Y", 89). character_code("Z", 90). character_code("[", 91).
-character_code("\\", 92). character_code("]", 93). character_code("^", 94). character_code("_", 95). character_code("`", 96). character_code("a", 97).
-character_code("b", 98). character_code("c", 99). character_code("d", 100). character_code("e", 101). character_code("f", 102). character_code("g", 103).
-character_code("h", 104). character_code("i", 105). character_code("j", 106). character_code("k", 107). character_code("l", 108). character_code("m", 109).
-character_code("n", 110). character_code("o", 111). character_code("p", 112). character_code("q", 113). character_code("r", 114). character_code("s", 115).
-character_code("t", 116). character_code("u", 117). character_code("v", 118). character_code("w", 119). character_code("x", 120). character_code("y", 121).
-character_code("z", 122). character_code("{", 123). character_code("|", 124). character_code("}", 125). character_code("~", 126).
+character_code(substr(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~", code - 32, 1), code) :-
+  code = range(32, 127).
 
 // The character after a backslash in a charlist, and the code it stands for.
 .decl escape_code(glyph: symbol, code: number)
@@ -2893,18 +2880,18 @@ number_misfit(spelled, name, "wraps") :-
 number_misfit(spelled, name, "not_integer") :-
   written_number(spelled, "kind", kind),
   kind != "integer",
-  type_spelling(_, name, "integer").
+  nx_dtype(name, _, _, "integer").
 number_misfit(spelled, name, outcome) :-
   written_number(spelled, "kind", "float"),
   float_limit(names, outcome, pattern),
   match(pattern, spelled),
-  type_spelling(_, name, _),
+  nx_dtype(name, _, _, _),
   match(names, name).
 number_misfit(spelled, name, "overflows") :-
   integer_digits(spelled, _, digits),
   integer_limit(names, limit),
   digits_at_least(digits, limit),
-  type_spelling(_, name, _),
+  nx_dtype(name, _, _, _),
   match(names, name).
 
 // An integer spelled, by its sign and the digits of its magnitude.
@@ -2917,17 +2904,24 @@ integer_digits(spelled, "negative", substr(spelled, 1, strlen(spelled) - 1)) :-
   written_number(spelled, "sign", "negative").
 
 // An integer type's largest magnitude on each side of zero, in digits: 0
-// below zero for an unsigned type.
+// below zero for an unsigned type. Past 16 bits they are written out, as
+// `exact_limit` does not reach them all.
 .decl integer_bound(name: symbol, sign: symbol, bound: symbol)
-integer_bound("s8", "positive", "127"). integer_bound("s8", "negative", "128").
-integer_bound("s16", "positive", "32767"). integer_bound("s16", "negative", "32768").
+integer_bound(name, "positive", to_string(limit)) :-
+  nx_dtype(name, _, size, "integer"),
+  size >= 8,
+  size <= 16,
+  exact_limit(name, limit).
+integer_bound(name, "negative", to_string(limit + 1)) :-
+  nx_dtype(name, "s", size, _),
+  size >= 8,
+  size <= 16,
+  exact_limit(name, limit).
+integer_bound(name, "negative", "0") :- nx_dtype(name, "u", size, _), size >= 8.
 integer_bound("s32", "positive", "2147483647"). integer_bound("s32", "negative", "2147483648").
 integer_bound("s64", "positive", "9223372036854775807").
 integer_bound("s64", "negative", "9223372036854775808").
-integer_bound("u8", "positive", "255"). integer_bound("u8", "negative", "0").
-integer_bound("u16", "positive", "65535"). integer_bound("u16", "negative", "0").
-integer_bound("u32", "positive", "4294967295"). integer_bound("u32", "negative", "0").
-integer_bound("u64", "positive", "18446744073709551615"). integer_bound("u64", "negative", "0").
+integer_bound("u32", "positive", "4294967295"). integer_bound("u64", "positive", "18446744073709551615").
 
 // A magnitude, in digits, at least a bound: more digits, or as many and
 // not before it in order (digit strings of one length compare as their
@@ -7116,13 +7110,10 @@ site_options_known(site) :-
   takes_no_options(operation).
 
 // `Nx.tensor/2` and its shorthands (`Nx.f32/1`, ...), from data or from a
-// tensor, whose names they drop.
+// tensor, whose names they drop: one for each type named for its family
+// and size.
 .decl type_shorthand(name: symbol)
-type_shorthand("u2"). type_shorthand("u4"). type_shorthand("u8"). type_shorthand("u16").
-type_shorthand("u32"). type_shorthand("u64"). type_shorthand("s2"). type_shorthand("s4").
-type_shorthand("s8"). type_shorthand("s16"). type_shorthand("s32"). type_shorthand("s64").
-type_shorthand("f8"). type_shorthand("bf16"). type_shorthand("f16"). type_shorthand("f32").
-type_shorthand("f64"). type_shorthand("c64"). type_shorthand("c128").
+type_shorthand(name) :- nx_dtype(name, family, _, _), family != name.
 
 .decl tensor_constructor(operation: symbol, arity: number)
 tensor_constructor("Nx.tensor", 1).
@@ -9908,26 +9899,40 @@ type_position(site, 0) :- remote_call(site, _, "Nx.Constants", _, arity), arity 
 typed_second("Nx.as_type"). typed_second("Nx.bitcast"). typed_second("Nx.from_binary").
 typed_second("Nx.template").
 
-// Nx's types, by family and size, and how the code spells them: `:f32`
-// or `{:f, 32}`.
+// How the code spells a type, as an atom of its name (`:f32`) or a tuple
+// of its family and size (`{:f, 32}`), and the type's name and class.
 .decl type_spelling(spelled: symbol, name: symbol, class: symbol)
-type_spelling(cat(":", family, to_string(size)), cat(family, to_string(size)), class) :-
-  nx_type(family, size, class).
-type_spelling(cat("{:", family, ", ", to_string(size), "}"), cat(family, to_string(size)), class) :-
-  nx_type(family, size, class).
-// The 8-bit float with no infinities, whose atom does not end in its size.
-type_spelling(":f8_e4m3fn", "f8_e4m3fn", "float").
-type_spelling("{:f8_e4m3fn, 8}", "f8_e4m3fn", "float").
+type_spelling(cat(":", name), name, class) :- nx_dtype(name, _, _, class).
+type_spelling(cat("{:", family, ", ", to_string(size), "}"), name, class) :-
+  nx_dtype(name, family, size, class).
 
-.decl nx_type(family: symbol, size: number, class: symbol)
-nx_type("s", size, "integer") :- integer_size(size).
-nx_type("u", size, "integer") :- integer_size(size).
-nx_type("f", 8, "float"). nx_type("f", 16, "float"). nx_type("f", 32, "float").
-nx_type("f", 64, "float"). nx_type("bf", 16, "float").
-nx_type("c", 64, "complex"). nx_type("c", 128, "complex").
+// Nx's types, by name, family, size in bits and class ("integer", "float"
+// or "complex"): the signed and unsigned integers of 2 to 64 bits, and
+// the float formats.
+.decl nx_dtype(name: symbol, family: symbol, size: number, class: symbol)
+nx_dtype(cat(family, to_string(size)), family, size, "integer") :-
+  ( family = "s" ; family = "u" ),
+  size = 1 bshl range(1, 7).
+nx_dtype(name, family, size, class) :- float_format(name, family, size, class, _, _).
 
-.decl integer_size(size: number)
-integer_size(2). integer_size(4). integer_size(8). integer_size(16). integer_size(32). integer_size(64).
+// A float type (or a complex one, of its parts) by name, family, size and
+// class, with its range as a rank among the float types (`reach`) and its
+// significand's bits (`precision`). The 8-bit float with no infinities is
+// named for its family, not its size.
+.decl float_format(name: symbol, family: symbol, size: number, class: symbol, reach: number, precision: number)
+float_format("f8", "f", 8, "float", 2, 3). float_format("f16", "f", 16, "float", 3, 11).
+float_format("f32", "f", 32, "float", 4, 24). float_format("f64", "f", 64, "float", 5, 53).
+float_format("bf16", "bf", 16, "float", 4, 8). float_format("f8_e4m3fn", "f8_e4m3fn", 8, "float", 1, 4).
+float_format("c64", "c", 64, "complex", 4, 24). float_format("c128", "c", 128, "complex", 5, 53).
+
+// The largest whole number up to which a type holds every whole number
+// from zero: an integer type's largest value (as far as a written number
+// reaches), 2 to the power of a float's significand bits.
+.decl exact_limit(type: symbol, limit: number)
+exact_limit(name, (1 bshl size) - 1) :- nx_dtype(name, "u", size, _), size <= 16.
+exact_limit(name, (1 bshl (size - 1)) - 1) :- nx_dtype(name, "s", size, _), size <= 16.
+exact_limit(name, 2147483647) :- nx_dtype(name, _, 32, "integer").
+exact_limit(name, 1 bshl precision) :- float_format(name, _, _, _, _, precision), precision < 31.
 
 // Each Nx function's type class. A function with none gives a value of
 // no known class.

@@ -39,9 +39,9 @@
 // dispatch (`Assumed`); numbers other than written ones and sizes.
 //
 // Souffle's compile time grows with relations times clauses, and a
-// disjunction is a clause for each of its branches, so kinds of call, of
-// type and of rule are fact tables (`dtype_role`, `family_trait`,
-// `class_trait`) rather than a relation or a disjunction each.
+// disjunction is a clause for each of its branches, so kinds of call and
+// of rule are fact tables (`dtype_role`, `class_trait`) rather than a
+// relation or a disjunction each.
 
 // The float types the code may run at, as the analysis is run with them
 // (`f16`, `bf16`, `f32`).
@@ -429,16 +429,14 @@ dtype_role("Nx.fill", "second_operand").
 // not write can pass), "lower_precision" (fewer significand bits than
 // f32's).
 .decl type_trait(type: symbol, trait: symbol)
-type_trait(type, trait) :- dtype(type, family, _), family_trait(family, trait).
-type_trait(type, "byte") :- dtype(type, family, size), family_trait(family, "integer"), size <= 8.
+type_trait(type, "unsigned") :- nx_dtype(type, "u", _, _).
+type_trait(type, "integer") :- nx_dtype(type, _, _, "integer").
+type_trait(type, "complex") :- nx_dtype(type, _, _, "complex").
+type_trait(type, "floating") :- nx_dtype(type, _, _, "float").
+type_trait(type, "byte") :- nx_dtype(type, _, size, "integer"), size <= 8.
 type_trait(type, "narrow") :- type_trait(type, "integer"), exact_limit(type, limit), limit <= 65535.
-type_trait(type, "lower_precision") :- float_capacity(type, _, precision), precision < 24.
+type_trait(type, "lower_precision") :- float_format(type, _, _, _, _, precision), precision < 24.
 type_trait("configured", "floating") :- float_type(_).
-
-.decl family_trait(family: symbol, trait: symbol)
-family_trait("u", "unsigned"). family_trait("u", "integer"). family_trait("s", "integer").
-family_trait("c", "complex"). family_trait("f", "floating"). family_trait("bf", "floating").
-family_trait("f8_e4m3fn", "floating").
 
 // A difference that can be negative: its first operand can be, or its
 // second positive; a negation of a value that can be positive.
@@ -794,7 +792,7 @@ outside_integer_type(value, type) :-
   type_trait(type, "unsigned").
 outside_integer_type(value, type) :-
   number_value(_, value),
-  dtype(type, "s", _),
+  nx_dtype(type, "s", _, _),
   exact_limit(type, limit),
   value < -limit - 1.
 
@@ -860,20 +858,14 @@ meeting_instance("configured", "configured", leads, concrete, concrete) :-
 // range or fewer significand bits among the floats, and u64 made s64.
 .decl narrows(from: symbol, to: symbol)
 narrows(from, to) :-
-  float_capacity(from, from_reach, _),
-  float_capacity(to, to_reach, _),
+  float_format(from, _, _, _, from_reach, _),
+  float_format(to, _, _, _, to_reach, _),
   to_reach < from_reach.
 narrows(from, to) :-
-  float_capacity(from, _, from_precision),
-  float_capacity(to, _, to_precision),
+  float_format(from, _, _, _, _, from_precision),
+  float_format(to, _, _, _, _, to_precision),
   to_precision < from_precision.
 narrows("u64", "s64").
-
-// A float type's range, by rank, and its significand bits.
-.decl float_capacity(type: symbol, reach: number, precision: number)
-float_capacity("f8_e4m3fn", 1, 4). float_capacity("f8", 2, 3). float_capacity("f16", 3, 11).
-float_capacity("bf16", 4, 8). float_capacity("f32", 4, 24). float_capacity("f64", 5, 53).
-float_capacity("c64", 4, 24). float_capacity("c128", 5, 53).
 
 // The type a sum adds up in: its operand's, or a dot product's.
 .decl summed_type(context: Context, site: symbol, type: symbol)
@@ -971,33 +963,11 @@ size_demand(size) :- outgrow_demand(size, _).
 
 // ══ Exact types ═════════════════════════════════════════════════════
 
-// Nx's types by name, family and size in bits.
-.decl dtype(name: symbol, family: symbol, size: number)
-dtype(cat(family, to_string(size)), family, size) :- nx_type(family, size, _).
-dtype("f8_e4m3fn", "f8_e4m3fn", 8).
-
-// How the code spells a type (`:f32`, `{:f, 32}`), the FP8 E4M3FN type
-// among them, whose name is not its family and size.
-.decl dtype_spelled(spelled: symbol, name: symbol)
-dtype_spelled(spelled, name) :- type_spelling(spelled, name, _).
-dtype_spelled(":f8_e4m3fn", "f8_e4m3fn").
-dtype_spelled("{:f8_e4m3fn, 8}", "f8_e4m3fn").
-
 // A type as each type it can be: a type is itself, and the configured
 // type each float type the code may run at.
 .decl type_instance(type: symbol, concrete: symbol)
-type_instance(type, type) :- dtype(type, _, _).
+type_instance(type, type) :- nx_dtype(type, _, _, _).
 type_instance("configured", concrete) :- float_type(concrete).
-
-// The largest whole number up to which a type holds every whole number
-// from zero: an integer type's largest value (as far as a written number
-// reaches), 2 to the power of a float's significand bits.
-.decl exact_limit(type: symbol, limit: number)
-exact_limit("u2", 3). exact_limit("u4", 15). exact_limit("u8", 255). exact_limit("u16", 65535).
-exact_limit("u32", 2147483647). exact_limit("s2", 1). exact_limit("s4", 7). exact_limit("s8", 127).
-exact_limit("s16", 32767). exact_limit("s32", 2147483647).
-exact_limit("f8", 8). exact_limit("f8_e4m3fn", 16). exact_limit("bf16", 256). exact_limit("f16", 2048).
-exact_limit("f32", 16777216). exact_limit("c64", 16777216).
 
 // A float type's largest finite value (as far as an f32 reaches), the
 // magnitude from which it rounds a number to infinity, and the one below
@@ -1015,30 +985,30 @@ float_range("f64", to_float("3.4e38"), 0.0, 0.0).
 // precedence wins, the left one of two of one precedence.
 .decl concrete_merged(left: symbol, right: symbol, merged: symbol)
 concrete_merged(left, right, merged) :-
-  dtype(left, family, left_size),
-  dtype(right, family, right_size),
-  dtype(merged, family, max(left_size, right_size)).
+  nx_dtype(left, family, left_size, _),
+  nx_dtype(right, family, right_size, _),
+  nx_dtype(merged, family, max(left_size, right_size), _).
 concrete_merged(left, right, merged) :-
-  dtype(left, left_family, left_size),
-  dtype(right, right_family, right_size),
+  nx_dtype(left, left_family, left_size, _),
+  nx_dtype(right, right_family, right_size, _),
   promoting_pair(left_family, right_family, cap),
-  dtype(merged, right_family, max(min(left_size * 2, cap), right_size)).
+  nx_dtype(merged, right_family, max(min(left_size * 2, cap), right_size), _).
 concrete_merged(left, right, merged) :-
-  dtype(left, left_family, left_size),
-  dtype(right, right_family, right_size),
+  nx_dtype(left, left_family, left_size, _),
+  nx_dtype(right, right_family, right_size, _),
   promoting_pair(right_family, left_family, cap),
-  dtype(merged, left_family, max(min(right_size * 2, cap), left_size)).
+  nx_dtype(merged, left_family, max(min(right_size * 2, cap), left_size), _).
 concrete_merged(left, right, left) :-
-  dtype(left, left_family, _),
-  dtype(right, right_family, _),
+  nx_dtype(left, left_family, _, _),
+  nx_dtype(right, right_family, _, _),
   left_family != right_family,
   family_rank(left_family, left_rank),
   family_rank(right_family, right_rank),
   left_rank >= right_rank,
   !promoting_pair(right_family, left_family, _).
 concrete_merged(left, right, right) :-
-  dtype(left, left_family, _),
-  dtype(right, right_family, _),
+  nx_dtype(left, left_family, _, _),
+  nx_dtype(right, right_family, _, _),
   family_rank(left_family, left_rank),
   family_rank(right_family, right_rank),
   left_rank < right_rank,
@@ -1070,7 +1040,7 @@ type_merged("configured", "configured", "configured") :- float_type(_).
 kept_configured(concrete, concrete, "configured") :- float_type(concrete).
 kept_configured(concrete, merged, merged) :-
   float_type(concrete),
-  dtype(merged, _, _),
+  nx_dtype(merged, _, _, _),
   merged != concrete.
 
 // `Nx.Type.to_floating/1`.
@@ -1082,8 +1052,8 @@ floating_of(type, "f32") :- type_trait(type, "integer").
 // `Nx.Type.to_aggregate/1`.
 .decl aggregate_of(type: symbol, aggregate: symbol)
 aggregate_of("u64", "s64"). aggregate_of("s64", "s64").
-aggregate_of(type, "u32") :- dtype(type, "u", size), size < 64.
-aggregate_of(type, "s32") :- dtype(type, "s", size), size < 64.
+aggregate_of(type, "u32") :- nx_dtype(type, "u", size, _), size < 64.
+aggregate_of(type, "s32") :- nx_dtype(type, "s", size, _), size < 64.
 aggregate_of(type, type) :- floating_of(type, type).
 
 // ── Numbers ────────────────────────────────────────────────────────
@@ -1141,28 +1111,34 @@ number_merged(type, number, "f32") :-
 number_merged(type, number, merged) :-
   number_value(number, value),
   value >= 0,
-  dtype(type, "u", size),
+  nx_dtype(type, "u", size, _),
   bits = min width : { bit_width(width, largest, _), value <= largest },
-  dtype(merged, "u", max(bits, size)).
+  nx_dtype(merged, "u", max(bits, size), _).
 number_merged(type, number, merged) :-
   number_value(number, value),
   value < 0,
-  dtype(type, "u", size),
+  nx_dtype(type, "u", size, _),
   magnitude = -value - 1,
   bits = min width : { bit_width(width, _, largest), magnitude <= largest },
-  dtype(merged, "s", max(bits, min(size * 2, 64))).
+  nx_dtype(merged, "s", max(bits, min(size * 2, 64)), _).
 number_merged(type, number, merged) :-
   number_value(number, value),
-  dtype(type, "s", size),
+  nx_dtype(type, "s", size, _),
   magnitude = max(value, -value - 1),
   bits = min width : { bit_width(width, _, largest), magnitude <= largest },
-  dtype(merged, "s", max(bits, size)).
+  nx_dtype(merged, "s", max(bits, size), _).
 
 // The fewest bits an unsigned or a signed integer holds a value in, as
-// `Nx.Type.merge_number/2` counts them.
+// `Nx.Type.merge_number/2` counts them: 1, or the size of an integer type
+// of a byte or more, with the largest value of each of its kinds.
 .decl bit_width(width: number, unsigned_largest: number, signed_largest: number)
-bit_width(1, 1, 1). bit_width(8, 255, 127). bit_width(16, 65535, 32767).
-bit_width(32, 2147483647, 2147483647).
+bit_width(1, 1, 1).
+bit_width(size, unsigned_largest, signed_largest) :-
+  nx_dtype(unsigned_type, "u", size, _),
+  size >= 8,
+  exact_limit(unsigned_type, unsigned_largest),
+  nx_dtype(signed_type, "s", size, _),
+  exact_limit(signed_type, signed_largest).
 
 // ── What a value's type is ─────────────────────────────────────────
 
@@ -1443,14 +1419,14 @@ call_type(context, site, type, site) :-
   dtype_rule(site, "typed"),
   option(site, "type", text, start),
   term_spelling(text, start, spelled),
-  dtype_spelled(spelled, type).
+  type_spelling(spelled, type, _).
 call_type(context, site, type, site) :-
   typed_site(context, site),
   dtype_rule(site, "typed"),
   type_argument(site, function, kind, source),
   value_of(context, function, kind, source, $Term(text, start)),
   term_spelling(text, start, spelled),
-  dtype_spelled(spelled, type).
+  type_spelling(spelled, type, _).
 call_type(context, site, type, origin) :-
   value_dtype(context, function, kind, source, type, origin),
   type_argument(site, function, kind, source),

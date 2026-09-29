@@ -574,9 +574,14 @@ float_bound(context, site) :-
 
 // The values each integer type of up to 16 bits holds, as Nx names it.
 .decl integer_range(name: symbol, smallest: float, largest: float)
-integer_range("s2", -2.0, 1.0). integer_range("s4", -8.0, 7.0). integer_range("s8", -128.0, 127.0).
-integer_range("s16", -32768.0, 32767.0). integer_range("u2", 0.0, 3.0). integer_range("u4", 0.0, 15.0).
-integer_range("u8", 0.0, 255.0). integer_range("u16", 0.0, 65535.0).
+integer_range(name, 0.0, to_float(limit)) :-
+  nx_dtype(name, "u", size, _),
+  size <= 16,
+  exact_limit(name, limit).
+integer_range(name, to_float(-limit - 1), to_float(limit)) :-
+  nx_dtype(name, "s", size, _),
+  size <= 16,
+  exact_limit(name, limit).
 
 // ══ Complex operands ════════════════════════════════════════════════
 //
