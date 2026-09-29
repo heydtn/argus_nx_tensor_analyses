@@ -31,6 +31,12 @@ If the change renames or merges one of the internal relations, keep it
 comparable with a view in `_build/probe/identity_views.dl`. That file is
 untracked, and `identity.exs` includes it after the rules.
 
+For a change to how findings are built or worded, compare the findings
+themselves: `mix run dev/identity/findings.exs NAME` keeps every finding
+both analyses place, with every field, and
+`dev/identity/compare_findings.sh BEFORE AFTER` compares two runs, with
+the same exit codes as `compare.sh`.
+
 `dev/identity/compile_cost.sh [program]` measures what Soufflé takes to
 compile the rules over empty facts, in instructions retired, which barely
 move with load.
