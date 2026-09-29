@@ -18,6 +18,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   should not rely on Nx accepting them) with what Nx raises. Its related
   frames point at the calls that make each operand's shape, then at the
   calls that bring the operands into the function.
+
+  Which way it errs: a shape the rules cannot follow is not known, and an
+  operation over one gives no shape, so what the analysis cannot see
+  yields no finding (it errs quiet). Branches it cannot tell apart are
+  the exception: a value that reaches a call along several paths has
+  every shape it can arrive with, and a finding between two of them has
+  certainty `on_some_path`, a warning, though the program's branches may
+  never combine them (it errs loud there, on purpose).
   """
 
   @behaviour Argus.Analysis

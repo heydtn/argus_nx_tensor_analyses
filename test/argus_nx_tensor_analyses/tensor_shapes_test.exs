@@ -2,6 +2,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # Nx is the oracle: each case below is compiled into a module, run for
   # the shape Nx gives it or the error Nx raises, and the analysis of the
   # compiled module has to agree.
+  #
+  # Not async: `setup_all` loads the compiled fixtures into the VM, and
+  # silences the compiler by capturing `:stderr`, which every process
+  # shares.
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO

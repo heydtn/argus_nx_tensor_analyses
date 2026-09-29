@@ -138,6 +138,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
   end
 
   # ── What an instruction writes ───────────────────────────────────────
+  #
+  # `Argus.Instr` says which registers an instruction reads and writes, and
+  # copies (`copy_source/2`) are read through it. What the clauses below
+  # add is what it does not say: the term an instruction builds or the
+  # field it reads, which is what a value here is made of.
 
   defp writes(function, index, outs) do
     instruction = elem(function.code, index)
@@ -284,6 +289,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
   # A call whose callee is a value: its arity, and the operands that name
   # what it calls, the fun it runs or the module and function it applies.
+  # `Argus.Instr.uses/1` lists these operands among the arguments; which
+  # of them is the callee is read here.
   defp dynamic_call({:call_fun, arity}), do: {arity, [{"fun", {:x, arity}}]}
   defp dynamic_call({:call_fun2, _tag, arity, fun}), do: {arity, [{"fun", fun}]}
 
