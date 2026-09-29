@@ -46,6 +46,7 @@ defmodule ArgusNxTensorAnalyses.EMLX do
 
   alias ArgusNxTensorAnalyses.EMLX.Wording
   alias ArgusNxTensorAnalyses.Finding
+  alias ArgusNxTensorAnalyses.Solve
   alias ArgusNxTensorAnalyses.TensorShapes
 
   @external_resource Path.expand("../../priv/emlx.dl", __DIR__)
@@ -143,7 +144,7 @@ defmodule ArgusNxTensorAnalyses.EMLX do
   `ArgusNxTensorAnalyses.TensorShapes.solve/3` does, with its options.
   """
   @spec solve([module() | Path.t()], keyword()) :: {:ok, map()} | {:error, term()}
-  def solve(modules, options \\ []), do: TensorShapes.solve(modules, rules_file(), options)
+  def solve(modules, options \\ []), do: Solve.solve(__MODULE__, modules, rules_file(), options)
 
   @doc """
   Solves this analysis's program over the modules (atoms or `.beam`
@@ -152,6 +153,5 @@ defmodule ArgusNxTensorAnalyses.EMLX do
   give it a `:cache` directory of its own.
   """
   @spec run([module() | Path.t()], keyword()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
-  def run(modules, options \\ []),
-    do: TensorShapes.run(modules, Keyword.put(options, :analysis, __MODULE__))
+  def run(modules, options \\ []), do: Solve.run(__MODULE__, modules, options)
 end

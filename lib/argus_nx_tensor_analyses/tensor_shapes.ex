@@ -32,6 +32,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
 
   alias Argus.Findings
   alias ArgusNxTensorAnalyses.Finding
+  alias ArgusNxTensorAnalyses.Solve
   alias ArgusNxTensorAnalyses.TensorShapes.ShapeFlow
   alias ArgusNxTensorAnalyses.TensorShapes.Wording
   alias ArgusNxTensorAnalyses.TensorShapes.Wording.Causes
@@ -293,20 +294,20 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   end
 
   @doc """
-  Extracts the modules (atoms or `.beam` paths) with the flow extractor
-  and solves `program` over the facts, returning its output relations'
-  rows by name. `program` defaults to this analysis's; a program that
-  includes it can read its relations too.
+  Extracts the modules (atoms or `.beam` paths) with this analysis's
+  extractors and solves `program` over the facts, returning its output
+  relations' rows by name. `program` defaults to this analysis's; a
+  program that includes it can read its relations too.
 
   ## Options
 
     * `:cache` — a directory to keep the rows in, under a digest of what
       the solve reads (the facts extracted from the modules, the program
-      and rules without their comments, Argus's version, the solver's):
-      a solve that would read the same reads them back instead, so an
-      edit that leaves the compiled code as it was (a comment, a doc, a
-      comment in the rules) solves nothing. Only the latest rows are
-      kept. Default: nil, no cache.
+      and every file it includes without their comments, Argus's version,
+      the solver's): a solve that would read the same reads them back
+      instead, so an edit that leaves the compiled code as it was (a
+      comment, a doc, a comment in the rules) solves nothing. Only the
+      latest rows are kept. Default: nil, no cache.
     * `:unsupported_types` — the tensor types the backend the code runs
       on does not support, as Nx names them (`:f64`, `{:f, 64}`): a call
       that makes a tensor of one is reported. EMLX, for one, computes f64
@@ -320,7 +321,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   """
   @spec solve([module() | Path.t()], Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def solve(modules, program \\ rules_file(), options \\ []),
-    do: with_facts(modules, &solve_facts(&1, program, options))
+    do: Solve.solve(__MODULE__, modules, program, options)
 
   @doc """
   Solves the program over the modules (atoms or `.beam` paths) and returns
@@ -333,229 +334,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       includes this one's. Default: this analysis.
   """
   @spec run([module() | Path.t()], keyword()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
-  def run(modules, options \\ []) do
-    analysis = Keyword.get(options, :analysis, __MODULE__)
-
-    solved =
-      with_facts(modules, fn directory ->
-        with {:ok, rows} <- solve_facts(directory, analysis.rules_file(), options),
-             do: {:ok, rows, Argus.Lines.from_facts_dir(directory)}
-      end)
-
-    with {:ok, rows, lines} <- solved do
-      beams = beams(modules)
-      findings = Findings.build(analysis, rows)
-      {:ok, Enum.map(findings, &place(&1, beams, lines))}
-    end
-  end
-
-  # Extracts the modules into a directory of facts, hands it to `solve`,
-  # and removes it.
-  defp with_facts(modules, solve) do
-    directory =
-      Path.join(
-        System.tmp_dir!(),
-        "tensor_shapes_#{Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)}"
-      )
-
-    try do
-      with {:ok, directory} <- extract(modules, directory), do: solve.(directory)
-    after
-      File.rm_rf!(directory)
-    end
-  end
-
-  defp solve_facts(directory, program, options) do
-    File.write!(
-      Path.join(directory, "unsupported_type.facts"),
-      options
-      |> Keyword.get(:unsupported_types, [])
-      |> Enum.map(&[type_name(&1), "\n"])
-    )
-
-    File.write!(
-      Path.join(directory, "float_type.facts"),
-      options
-      |> Keyword.get(:float_types, [])
-      |> Enum.map(&[type_name(&1), "\n"])
-    )
-
-    case Keyword.get(options, :cache) do
-      nil -> solve_rules(directory, program)
-      cache -> solve_cached(directory, program, cache)
-    end
-  end
-
-  # The rules files `rules_file/0` includes, as they are read.
-  defp hash_rules_files(hash) do
-    rules_file()
-    |> Path.dirname()
-    |> Path.join("tensor_shapes/*.dl")
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.reduce(hash, fn file, acc ->
-      :crypto.hash_update(acc, file |> File.read!() |> Argus.Souffle.Program.uncommented())
-    end)
-  end
-
-  # A type as the rules name it: `f64` for `:f64` or `{:f, 64}`.
-  defp type_name({family, size}) when is_atom(family) and is_integer(size), do: "#{family}#{size}"
-  defp type_name(type) when is_atom(type), do: Atom.to_string(type)
-  defp type_name(type) when is_binary(type), do: type
-
-  defp extract(modules, directory) do
-    with {:ok, directory} <- Argus.Pipeline.run(modules, directory, extractors: [ShapeFlow]) do
-      # Souffle fails on a missing input file, and the extractor writes a
-      # relation's file only when it has rows.
-      for relation <- ShapeFlow.relations(),
-          path = Path.join(directory, "#{relation}.facts"),
-          not File.exists?(path),
-          do: File.write!(path, "")
-
-      {:ok, directory}
-    end
-  end
-
-  # The program after the Argus rules it builds on: its facts, its call
-  # graph and its shared words (`clientlib/imports.dl`). Souffle resolves
-  # an `.include` against the file it is in, and Argus's are wherever Mix
-  # put the dependency.
-  #
-  # The call graph (Argus's stage 0) is derived here, and the solve told
-  # it is provided: left to itself, `run_rules/3` would also learn
-  # whether the program reads Argus's process points-to, which it never
-  # does, by compiling the program, which takes most of a solve's time.
-  defp solve_rules(directory, program) do
-    wrapper = directory <> ".dl"
-
-    File.write!(wrapper, """
-    .include "#{Application.app_dir(:argus_beam, "priv/dl/clientlib/imports.dl")}"
-    .include "#{Path.expand(program)}"
-    """)
-
-    try do
-      with :ok <- Argus.Analysis.derive_stage0(directory),
-           do: Argus.Analysis.run_rules(directory, {:custom, wrapper}, stage0: :provided)
-    after
-      File.rm(wrapper)
-    end
-  end
-
-  defp solve_cached(directory, program, cache) do
-    entry = Path.join(cache, digest(directory, program) <> ".json")
-
-    with {:ok, text} <- File.read(entry),
-         {:ok, rows} <- decode(text) do
-      {:ok, rows}
-    else
-      _missing ->
-        with {:ok, rows} <- solve_rules(directory, program) do
-          File.rm_rf!(cache)
-          File.mkdir_p!(cache)
-          File.write!(entry, Jason.encode!(rows))
-          {:ok, rows}
-        end
-    end
-  end
-
-  # The rows as `solve_rules/2` gave them: relation names to rows of
-  # strings. Anything else in the file is ignored, and solved afresh.
-  defp decode(text) do
-    case Jason.decode(text) do
-      {:ok, %{} = rows} -> if Enum.all?(rows, &rows?/1), do: {:ok, rows}, else: :error
-      _other -> :error
-    end
-  end
-
-  defp rows?({relation, rows}) when is_binary(relation) and is_list(rows),
-    do: Enum.all?(rows, &(is_list(&1) and Enum.all?(&1, fn column -> is_binary(column) end)))
-
-  defp rows?(_entry), do: false
-
-  # Every relation's facts but the lines, which no rule reads and which a
-  # comment moves; the program and this analysis's rules (which a probe
-  # program includes) without their comments, as Argus keys a program; the
-  # Argus whose declarations they build on; and the solver, named by its
-  # version as Argus names it in its own keys.
-  defp digest(directory, program) do
-    directory
-    |> File.ls!()
-    |> Enum.reject(&(&1 == "line_info.facts"))
-    |> Enum.sort()
-    |> Enum.reduce(:crypto.hash_init(:sha256), fn file, acc ->
-      acc
-      |> :crypto.hash_update(file <> "\n")
-      |> :crypto.hash_update(File.read!(Path.join(directory, file)))
-    end)
-    |> :crypto.hash_update(program |> File.read!() |> Argus.Souffle.Program.uncommented())
-    |> :crypto.hash_update(rules_file() |> File.read!() |> Argus.Souffle.Program.uncommented())
-    |> hash_rules_files()
-    |> :crypto.hash_update(to_string(Application.spec(:argus_beam, :vsn)))
-    |> :crypto.hash_update(Argus.Souffle.version(Argus.Souffle.executable() || "souffle"))
-    |> :crypto.hash_final()
-    |> Base.encode16(case: :lower)
-  end
-
-  # Each module's beam and the source file it was compiled from.
-  defp beams(modules) do
-    for module <- modules,
-        path <- [beam_path(module)],
-        {:ok, {name, [compile_info: info]}} <- [:beam_lib.chunks(path, [:compile_info])],
-        into: %{},
-        do:
-          {name,
-           %{path: List.to_string(path), source: info |> Keyword.get(:source) |> source_path()}}
-  end
-
-  defp beam_path(module) when is_atom(module), do: :code.which(module)
-  defp beam_path(path), do: String.to_charlist(path)
-
-  defp source_path(nil), do: nil
-  defp source_path(source), do: List.to_string(source)
-
-  defp place(finding, beams, lines) do
-    %Argus.Located{
-      finding: finding,
-      file: source_file(beams, finding.module),
-      line: line_at(finding, beams, lines),
-      end_line: nil,
-      related:
-        Enum.map(finding.related, fn frame ->
-          %{
-            file: source_file(beams, frame.module),
-            line: line_at(frame, beams, lines),
-            end_line: nil
-          }
-        end)
-    }
-  end
-
-  # Where a finding or frame is, as Argus places its own (`Argus.Located`):
-  # its instruction's line (`Argus.Lines`), else its function's first,
-  # else the line its module is declared on, else 1.
-  defp line_at(anchored, beams, lines) do
-    anchor_line(anchored, lines) || declaration_line(anchored, beams) || 1
-  end
-
-  defp anchor_line(%{instr: %Argus.InstrId{} = instruction}, lines),
-    do: Argus.Lines.resolve(lines, instruction)
-
-  defp anchor_line(%{mfa: {_module, _name, _arity} = mfa}, lines),
-    do: Argus.Lines.resolve(lines, mfa)
-
-  defp anchor_line(_anchored, _lines), do: nil
-
-  defp declaration_line(%{module: module}, beams) do
-    case Map.get(beams, module) do
-      %{path: path} -> Argus.Lines.declaration_line(path)
-      nil -> nil
-    end
-  end
-
-  defp source_file(beams, module) do
-    case Map.get(beams, module) do
-      %{source: source} -> source
-      nil -> nil
-    end
-  end
+  def run(modules, options \\ []),
+    do: Solve.run(Keyword.get(options, :analysis, __MODULE__), modules, options)
 end

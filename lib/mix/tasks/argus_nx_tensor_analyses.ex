@@ -109,7 +109,7 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   defp project_options do
     Mix.Project.config()
     |> Keyword.get(:argus_nx_tensor_analyses, [])
-    |> Keyword.take([:unsupported_types, :float_types])
+    |> Keyword.take(ArgusNxTensorAnalyses.Solve.config_options())
   end
 
   # As `mix argus` compiles: the argus compiler fails `mix compile` on its
