@@ -40,6 +40,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
     end
   end
 
+  # The wording modules, in the order they are asked. One module words
+  # each kind, whatever its detail, cause or operation; a module that words
+  # only particular causes or operations of another's kind comes before
+  # it.
   @modules [
     Wording.Options,
     Wording.Traced,
@@ -60,6 +64,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
     Wording.Core,
     Wording.Nonfinite
   ]
+
+  @spec modules() :: [module()]
+  def modules, do: @modules
 
   def call_error(kind, detail, operation),
     do: Enum.find_value(@modules, & &1.call_error(kind, detail, operation))

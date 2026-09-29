@@ -10,6 +10,7 @@ defmodule ArgusNxTensorAnalyses.MixProject do
       version: @version,
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       description:
         "Argus analyses of Nx code: tensor shapes that Nx rejects, or that the code does not line up, found in compiled modules.",
@@ -24,6 +25,9 @@ defmodule ArgusNxTensorAnalyses.MixProject do
       extra_applications: [:logger, :crypto]
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
 
   defp deps do
     [
