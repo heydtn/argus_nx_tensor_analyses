@@ -96,15 +96,12 @@ jitted_call(site, caller, function, offset) :-
 // ══ What a struct's container keeps ═════════════════════════════════
 
 // The program's implementation of `Nx.Container` or `Nx.LazyContainer`
-// for a struct, named as `defimpl` and `@derive` name it: the protocol,
-// then the struct.
+// for a struct.
 .decl implemented_for(protocol: symbol, implementation: symbol, struct: symbol)
-implemented_for("Nx.Container", implementation, substr(implementation, 13, strlen(implementation) - 13)) :-
-  function_def(_, implementation, "__impl__", 1, _),
-  match("Nx\\.Container\\..+", implementation).
-implemented_for("Nx.LazyContainer", implementation, substr(implementation, 17, strlen(implementation) - 17)) :-
-  function_def(_, implementation, "__impl__", 1, _),
-  match("Nx\\.LazyContainer\\..+", implementation).
+implemented_for(protocol, implementation, struct) :-
+  implementation(protocol, implementation),
+  match("Nx\\.(Lazy)?Container", protocol),
+  implementation_type(implementation, struct).
 
 // A field the struct an implementation's `traverse/3` rebuilds (the map it
 // returns first in its tuple) holds a literal at, whatever the struct

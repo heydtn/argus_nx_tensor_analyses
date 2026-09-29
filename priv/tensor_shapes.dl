@@ -255,11 +255,17 @@ site_function(site, function) :- flow_dynamic(site, function, _).
 .decl protocol(module: symbol)
 protocol(module) :- function_def(_, module, "__protocol__", 1, _).
 
-// The program's implementation of a protocol for one of its own modules,
-// named as `defimpl` names it: the protocol, then the module.
+// A protocol whose implementations the rules read: the program's own, and
+// the two Nx takes containers by, which a struct derives or implements.
+.decl implemented_protocol(protocol: symbol)
+implemented_protocol(protocol) :- protocol(protocol).
+implemented_protocol("Nx.Container"). implemented_protocol("Nx.LazyContainer").
+
+// The program's implementation of such a protocol for one of its own
+// modules, named as `defimpl` names it: the protocol, then the module.
 .decl implementation(protocol: symbol, module: symbol)
 implementation(protocol, module) :-
-  protocol(protocol),
+  implemented_protocol(protocol),
   function_def(_, module, "__impl__", 1, _),
   prefix = cat(protocol, "."),
   strlen(module) > strlen(prefix),
@@ -298,9 +304,6 @@ program_call(site, caller, callee) :- implementation_call(site, caller, callee).
 .decl implementation_type(module: symbol, type: symbol)
 implementation_type(module, substr(module, strlen(protocol) + 1, strlen(module) - strlen(protocol) - 1)) :-
   implementation(protocol, module).
-
-.decl implementation_module(module: symbol)
-implementation_module(module) :- implementation(_, module).
 
 // `Nx.Defn.Compiler.__remote__/4` runs another module's `defn`, by the
 // name it compiled to (`:"__defn:name__"`), over a list of arguments.
@@ -840,7 +843,7 @@ dispatch_allowed(context, site, module) :-
   !correlated(site).
 dispatch_allowed(context, site, module) :-
   dispatch_demand(context, site, module),
-  !implementation_module(module).
+  !implementation(_, module).
 dispatch_allowed(context, site, module) :-
   dispatch_demand(context, site, module),
   correlated(site),
