@@ -1365,9 +1365,13 @@ looks_up("Access", "get", 2). looks_up("Access", "get", 3).
 looks_up("Keyword", "get", 2). looks_up("Keyword", "get", 3). looks_up("Keyword", "fetch!", 2).
 looks_up("Map", "get", 2). looks_up("Map", "get", 3). looks_up("Map", "fetch!", 2).
 
+// A lookup of a key in a map or keyword list (`Map.get/2`, `Access`).
+.decl lookup_site(site: symbol)
+lookup_site(site) :- remote_call(site, _, module, name, arity), looks_up(module, name, arity).
+
 .decl modeled_call(site: symbol)
 modeled_call(site) :- remote_call(site, _, module, name, arity), passes_argument(module, name, arity).
-modeled_call(site) :- remote_call(site, _, module, name, arity), looks_up(module, name, arity).
+modeled_call(site) :- lookup_site(site).
 
 // A call to a function outside the program that the rules do not model:
 // what it returns is not known. `map.field` on a value that is not a map
@@ -1392,12 +1396,11 @@ external_site(site) :-
 .decl lookup(context: Context, site: symbol, term: Value, key: symbol)
 lookup(context, site, term, substr(atom, 1, strlen(atom) - 1)) :-
   argument_value(context, site, 0, term),
-  remote_call(site, _, module, name, arity),
-  looks_up(module, name, arity),
+  lookup_site(site),
   argument_value(context, site, 1, $Term(text, start)),
   term_atom(text, start, atom),
   atom != "nil".
-.plan 1:(4,1,5,2,3)
+.plan 1:(3,1,4,2)
 
 field_demand($Object(object_context, object, mapping), cat(":", key)) :-
   lookup(_, _, $Object(object_context, object, mapping), key),
@@ -1439,12 +1442,11 @@ looked_up(context, site, default) :-
 .plan 1:(3,1,2)
 looked_up(context, site, $Opaque("")) :-
   argument_value(context, site, 1, key),
-  remote_call(site, _, module, name, arity),
-  looks_up(module, name, arity),
+  lookup_site(site),
   ( key = $Opaque(_) ; key = $Integer(_) ; key = $Module(_) ),
   argument_value(context, site, 0, term),
   holds_keys(term).
-.plan 1:(4,2,3,1,5), 2:(5,4,2,3,1)
+.plan 1:(3,2,1,4), 2:(4,3,2,1)
 
 // A term a lookup can find a key in: a keyword list, a map, or a value not
 // known. A tensor of known axes is not one: `tensor[index]` finds a slice
@@ -1452,8 +1454,7 @@ looked_up(context, site, $Opaque("")) :-
 .decl holds_keys(term: Value)
 holds_keys(term) :-
   argument_value(_, site, 0, term),
-  remote_call(site, _, module, name, arity),
-  looks_up(module, name, arity),
+  lookup_site(site),
   ( term = $Opaque(_) ; term = $Object(_, _, _) ; term = $Term(_, _) ).
 
 // The cells of a keyword list the code builds, from the one looked in.

@@ -465,7 +465,7 @@ placed_on(context, function, "load", load, backend, origin) :-
 placed_on(context, function, "result", site, backend, origin) :-
   placed_on(context, function, kind, source, backend, origin),
   flow_argument(site, function, 0, kind, source),
-  looks_up_in(site).
+  lookup_site(site).
 
 // A field of a term the code builds, read where the term is.
 placed_on(context, function, "load", load, backend, origin) :-
@@ -654,10 +654,6 @@ leaves_backend("Nx.template"). leaves_backend("Nx.shape"). leaves_backend("Nx.ra
 leaves_backend("Nx.type"). leaves_backend("Nx.size"). leaves_backend("Nx.byte_size").
 leaves_backend("Nx.names"). leaves_backend("Nx.axes"). leaves_backend("Nx.axis_size").
 leaves_backend("Nx.axis_index").
-
-// A lookup of a key in a map or keyword list (`Map.get/2`, `Access`).
-.decl looks_up_in(site: symbol)
-looks_up_in(site) :- remote_call(site, _, module, name, arity), looks_up(module, name, arity).
 
 // ── Traced calls ───────────────────────────────────────────────────
 
