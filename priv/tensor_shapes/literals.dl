@@ -337,47 +337,13 @@ type_term(context, site, position, text, start) :-
   flow_argument(site, function, position, kind, source),
   value_of(context, function, kind, source, $Term(text, start)).
 type_term(context, site, -1, text, start) :-
-  sampler_options(site, position),
-  site_active(context, site),
-  argument_value(context, site, position, $Term(text, list)),
+  takes_type_option(site),
+  handed_options(context, site, text, list),
   term_keyword(text, list, "type", start).
-type_term(context, site, -1, text, start) :-
-  sampler_options_cell(site, function, cell),
-  flow_field(function, cell, "head", "object", pair),
-  flow_field(function, pair, "{0}", "literal", ":type"),
-  flow_field(function, pair, "{1}", kind, source),
-  site_active(context, site),
-  value_of(context, function, kind, source, $Term(text, start)).
-type_term(context, site, -1, text, start) :-
-  sampler_options_cell(site, function, cell),
-  flow_field(function, cell, "head", "literal", text),
-  term_element_atom(text, 0, 0, ":type"),
-  term_child(text, 0, 1, start),
-  site_active(context, site).
 
 // The calls whose `:type` option is a tensor type and whose options the
 // options above read.
 .decl takes_type_option(site: symbol)
 takes_type_option(site) :-
   operation_site(site, operation, _),
-  match("Nx\\.(tensor|iota|eye|argmax|argmin|argsort|fill|linspace|reduce|Random\\.(randint|uniform|normal|gumbel)_split)", operation).
-
-// The options of `Nx.Random`'s samplers that the options above do not
-// read, by the argument they are: the last, where a sampler takes two
-// arguments or four (`randint/4`, `uniform/2`, `uniform/4`, `gumbel/2`),
-// and the cells of a list the code builds for them.
-.decl sampler_options(site: symbol, position: number)
-sampler_options(site, arity - 1) :-
-  operation_site(site, operation, arity),
-  match("Nx\\.Random\\.(randint|uniform|normal|gumbel)", operation),
-  ( arity = 2 ; arity = 4 ).
-
-.decl sampler_options_cell(site: symbol, function: symbol, cell: symbol)
-sampler_options_cell(site, function, cell) :-
-  sampler_options(site, position),
-  flow_argument(site, function, position, "object", cell),
-  flow_object(function, cell, "list", _).
-sampler_options_cell(site, function, next) :-
-  sampler_options_cell(site, function, cell),
-  flow_field(function, cell, "tail", "object", next),
-  flow_object(function, next, "list", _).
+  match("Nx\\.(tensor|iota|eye|argmax|argmin|argsort|fill|linspace|reduce|Random\\.(randint|uniform|normal|gumbel)(_split)?)", operation).

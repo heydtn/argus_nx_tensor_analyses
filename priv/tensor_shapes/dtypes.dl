@@ -811,11 +811,11 @@ meets(context, site, 0, own, own_origin, bounds, bound_origin, 1) :-
   type_merged(low, high, bounds).
 meets(context, site, 0, element, origin, rest, "", 1) :-
   joined_element_type(context, site, cell, element, origin),
-  list_element(site, _, cell, _, _, next),
+  joined_element(site, _, cell, _, _, next),
   joined_type(context, site, next, rest).
 meets(context, site, 0, rest, "", element, origin, 0) :-
   joined_element_type(context, site, cell, element, origin),
-  list_element(site, _, cell, _, _, next),
+  joined_element(site, _, cell, _, _, next),
   joined_type(context, site, next, rest).
 
 // An operand's type and the other's as each type they can be, left or
@@ -1138,7 +1138,7 @@ dtype_demand(context, function, kind, source) :-
   type_argument(site, function, kind, source).
 dtype_demand(context, function, kind, source) :-
   typed_site(context, site),
-  list_element(site, function, _, kind, source, _).
+  joined_element(site, function, _, kind, source, _).
 dtype_demand(from_context, from_function, from_kind, from_source) :-
   dtype_demand(context, function, kind, source),
   arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
@@ -1465,22 +1465,24 @@ default_dtype("Nx.argmax", "s32"). default_dtype("Nx.argmin", "s32"). default_dt
 .decl joined_cell(site: symbol, function: symbol, cell: symbol)
 joined_cell(site, function, cell) :-
   dtype_rule(site, "join"),
-  flow_argument(site, function, 0, "object", cell),
-  flow_object(function, cell, "list", _).
-joined_cell(site, function, next) :-
-  joined_cell(site, function, cell),
-  flow_field(function, cell, "tail", "object", next),
-  flow_object(function, next, "list", _).
+  flow_argument(site, function, 0, "object", list),
+  list_cell(list, _, cell).
+// Asked of the joining calls by their function's class alone: the rule a
+// call has (`dtype_rule`) reads its options, which read the lists asked.
+list_asked(list) :-
+  operation_site(site, operation, _),
+  dtype_class(operation, "join"),
+  flow_argument(site, _, 0, "object", list).
 
 // A cell of such a list: its element, and the cell after it, "" for the
 // last.
-.decl list_element(site: symbol, function: symbol, cell: symbol, kind: symbol, source: symbol, next: symbol)
-list_element(site, function, cell, kind, source, next) :-
+.decl joined_element(site: symbol, function: symbol, cell: symbol, kind: symbol, source: symbol, next: symbol)
+joined_element(site, function, cell, kind, source, next) :-
   joined_cell(site, function, cell),
   flow_field(function, cell, "head", kind, source),
   flow_field(function, cell, "tail", "object", next),
   joined_cell(site, function, next).
-list_element(site, function, cell, kind, source, "") :-
+joined_element(site, function, cell, kind, source, "") :-
   joined_cell(site, function, cell),
   flow_field(function, cell, "head", kind, source),
   flow_field(function, cell, "tail", "literal", "[]").
@@ -1489,11 +1491,11 @@ list_element(site, function, cell, kind, source, "") :-
 .decl joined_element_type(context: Context, site: symbol, cell: symbol, type: symbol, origin: symbol)
 joined_element_type(context, site, cell, type, origin) :-
   value_dtype(context, function, kind, source, type, origin),
-  list_element(site, function, cell, kind, source, _),
+  joined_element(site, function, cell, kind, source, _),
   typed_site(context, site).
 joined_element_type(context, site, cell, type, site) :-
   typed_site(context, site),
-  list_element(site, function, cell, kind, source, _),
+  joined_element(site, function, cell, kind, source, _),
   value_of(context, function, kind, source, $Term(text, start)),
   term_spelling(text, start, spelled),
   number_type(spelled, type).
@@ -1502,10 +1504,10 @@ joined_element_type(context, site, cell, type, site) :-
 .decl joined_type(context: Context, site: symbol, cell: symbol, type: symbol)
 joined_type(context, site, cell, type) :-
   joined_element_type(context, site, cell, type, _),
-  list_element(site, _, cell, _, _, "").
+  joined_element(site, _, cell, _, _, "").
 joined_type(context, site, cell, merged) :-
   joined_element_type(context, site, cell, head, _),
-  list_element(site, _, cell, _, _, next),
+  joined_element(site, _, cell, _, _, next),
   joined_type(context, site, next, rest),
   type_merged(head, rest, merged).
 .plan 1:(3,2,1,4)

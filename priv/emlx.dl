@@ -645,18 +645,11 @@ tensor_argument(site, function, to_string(position), kind, source) :-
   flow_argument(site, function, position, kind, source),
   !shape_position(site, position).
 tensor_argument(site, function, cat(to_string(position), " ", cell), kind, source) :-
-  argument_cell(site, function, position, cell),
-  flow_field(function, cell, "head", kind, source).
-
-.decl argument_cell(site: symbol, function: symbol, position: number, cell: symbol)
-argument_cell(site, function, position, cell) :-
   operation_site(site, _, _),
-  flow_argument(site, function, position, "object", cell),
-  flow_object(function, cell, "list", _).
-argument_cell(site, function, position, next) :-
-  argument_cell(site, function, position, cell),
-  flow_field(function, cell, "tail", "object", next),
-  flow_object(function, next, "list", _).
+  flow_argument(site, function, position, "object", list),
+  list_cell(list, _, cell),
+  flow_field(function, cell, "head", kind, source).
+list_asked(list) :- operation_site(site, _, _), flow_argument(site, _, _, "object", list).
 
 // An Nx call whose result is a tensor on its operands' backend: every
 // one but those that choose a backend, and those that return a number,

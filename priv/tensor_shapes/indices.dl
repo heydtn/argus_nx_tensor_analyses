@@ -311,16 +311,15 @@ negative_asked(context, function, kind, source) :- slice_start(context, _, funct
 // The cells of a start list the call's function builds, head first: the
 // cell at `index` holds the start at that axis.
 .decl start_cell(site: symbol, function: symbol, index: number, cell: symbol)
-start_cell(site, function, 0, cell) :-
+start_cell(site, function, index, cell) :-
   slices_from(site, operation),
   operation != "Nx.slice_along_axis",
-  flow_argument(site, function, 1, "object", cell),
-  flow_object(function, cell, "list", _).
-start_cell(site, function, index + 1, next) :-
-  start_cell(site, function, index, cell),
-  index < 12,
-  flow_field(function, cell, "tail", "object", next),
-  flow_object(function, next, "list", _).
+  flow_argument(site, function, 1, "object", list),
+  list_cell(list, index, cell).
+list_asked(list) :-
+  slices_from(site, operation),
+  operation != "Nx.slice_along_axis",
+  flow_argument(site, _, 1, "object", list).
 
 // A list of starts written as a literal, at the call or as the constant
 // tail of a list after `offset` elements the code builds: its element at

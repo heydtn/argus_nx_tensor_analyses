@@ -146,17 +146,13 @@ call_error(context, pair, "traced_raise", "", "") :-
 // A clause of the list a function hands `defn_cond/2`: its place, the
 // list's cell and the clause's `{predicate, branch}` pair.
 .decl clause(site: symbol, function: symbol, index: number, cell: symbol, pair: symbol)
-clause(site, function, 0, cell, pair) :-
+clause(site, function, index, cell, pair) :-
   runs_branches(site),
-  flow_argument(site, function, 1, "object", cell),
+  flow_argument(site, function, 1, "object", list),
+  list_cell(list, index, cell),
   flow_field(function, cell, "head", "object", entry),
   flow_field(function, entry, "{1}", "object", pair).
-clause(site, function, index + 1, next, pair) :-
-  clause(site, function, index, cell, _),
-  index < 64,
-  flow_field(function, cell, "tail", "object", next),
-  flow_field(function, next, "head", "object", entry),
-  flow_field(function, entry, "{1}", "object", pair).
+list_asked(list) :- runs_branches(site), flow_argument(site, _, 1, "object", list).
 
 // Where a clause's predicate comes from in the function, and whether it
 // is the last clause's ("last") or an earlier one's.

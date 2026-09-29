@@ -623,16 +623,15 @@ computes_on(site, function, position, kind, source) :-
 // The cells of the written list a compile takes its templates in, or
 // `jit_apply` its arguments, by index.
 .decl compiled_argument_cell(site: symbol, function: symbol, index: number, cell: symbol)
-compiled_argument_cell(site, function, 0, cell) :-
+compiled_argument_cell(site, function, index, cell) :-
   remote_call(site, function, "Nx.Defn", name, _),
   match("compile|jit_apply", name),
-  flow_argument(site, function, 1, "object", cell),
-  flow_object(function, cell, "list", _).
-compiled_argument_cell(site, function, index + 1, next) :-
-  compiled_argument_cell(site, function, index, cell),
-  index < 16,
-  flow_field(function, cell, "tail", "object", next),
-  flow_object(function, next, "list", _).
+  flow_argument(site, function, 1, "object", list),
+  list_cell(list, index, cell).
+list_asked(list) :-
+  remote_call(site, function, "Nx.Defn", name, _),
+  match("compile|jit_apply", name),
+  flow_argument(site, function, 1, "object", list).
 
 // ══ Findings ════════════════════════════════════════════════════════
 

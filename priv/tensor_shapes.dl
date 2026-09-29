@@ -200,6 +200,38 @@ selector_suffix(selector, cat(".", substr(selector, 1, strlen(selector) - 1))) :
 selector_suffix("head", "[head]") :- selector_seen("head").
 selector_suffix("tail", "[tail]") :- selector_seen("tail").
 
+// ── Lists the code builds ──────────────────────────────────────────
+
+// A list a function builds, by its first cell, whose cells a rule reads.
+// Each rule that reads them asks for its own lists, from the code alone:
+// the option words read these cells, and rules negate what they derive,
+// so a list asked for by what a solve derives could close a cycle through
+// a negation.
+.decl list_asked(list: symbol)
+
+// The cell at `index` of such a list, the list itself first, up to the
+// 64th after it.
+.decl list_cell(list: symbol, index: number, cell: symbol)
+list_cell(list, 0, list) :- list_asked(list), flow_object(_, list, "list", _).
+list_cell(list, index + 1, next) :-
+  list_cell(list, index, cell),
+  index < 64,
+  flow_field(_, cell, "tail", "object", next),
+  flow_object(_, next, "list", _).
+
+// An element of such a list, by its index and its source.
+.decl list_element(list: symbol, index: number, kind: symbol, source: symbol) inline
+list_element(list, index, kind, source) :-
+  list_cell(list, index, cell),
+  flow_field(_, cell, "head", kind, source).
+
+// The literal such a list ends in after `index` elements: `[]`, or a
+// constant tail the compiler folded into one.
+.decl list_rest(list: symbol, index: number, text: symbol)
+list_rest(list, index + 1, text) :-
+  list_cell(list, index, cell),
+  flow_field(_, cell, "tail", "literal", text).
+
 // ══ Calls and the functions they run ═════════════════════════════════
 
 .decl nx_module(module: symbol)
@@ -275,22 +307,14 @@ implementation_module(module) :- implementation(_, module).
 .decl remote_defn_site(site: symbol, caller: symbol)
 remote_defn_site(site, caller) :- remote_call(site, caller, "Nx.Defn.Compiler", "__remote__", 4).
 
-.decl remote_cell(site: symbol, caller: symbol, index: number, cell: symbol)
-remote_cell(site, caller, 0, cell) :-
-  remote_defn_site(site, caller),
-  flow_argument(site, caller, 3, "object", cell),
-  flow_object(caller, cell, "list", _).
-remote_cell(site, caller, index + 1, next) :-
-  remote_cell(site, caller, index, cell),
-  index < 64,
-  flow_field(caller, cell, "tail", "object", next),
-  flow_object(caller, next, "list", _).
+list_asked(list) :- remote_defn_site(site, caller), flow_argument(site, caller, 3, "object", list).
 
 // The argument at `index` of the list `__remote__` passes on.
 .decl remote_argument(site: symbol, caller: symbol, index: number, kind: symbol, source: symbol)
 remote_argument(site, caller, index, kind, source) :-
-  remote_cell(site, caller, index, cell),
-  flow_field(caller, cell, "head", kind, source).
+  remote_defn_site(site, caller),
+  flow_argument(site, caller, 3, "object", list),
+  list_element(list, index, kind, source).
 
 // The literal list the arguments end in, where the compiler folded their
 // constant tail into one (`[]` when there is none), after `offset` of them.
@@ -299,9 +323,10 @@ remote_literal_tail(site, caller, 0, text) :-
   remote_defn_site(site, caller),
   flow_argument(site, caller, 3, "literal", text),
   term_list(text, 0).
-remote_literal_tail(site, caller, index + 1, text) :-
-  remote_cell(site, caller, index, cell),
-  flow_field(caller, cell, "tail", "literal", text),
+remote_literal_tail(site, caller, offset, text) :-
+  remote_defn_site(site, caller),
+  flow_argument(site, caller, 3, "object", list),
+  list_rest(list, offset, text),
   term_list(text, 0).
 
 // An argument written in that literal tail.
@@ -3119,14 +3144,11 @@ options_source(site, function, kind, source) :-
   flow_argument(site, function, position, kind, source).
 
 // A keyword list the code builds, cell by cell.
-.decl options_cell(site: symbol, function: symbol, cell: symbol)
+.decl options_cell(site: symbol, function: symbol, cell: symbol) inline
 options_cell(site, function, cell) :-
-  options_source(site, function, "object", cell),
-  flow_object(function, cell, "list", _).
-options_cell(site, function, next) :-
-  options_cell(site, function, cell),
-  flow_field(function, cell, "tail", "object", next),
-  flow_object(function, next, "list", _).
+  options_source(site, function, "object", list),
+  list_cell(list, _, cell).
+list_asked(list) :- options_source(_, _, "object", list).
 
 // A pair with a literal atom key, as a cell of such a list holds it.
 .decl keyed_pair(function: symbol, kind: symbol, source: symbol)

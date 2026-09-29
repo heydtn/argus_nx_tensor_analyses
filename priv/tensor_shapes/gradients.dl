@@ -646,8 +646,8 @@ gradient_function_object(object) :-
 // An input a `custom_grad` lists.
 .decl custom_gradient_input(site: symbol, function: symbol, kind: symbol, source: symbol)
 custom_gradient_input(site, function, kind, source) :-
-  counted_cell(site, "inputs", function, _, cell),
-  flow_field(function, cell, "head", kind, source).
+  counted_list(site, "inputs", function, list),
+  list_element(list, _, kind, source).
 
 // A gradient function returns, on some path, a value that is not a list:
 // an Nx call's result, the gradient it is handed, or a term other than a
@@ -666,29 +666,23 @@ returns_other_than_list(gradient_function) :-
   flow_object(gradient_function, object, shape, _),
   shape != "list".
 
-// A list a `custom_grad` counts, cell by cell, in the function that writes
-// it: the inputs it lists (`role` "inputs"), and a list its gradient
-// function returns ("gradients").
-.decl counted_cell(site: symbol, role: symbol, function: symbol, index: number, cell: symbol)
-counted_cell(site, "inputs", function, 0, list) :-
+// A list a `custom_grad` counts, in the function that writes it: the
+// inputs it lists (`role` "inputs"), and a list its gradient function
+// returns ("gradients").
+.decl counted_list(site: symbol, role: symbol, function: symbol, list: symbol)
+counted_list(site, "inputs", function, list) :-
   custom_gradient(site, function),
-  flow_argument(site, function, 1, "object", list),
-  flow_object(function, list, "list", _).
-counted_cell(site, "gradients", gradient_function, 0, list) :-
+  flow_argument(site, function, 1, "object", list).
+counted_list(site, "gradients", gradient_function, list) :-
   custom_gradient_function(site, gradient_function),
-  flow_return(gradient_function, _, "object", list),
-  flow_object(gradient_function, list, "list", _).
-counted_cell(site, role, function, index + 1, next) :-
-  counted_cell(site, role, function, index, cell),
-  index < 64,
-  flow_field(function, cell, "tail", "object", next),
-  flow_object(function, next, "list", _).
+  flow_return(gradient_function, _, "object", list).
+list_asked(list) :- counted_list(_, _, _, list).
 
 // How long a counted list is, where the code writes where it ends.
 .decl counted_length(site: symbol, role: symbol, length: number)
-counted_length(site, role, index + 1) :-
-  counted_cell(site, role, function, index, cell),
-  flow_field(function, cell, "tail", "literal", "[]").
+counted_length(site, role, length) :-
+  counted_list(site, role, _, list),
+  list_rest(list, length, "[]").
 counted_length(site, "gradients", 0) :-
   custom_gradient_function(site, gradient_function),
   flow_return(gradient_function, _, "literal", "[]").
