@@ -429,12 +429,12 @@ runs_under(function, backend) :- backend_reach.reaches(backend, function).
 .init backend_reach = ForwardCallReach
 backend_reach.root(backend, function) :-
   compiles_for(site, backend, _),
-  fun_handed(site, _, function, 0).
+  fun_argument(site, 0, function, _).
 backend_reach.root(backend, function) :-
   remote_call(site, _, "Nx", "with_default_backend", 2),
   flow_argument(site, _, 0, "literal", text),
   backend_spelling(text, 0, backend),
-  fun_handed(site, _, function, 1).
+  fun_argument(site, 1, function, _).
 
 // The backend a creation call given none makes its tensor on: the one
 // the code sets as the default, or EMLX's, which this analysis is for,

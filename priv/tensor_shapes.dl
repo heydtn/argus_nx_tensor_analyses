@@ -403,7 +403,7 @@ gradient_function("value_and_grad", 3, 1).
 trace_reach.root("defn", function) :- defn_body(function).
 trace_reach.root(how, function) :-
   trace_call(site, _, position, how),
-  fun_handed(site, _, function, position).
+  fun_argument(site, position, function, _).
 trace_reach.reaches(how, callee) :-
   trace_reach.reaches(how, caller),
   implementation_call(_, caller, callee).
@@ -885,30 +885,44 @@ call_argument(context, site, callee, position, value) :-
   remote_defn(site, caller, callee),
   remote_literal_argument(site, caller, position, text, start),
   term_value(text, start, value).
-call_argument(context, site, callee, captured_from + position, value) :-
+call_argument(context, site, callee, position, value) :-
   calls_closure(context, site, callee, $Object(object_context, object, mapping)),
-  flow_field(_, object, selector, _, _),
-  selector_position(selector, position),
-  field_value($Object(object_context, object, mapping), selector, value),
-  closure_captures_from(object, callee, captured_from).
-.plan 1:(4,2,1,3,5)
+  captured_parameter(object, selector, callee, position),
+  field_value($Object(object_context, object, mapping), selector, value).
+.plan 1:(3,2,1)
 call_argument(context, site, callee, position, value) :-
   calls_closure(context, site, callee, $Object(_, _, _)),
   flow_dynamic(site, _, _),
   argument_value(context, site, position, value).
 .plan 1:(3,1,2)
-
-// The parameter a closure's first captured value is: its code takes the
-// arguments it is called with first, then the values it captured.
-.decl closure_captures_from(object: symbol, callee: symbol, position: number)
-closure_captures_from(object, callee, arity - captured) :-
-  flow_closure(object, callee),
-  flow_object(_, object, "closure", captured),
-  function_def(callee, _, _, arity, _).
 field_demand($Object(object_context, object, mapping), selector) :-
-  calls_closure(_, _, _, $Object(object_context, object, mapping)),
+  calls_closure(_, _, callee, $Object(object_context, object, mapping)),
+  captured_parameter(object, selector, callee, _).
+
+// The closure holds at `selector` a value it captured, which its function
+// takes as parameter `position`: a fun takes the arguments it is called
+// with first, then what it captured. Over every closure the code builds:
+// a join over the code, as small as it is, which no demand would shrink.
+.decl captured_parameter(object: symbol, selector: symbol, function: symbol, position: number)
+captured_parameter(object, selector, function, arity - captured + index) :-
+  flow_object(_, object, "closure", captured),
+  flow_closure(object, function),
+  function_def(function, _, _, arity, _),
   flow_field(_, object, selector, _, _),
-  selector_position(selector, _).
+  selector_position(selector, index).
+
+// The function a call's argument at `position` runs as a fun, and how many
+// values its closure captured: a closure the caller builds, or a literal
+// external fun (`&Nx.exp/1`), which captures none. Over every fun the
+// code hands a call, as `captured_parameter` is over every closure.
+.decl fun_argument(site: symbol, position: number, function: symbol, captured: number)
+fun_argument(site, position, function, captured) :-
+  flow_argument(site, caller, position, "object", closure),
+  flow_object(caller, closure, "closure", captured),
+  flow_closure(closure, function).
+fun_argument(site, position, function, 0) :-
+  flow_argument(site, caller, position, "literal", _),
+  fun_handed(site, caller, function, position).
 
 .decl call_made(context: Context, site: symbol, callee: symbol)
 call_made(context, site, callee) :- calls_directly(context, site, callee).

@@ -244,14 +244,11 @@ carries_gradient(function, "object", object) :-
 carries_gradient(function, "load", load) :-
   carries_gradient(function, kind, source),
   flow_load(function, load, _, kind, source).
-carries_gradient(closure, "param", to_string(total - captured + index)) :-
+carries_gradient(closure, "param", to_string(position)) :-
   carries_gradient(function, kind, source),
   flow_field(function, object, selector, kind, source),
-  flow_closure(object, closure),
-  !gradient_function_object(object),
-  flow_object(function, object, "closure", captured),
-  selector_position(selector, index),
-  function_def(closure, _, _, total, _).
+  captured_parameter(object, selector, closure, position),
+  !gradient_function_object(object).
 
 // The Nx functions whose derivative Nx takes as zero, and `stop_grad`.
 .decl blocks_gradient(operation: symbol)
@@ -636,12 +633,8 @@ custom_gradient(site, function) :-
 // The function a `custom_grad` computes its gradient with.
 .decl custom_gradient_function(site: symbol, gradient_function: symbol)
 custom_gradient_function(site, gradient_function) :-
-  custom_gradient(site, function),
-  flow_argument(site, function, 2, "object", object),
-  flow_closure(object, gradient_function).
-custom_gradient_function(site, gradient_function) :-
   custom_gradient(site, _),
-  fun_handed(site, _, gradient_function, 2).
+  fun_argument(site, 2, gradient_function, _).
 
 // A closure the code hands `custom_grad` as its gradient function, which
 // the grad calls but does not differentiate.

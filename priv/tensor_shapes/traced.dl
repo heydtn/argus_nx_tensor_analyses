@@ -71,16 +71,14 @@ traced_first_as(function, "grad") :-
 // which come from where it was made.
 .decl traced_parameter(function: symbol, position: number)
 traced_parameter(function, position) :-
-  trace_reach.root(_, function),
+  trace_reach.root("defn", function),
   function_def(function, _, _, arity, _),
-  flow_closure(object, function),
-  flow_object(_, object, "closure", captured),
-  position = range(0, arity - captured).
-traced_parameter(function, position) :-
-  trace_reach.root(_, function),
-  function_def(function, _, _, arity, _),
-  !flow_closure(_, function),
   position = range(0, arity).
+traced_parameter(function, position) :-
+  trace_call(site, _, argument, _),
+  fun_argument(site, argument, function, captured),
+  function_def(function, _, _, arity, _),
+  position = range(0, arity - captured).
 
 // ══ What a source holds ═════════════════════════════════════════════
 //
@@ -122,22 +120,17 @@ holds(function, "param", to_string(position), what, maker) :-
   held_asked(function, "param", to_string(position), what).
 
 // A closure's captured value: what the function that made it captured.
-// Its function takes the values a closure captured after its arguments.
 held_asked(builder, kind, source, what) :-
   held_asked(closure, "param", parameter, what),
-  flow_closure(object, closure),
-  flow_object(builder, object, "closure", captured),
-  ( what != "expression" ; runs_in_trace(builder) ),
-  function_def(closure, _, _, arity, _),
-  flow_field(builder, object, cat("{", to_string(to_number(parameter) - arity + captured), "}"), kind, source).
-holds(closure, "param", to_string(arity - captured + index), what, maker) :-
+  captured_parameter(object, selector, closure, position),
+  parameter = to_string(position),
+  flow_field(builder, object, selector, kind, source),
+  ( what != "expression" ; runs_in_trace(builder) ).
+holds(closure, "param", to_string(position), what, maker) :-
   holds(builder, kind, source, what, maker),
   flow_field(builder, object, selector, kind, source),
-  flow_closure(object, closure),
-  flow_object(builder, object, "closure", captured),
-  function_def(closure, _, _, arity, _),
-  selector_position(selector, index),
-  held_asked(closure, "param", to_string(arity - captured + index), what).
+  captured_parameter(object, selector, closure, position),
+  held_asked(closure, "param", to_string(position), what).
 
 // A field read of a term the function built: what it holds there.
 held_asked(function, kind, source, what) :-
@@ -581,13 +574,9 @@ captures_tensor(function, closure, origin) :-
 // Nx call that computes a tensor.
 .decl computes_with_captured(closure: symbol, selector: symbol)
 computes_with_captured(closure, selector) :-
-  hands_closure_to_trace(_, function, closure, _),
-  flow_closure(closure, target),
-  flow_object(function, closure, "closure", captured),
-  function_def(target, _, _, arity, _),
-  flow_field(function, closure, selector, _, _),
-  selector_position(selector, index),
-  flow_argument(site, target, _, "param", to_string(arity - captured + index)),
+  hands_closure_to_trace(_, _, closure, _),
+  captured_parameter(closure, selector, target, position),
+  flow_argument(site, target, _, "param", to_string(position)),
   returns_tensor(site).
 
 // ══ Templates computed with ═════════════════════════════════════════

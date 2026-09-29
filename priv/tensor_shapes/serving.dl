@@ -273,26 +273,6 @@ started(serving) :-
   flow_field(function, pair, "{1}", kind, source),
   on_its_way(function, kind, source, "serving", serving).
 
-// The function a fun argument runs, and how many values its closure
-// captures, which the function takes ahead of the arguments it is called
-// with: a closure the caller builds, or a literal external fun.
-.decl fun_demand(site: symbol, position: number)
-fun_demand(site, 0) :- remote_call(site, _, "Nx.Serving", name, _), api_role("Nx.Serving", name, "serving").
-fun_demand(compile, 0) :- builder_returns(_, compile).
-fun_demand(site, 1) :- remote_call(site, _, "Nx.Serving", "client_preprocessing", 2).
-fun_demand(site, 1) :- remote_call(site, _, "Nx.Serving", "client_postprocessing", 2).
-
-.decl fun_argument(site: symbol, position: number, function: symbol, captured: number)
-fun_argument(site, position, function, captured) :-
-  fun_demand(site, position),
-  flow_argument(site, caller, position, "object", closure),
-  flow_closure(closure, function),
-  flow_object(caller, closure, "closure", captured).
-fun_argument(site, position, function, 0) :-
-  fun_demand(site, position),
-  flow_argument(site, caller, position, "literal", _),
-  fun_handed(site, caller, function, position).
-
 // A call a builder handed to `Nx.Serving.new/1,2` returns the result of.
 .decl builder_returns(serving: symbol, made: symbol)
 builder_returns(serving, made) :-

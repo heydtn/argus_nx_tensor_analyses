@@ -83,27 +83,15 @@ traced_caller_reach.seed(caller, target) :-
 jitted_call(site, caller, body, offset) :-
   flow_callee(site, caller, "fun", "result", jit),
   flow_dynamic(site, caller, _),
-  jit_handed(jit, caller, wrapper, offset),
+  remote_call(jit, caller, "Nx.Defn", "jit", _),
+  fun_argument(jit, 0, wrapper, offset),
   defn_wrapper(wrapper, body).
 jitted_call(site, caller, function, offset) :-
   flow_callee(site, caller, "fun", "result", jit),
   flow_dynamic(site, caller, _),
-  jit_handed(jit, caller, function, offset),
+  remote_call(jit, caller, "Nx.Defn", "jit", _),
+  fun_argument(jit, 0, function, offset),
   !defn_wrapper(function, _).
-
-// The function a `jit` call is handed, and how many arguments it takes
-// before the ones the compiled function is called with: a closure's
-// captured values, none for a capture of a named function.
-.decl jit_handed(jit: symbol, caller: symbol, function: symbol, offset: number)
-jit_handed(jit, caller, function, captured) :-
-  remote_call(jit, caller, "Nx.Defn", "jit", _),
-  flow_argument(jit, caller, 0, "object", closure),
-  flow_object(caller, closure, "closure", captured),
-  flow_closure(closure, function).
-jit_handed(jit, caller, function, 0) :-
-  remote_call(jit, caller, "Nx.Defn", "jit", _),
-  flow_argument(jit, caller, 0, "literal", _),
-  fun_handed(jit, caller, function, 0).
 
 // ══ What a struct's container keeps ═════════════════════════════════
 

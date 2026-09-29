@@ -195,24 +195,14 @@ loop_body(loop, function, closure, body) :-
   flow_argument(loop, function, 4, "object", closure),
   remote_call(loop, function, "Nx.Defn.Kernel", "__while__", 6).
 
-// A value a loop's closure captured, by its name in the loop's body: the
-// body's parameter that holds it, as a fun takes the arguments it is
-// called with, then what it captured.
-.decl loop_captures(closure: symbol, body: symbol, name: symbol)
-loop_captures(closure, body, cat("param ", to_string(arity - captured + index))) :-
-  loop_body(_, function, closure, body),
-  flow_object(function, closure, "closure", captured),
-  function_def(body, _, _, arity, _),
-  flow_field(function, closure, selector, _, _),
-  selector_position(selector, index).
-
 // A key a loop's fun captured and draws from: every pass draws the same
-// bits.
+// bits. A captured value is named in the loop's body by the parameter
+// that holds it.
 .decl key_captured_by_loop(draw: symbol, loop: symbol, body: symbol)
 key_captured_by_loop(draw, loop, body) :-
   loop_body(loop, _, closure, body),
-  loop_captures(closure, body, key),
-  key_drawn(draw, body, key).
+  captured_parameter(closure, _, body, position),
+  key_drawn(draw, body, cat("param ", to_string(position))).
 
 // A loop whose fun returns what its next pass is handed, and the fun: a
 // reduce, a scan, a `map_reduce`, a `while`.

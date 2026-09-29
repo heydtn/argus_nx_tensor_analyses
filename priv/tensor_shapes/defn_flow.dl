@@ -299,15 +299,14 @@ call_argument(context, call, callee, 1, state) :-
   loop_run(site, call, _),
   loop_closure(context, site, callee, _),
   argument_value(context, site, 2, state).
-call_argument(context, call, callee, 2 + position, captured) :-
+call_argument(context, call, callee, position, captured) :-
   loop_run(site, call, _),
   loop_closure(context, site, callee, $Object(object_context, closure, mapping)),
-  flow_field(_, closure, selector, _, _),
-  selector_position(selector, position),
+  captured_parameter(closure, selector, callee, position),
   field_value($Object(object_context, closure, mapping), selector, captured).
 field_demand($Object(object_context, closure, mapping), selector) :-
-  loop_closure(_, _, _, $Object(object_context, closure, mapping)),
-  flow_field(_, closure, selector, _, _).
+  loop_closure(_, _, callee, $Object(object_context, closure, mapping)),
+  captured_parameter(closure, selector, callee, _).
 
 // A `while` over a generator hands its closure a tuple the rules do not
 // build, so its body is not run: the loop gives a tensor of its initial
@@ -388,30 +387,26 @@ call_error(context, site, "closure_captures_tensor", "", "") :-
 // a key up, or gives it back.
 .decl captured_use(site: symbol, function: symbol, kind: symbol, source: symbol)
 captured_use(site, function, kind, source) :-
-  scoped_closure(site, function, closure, callee, first),
+  scoped_closure(site, function, closure),
   flow_field(function, closure, selector, kind, source),
-  selector_position(selector, position),
-  flow_argument(use, callee, _, "param", to_string(first + position)),
+  captured_parameter(closure, selector, callee, position),
+  flow_argument(use, callee, _, "param", to_string(position)),
   operation_site(use, operation, _),
   !shape_query(operation),
   !modeled_call(use).
 captured_use(site, function, kind, source) :-
-  scoped_closure(site, function, closure, callee, first),
+  scoped_closure(site, function, closure),
   flow_field(function, closure, selector, kind, source),
-  selector_position(selector, position),
-  flow_return(callee, _, "param", to_string(first + position)).
+  captured_parameter(closure, selector, callee, position),
+  flow_return(callee, _, "param", to_string(position)).
 
-// A closure a call builds an expression of apart, as it is handed, the
-// function it runs, and that function's first parameter for what the
-// closure captured, which follows the arguments.
-.decl scoped_closure(site: symbol, function: symbol, closure: symbol, callee: symbol, first: number)
-scoped_closure(site, function, closure, callee, arity - captured) :-
+// A closure a call builds an expression of apart, as it is handed.
+.decl scoped_closure(site: symbol, function: symbol, closure: symbol)
+scoped_closure(site, function, closure) :-
   operation_site(site, operation, operation_arity),
   scoped_fun(operation, operation_arity, position),
   flow_argument(site, function, position, "object", closure),
-  flow_object(function, closure, "closure", captured),
-  flow_closure(closure, callee),
-  function_def(callee, _, _, arity, _).
+  flow_closure(closure, _).
 
 .decl scoped_fun(operation: symbol, arity: number, position: number)
 scoped_fun("Nx.Defn.Kernel.__while__", 6, 4).
