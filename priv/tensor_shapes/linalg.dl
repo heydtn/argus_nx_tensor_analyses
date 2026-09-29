@@ -1,0 +1,3 @@
+// Linear algebra: singular and indefinite matrices by construction, absolute thresholds, triangular orientation, norm options.
+//
+// Included by `priv/tensor_shapes.dl`, whose words these rules build on.

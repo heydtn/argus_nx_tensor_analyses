@@ -371,6 +371,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     alias ArgusNxTensorAnalyses.TensorShapesTest.Shaper
     defp over_heads(config), do: Nx.iota({config.heads}, names: [:heads])
     defp heads_by(config, tensor), do: Nx.reshape(tensor, {config.heads, :auto})
+    defp length_of(x), do: Nx.sqrt(Nx.sum(Nx.multiply(x, x)))
+    defp divided(x, divisor), do: Nx.divide(x, divisor)
+    defp magnitude(x), do: Nx.sqrt(Nx.sum(Nx.multiply(x, x)))
+    defp scaled_by(x, divisor), do: Nx.divide(x, divisor)
+    def divides_by_caller_absolute(t), do: scaled_by(t, Nx.abs(t))
+    defp shrunk_by(x, divisor), do: Nx.divide(x, divisor)
+    def divides_by_caller_positive(t), do: shrunk_by(t, Nx.add(Nx.abs(t), 1))
+    def differentiates_magnitude(t), do: Nx.Defn.grad(t, &magnitude/1)
+    def divides_by_absolute(config), do: divided(1, Nx.abs(Nx.iota({config.heads})))
     defp pick_axis(config, which) do
       case which do
         :rows -> Nx.iota({config.rows})
@@ -379,7 +388,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     end
   """
 
-  @lint_cases [
+  @lint_cases_base [
     # size variables that disagree where the sizes meet
     {{:misaligned, "size_variables"},
      "Nx.add(Nx.iota({config.heads}), Nx.iota({config.kv_heads}))"},
@@ -454,7 +463,252 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {:quiet, "Nx.vectorize(Nx.iota({2, 3}), :heads)"},
     # two dispatches on one value run one implementation; on two, any two
     {:quiet, "Shaper.take(shaper, Shaper.make(shaper, config), config)"},
-    {{:mismatch, "names"}, "Shaper.take(other, Shaper.make(shaper, config), config)"}
+    {{:mismatch, "names"}, "Shaper.take(other, Shaper.make(shaper, config), config)"},
+    # divisors the math keeps from being negative but not from being zero
+    {{:nonfinite, "divide_by_zero", "square"}, "Nx.divide(t, Nx.sum(Nx.multiply(t, t)))"},
+    {:finite, "Nx.divide(t, Nx.add(Nx.sum(Nx.multiply(t, t)), 1.0e-6))"},
+    {{:nonfinite, "divide_by_zero", "square"}, "Nx.divide(t, Nx.sum(Nx.pow(t, 2)))"},
+    {{:nonfinite, "divide_by_zero", "square"}, "Nx.divide(t, length_of(t))"},
+    {{:nonfinite, "divide_by_zero", "square"}, "Nx.rsqrt(Nx.mean(Nx.multiply(t, t)))"},
+    {:finite, "Nx.rsqrt(Nx.add(Nx.mean(Nx.multiply(t, t)), 1.0e-5))"},
+    {{:nonfinite, "divide_by_zero", "comparison"}, "Nx.divide(t, Nx.sum(Nx.greater(t, 0)))"},
+    {{:nonfinite, "divide_by_zero", "index"}, "Nx.divide(1, Nx.iota({4}))"},
+    {{:nonfinite, "divide_by_zero", "index"}, "Nx.quotient(t, Nx.iota({1}))"},
+    {{:nonfinite, "divide_by_zero", "spread"}, "Nx.divide(t, Nx.standard_deviation(t))"},
+    {{:nonfinite, "divide_by_zero", "clamp"}, "Nx.divide(t, Nx.max(t, 0))"},
+    {:finite, "Nx.divide(t, Nx.max(Nx.abs(t), 1.0e-6))"},
+    {{:nonfinite, "divide_by_zero", "absolute"}, "Nx.divide(t, Nx.abs(t))"},
+    {{:nonfinite, "divide_by_zero", "norm"}, "Nx.divide(t, Nx.LinAlg.norm(t))"},
+    {{:nonfinite, "divide_by_zero", "zero"}, "Nx.divide(t, 0)"},
+    {{:nonfinite, "divide_by_zero", "absolute"}, "Nx.pow(Nx.abs(t), -0.5)"},
+    {:finite, "Nx.pow(Nx.add(Nx.abs(t), 1), -0.5)"},
+    # logarithms of values the math keeps from being negative but not zero
+    {{:nonfinite, "log_of_zero", "square"}, "Nx.log(Nx.sum(Nx.multiply(t, t)))"},
+    {{:nonfinite, "log_of_zero", "comparison"}, "Nx.log(Nx.sum(Nx.greater(t, 0)))"},
+    {:finite, "Nx.log(Nx.add(Nx.sum(Nx.multiply(t, t)), 1.0e-6))"},
+    # roots and logarithms of differences of values that cannot be negative
+    {{:hazard, "root_of_negative", "cancellation"},
+     "Nx.sqrt(Nx.subtract(Nx.mean(Nx.multiply(t, t)), Nx.pow(Nx.mean(t), 2)))"},
+    {:finite,
+     "Nx.sqrt(Nx.max(Nx.subtract(Nx.mean(Nx.multiply(t, t)), Nx.pow(Nx.mean(t), 2)), 0))"},
+    {{:hazard, "log_of_negative", "cancellation"}, "Nx.log(Nx.subtract(1, Nx.multiply(t, t)))"},
+    {{:hazard, "root_of_negative", "cancellation"},
+     "Nx.pow(Nx.subtract(Nx.mean(Nx.multiply(t, t)), Nx.pow(Nx.mean(t), 2)), 0.5)"},
+    # a logarithm of a softmax written out, shifted or not
+    {{:hazard, "log_of_zero", "underflow"}, "Nx.log(Nx.divide(Nx.exp(t), Nx.sum(Nx.exp(t))))"},
+    {{:hazard, "log_of_zero", "underflow"},
+     "shifted = Nx.subtract(t, Nx.reduce_max(t))\nNx.log(Nx.divide(Nx.exp(shifted), Nx.sum(Nx.exp(shifted))))"},
+    # a softmax or log-sum-exp over values not shifted by their maximum
+    {{:hazard, "exp_overflow", "unshifted"}, "Nx.divide(Nx.exp(t), Nx.sum(Nx.exp(t)))"},
+    {{:hazard, "exp_overflow", "unshifted"}, "Nx.log(Nx.sum(Nx.exp(t)))"},
+    {:finite,
+     "shifted = Nx.subtract(t, Nx.reduce_max(t))\nNx.divide(Nx.exp(shifted), Nx.sum(Nx.exp(shifted)))"},
+    {:finite,
+     "largest = Nx.reshape(Nx.reduce_max(t), {1})\nshifted = Nx.subtract(t, Nx.max(largest, 0))\nNx.divide(Nx.exp(shifted), Nx.sum(Nx.exp(shifted)))"},
+    # operands from inputs that nothing checks
+    {{:unchecked, "unchecked_divisor", "cancel"}, "Nx.divide(t, Nx.add(t, 1))"},
+    {{:unchecked, "unchecked_divisor", "input"}, "Nx.divide(t, config.heads)"},
+    {{:unchecked, "unchecked_divisor", "input"}, "Nx.divide(t, t)"},
+    {{:unchecked, "unchecked_logarithm", "input"}, "Nx.log(t)"},
+    {{:unchecked, "unchecked_root", "negative"}, "Nx.sqrt(t)"},
+    {{:unchecked, "unchecked_root", "negative"}, "Nx.sqrt(Nx.subtract(t, 1))"},
+    # and the same checked, by a test on the path or by a select
+    {:finite, "n = config.heads\nif n == 0, do: t, else: Nx.divide(t, n)"},
+    {:finite, "n = config.heads\nif n != 0, do: Nx.divide(t, n), else: t"},
+    {:finite, "n = config.heads\nif n > 0, do: Nx.divide(t, n), else: t"},
+    {:finite, "n = config.heads\nif n < 1, do: t, else: Nx.log(n)"},
+    {:finite, "Nx.divide(t, Nx.select(Nx.equal(t, 0), 1, t))"},
+    {:finite, "Nx.divide(t, Nx.select(Nx.not_equal(t, 0), t, 1))"},
+    # the same, as a `defn` compiles `==` and `>`
+    {:finite, "Nx.divide(t, Nx.select(Nx.Defn.Kernel.__equal__(t, 0), 1, t))"},
+    {{:nonfinite, "divide_by_zero", "comparison"},
+     "Nx.divide(t, Nx.sum(Nx.Defn.Kernel.__more_than__(t, 0)))"},
+    {:finite, "Nx.log(Nx.select(Nx.greater(t, 0), t, 1))"},
+    {:finite, "Nx.sqrt(Nx.abs(t))"},
+    # a test that does not keep the operand from zero checks nothing
+    {{:unchecked, "unchecked_divisor", "input"},
+     "n = config.heads\nif n >= 0, do: Nx.divide(t, n), else: t"},
+    {{:unchecked, "unchecked_divisor", "input"},
+     "Nx.divide(t, Nx.select(Nx.greater(t, 0), 1, t))"},
+    # nor does one of a value the operand is only made from
+    {{:unchecked, "unchecked_logarithm", "input"},
+     "n = config.heads\nif n < 1, do: t, else: Nx.log(Nx.multiply(t, n))"},
+    # functions defined on part of the line, of values their math takes to
+    # the edge or past it
+    {{:hazard, "infinite_at_edge", "saturation"}, "Nx.atanh(Nx.tanh(t))"},
+    {{:hazard, "infinite_at_edge", "clip"}, "Nx.atanh(Nx.clip(t, -1, 1))"},
+    {:finite, "Nx.atanh(Nx.clip(t, -0.999, 0.999))"},
+    {{:hazard, "infinite_at_edge", "saturation"}, "Nx.erf_inv(Nx.erf(t))"},
+    {{:hazard, "infinite_at_edge", "saturation"}, "Nx.log1p(Nx.negate(Nx.sigmoid(t)))"},
+    {{:hazard, "infinite_at_edge", "saturation"}, "Nx.log1p(Nx.tanh(t))"},
+    {:finite, "Nx.asin(Nx.clip(t, -1, 1))"},
+    {:finite, "Nx.acos(Nx.tanh(t))"},
+    {{:hazard, "outside_domain", "written"}, "Nx.asin(Nx.multiply(2, Nx.tanh(t)))"},
+    {{:nonfinite, "outside_domain", "saturation"}, "Nx.acosh(Nx.tanh(t))"},
+    {:finite, "Nx.acosh(Nx.cosh(t))"},
+    {:finite, "Nx.log1p(Nx.multiply(t, t))"},
+    {:finite, "Nx.log1p(Nx.exp(t))"},
+    # an arc sine or cosine of a ratio within ±1 only before rounding
+    {{:hazard, "outside_domain", "rounding"},
+     "Nx.acos(Nx.divide(Nx.dot(t, t), Nx.max(Nx.multiply(Nx.LinAlg.norm(t), Nx.LinAlg.norm(t)), 1.0e-6)))"},
+    {{:hazard, "outside_domain", "rounding"},
+     "unit = Nx.divide(t, Nx.add(Nx.sqrt(Nx.sum(Nx.multiply(t, t))), 1.0e-6))\nNx.asin(Nx.dot(unit, unit))"},
+    {:finite,
+     "Nx.acos(Nx.clip(Nx.divide(Nx.dot(t, t), Nx.max(Nx.multiply(Nx.LinAlg.norm(t), Nx.LinAlg.norm(t)), 1.0e-6)), -1, 1))"},
+    # and of values nothing keeps in the domain, unless a test does
+    {{:unchecked, "unchecked_domain", "input"}, "Nx.atanh(t)"},
+    {{:unchecked, "unchecked_domain", "input"}, "Nx.asin(t)"},
+    {{:unchecked, "unchecked_domain", "input"}, "Nx.log1p(t)"},
+    {{:unchecked, "unchecked_domain", "input"}, "Nx.acosh(t)"},
+    {{:unchecked, "unchecked_domain", "unbounded"}, "Nx.asin(Nx.divide(t, 2))"},
+    {:finite, "n = config.heads\nif n > -1, do: Nx.log1p(n), else: t"},
+    {:finite, "n = config.heads\nif n >= 1, do: Nx.acosh(n), else: t"},
+    {:finite, "n = config.heads\nif n < 1, do: if(n > -1, do: Nx.atanh(n), else: t), else: t"},
+    # roots and norms that can be zero where a grad differentiates them
+    {{:nonfinite, "infinite_gradient", "square"},
+     "Nx.Defn.grad(t, fn x -> Nx.sum(Nx.sqrt(Nx.multiply(x, x))) end)"},
+    {{:nonfinite, "infinite_gradient", "norm"}, "Nx.Defn.grad(t, fn x -> Nx.LinAlg.norm(x) end)"},
+    {{:nonfinite, "infinite_gradient", "norm"},
+     "{_value, gradient} = Nx.Defn.value_and_grad(t, fn x -> Nx.LinAlg.norm(x) end)\ngradient"},
+    {:finite, "Nx.Defn.grad(t, fn x -> Nx.sum(Nx.sqrt(Nx.add(Nx.multiply(x, x), 1.0e-12))) end)"},
+    {:finite, "Nx.sum(Nx.sqrt(Nx.multiply(t, t)))"},
+    {:finite,
+     "Nx.Defn.grad(t, fn x -> Nx.add(Nx.sum(x), Nx.sqrt(Nx.Defn.Kernel.stop_grad(Nx.sum(Nx.multiply(x, x))))) end)"},
+    # calls that take only integers handed floats
+    {{:type_error, "non_integer_operand", "float"}, "Nx.bitwise_and(Nx.divide(t, 2), 1)"},
+    {{:type_error, "non_integer_operand", "float"}, "Nx.take(t, Nx.divide(t, 2))"},
+    {{:type_error, "non_integer_operand", "float"}, "Nx.take(t, Nx.floor(Nx.divide(t, 2)))"},
+    {:quiet, "Nx.take(t, Nx.as_type(Nx.floor(Nx.divide(t, 2)), :s32))"},
+    {{:type_error, "non_integer_operand", "float"}, "Nx.quotient(Nx.multiply(t, 1.5), 2)"},
+    {:quiet, "Nx.quotient(t, 2)"},
+    {{:type_error, "non_integer_operand", "float"}, "Nx.right_shift(Nx.sum(Nx.sigmoid(t)), 1)"},
+    {:quiet, "Nx.bitwise_and(Nx.iota({2}), 1)"},
+    {{:type_error, "non_integer_operand", "float"},
+     "Nx.bitwise_and(Nx.iota({2}, type: :f32), 1)"},
+    {{:type_error, "non_integer_operand", "float"},
+     "Nx.gather(t, Nx.new_axis(Nx.multiply(t, 0.5), -1))"},
+    # tensors made in a type the backend lacks
+    {{:unsupported, "f64"}, "Nx.as_type(t, :f64)"},
+    {{:unsupported, "f64"}, "Nx.iota({2}, type: {:f, 64})"},
+    {{:unsupported, "f64"}, "Nx.Constants.pi({:f, 64})"},
+    {:quiet, "Nx.iota({2}, type: :f32)"}
+  ]
+
+  # ── Options: priv/tensor_shapes/options.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_options []
+  @fixture_modules_options ""
+
+  # ── Traced: priv/tensor_shapes/traced.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_traced []
+  @fixture_modules_traced ""
+
+  # ── DefnFlow: priv/tensor_shapes/defn_flow.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_defn_flow []
+  @fixture_modules_defn_flow ""
+
+  # ── Containers: priv/tensor_shapes/containers.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_containers []
+  @fixture_modules_containers ""
+
+  # ── Gradients: priv/tensor_shapes/gradients.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_gradients []
+  @fixture_modules_gradients ""
+
+  # ── Math: priv/tensor_shapes/math.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_math []
+  @fixture_modules_math ""
+
+  # ── Indices: priv/tensor_shapes/indices.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_indices []
+  @fixture_modules_indices ""
+
+  # ── Literals: priv/tensor_shapes/literals.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_literals []
+  @fixture_modules_literals ""
+
+  # ── Access: priv/tensor_shapes/access.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_access []
+  @fixture_modules_access ""
+
+  # ── Tuples: priv/tensor_shapes/tuples.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_tuples []
+  @fixture_modules_tuples ""
+
+  # ── ShapeGaps: priv/tensor_shapes/shape_gaps.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_shape_gaps []
+  @fixture_modules_shape_gaps ""
+
+  # ── ReshapeOrder: priv/tensor_shapes/reshape_order.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_reshape_order []
+  @fixture_modules_reshape_order ""
+
+  # ── Dtypes: priv/tensor_shapes/dtypes.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_dtypes []
+  @fixture_modules_dtypes ""
+
+  # ── Serving: priv/tensor_shapes/serving.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_serving []
+  @fixture_modules_serving ""
+
+  # ── Consumption: priv/tensor_shapes/consumption.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_consumption []
+  @fixture_modules_consumption ""
+
+  # ── LinAlg: priv/tensor_shapes/linalg.dl ──
+  # Lint cases, and modules of their own compiled with the fixtures.
+  @lint_cases_linalg []
+  @fixture_modules_linalg ""
+
+  @lint_cases @lint_cases_base ++
+                @lint_cases_options ++
+                @lint_cases_traced ++
+                @lint_cases_defn_flow ++
+                @lint_cases_containers ++
+                @lint_cases_gradients ++
+                @lint_cases_math ++
+                @lint_cases_indices ++
+                @lint_cases_literals ++
+                @lint_cases_access ++
+                @lint_cases_tuples ++
+                @lint_cases_shape_gaps ++
+                @lint_cases_reshape_order ++
+                @lint_cases_dtypes ++
+                @lint_cases_serving ++
+                @lint_cases_consumption ++
+                @lint_cases_linalg
+
+  @fixture_modules [
+    @fixture_modules_options,
+    @fixture_modules_traced,
+    @fixture_modules_defn_flow,
+    @fixture_modules_containers,
+    @fixture_modules_gradients,
+    @fixture_modules_math,
+    @fixture_modules_indices,
+    @fixture_modules_literals,
+    @fixture_modules_access,
+    @fixture_modules_tuples,
+    @fixture_modules_shape_gaps,
+    @fixture_modules_reshape_order,
+    @fixture_modules_dtypes,
+    @fixture_modules_serving,
+    @fixture_modules_consumption,
+    @fixture_modules_linalg
   ]
 
   @shaper """
@@ -500,7 +754,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     beam = Path.join(directory, "Elixir.#{inspect(@fixtures)}.beam")
     probe = Path.join(directory, "probe.dl")
     File.write!(probe, probe_program())
-    {:ok, rows} = TensorShapes.solve(Path.wildcard(Path.join(directory, "*.beam")), probe)
+
+    {:ok, rows} =
+      TensorShapes.solve(Path.wildcard(Path.join(directory, "*.beam")), probe,
+        unsupported_types: [:f64]
+      )
 
     %{beam: beam, source: source, rows: rows}
   end
@@ -546,9 +804,156 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
         {:mismatch, kind} ->
           assert [_ | _] = for({"tensor_shape_mismatch", ^kind, _detail} <- found, do: kind),
                  "expected a #{kind} mismatch, found #{inspect(found)}"
+
+        {:nonfinite, kind, cause} ->
+          assert {"tensor_nonfinite_result", kind, cause} in found,
+                 "expected a #{kind} from a #{cause}, found #{inspect(found)}"
+
+          assert lint_outcome(index) == :nonfinite
+
+        {:hazard, kind, cause} ->
+          assert {"tensor_nonfinite_result", kind, cause} in found,
+                 "expected a #{kind} from #{cause}, found #{inspect(found)}"
+
+          assert run_lint(index) == :accepted
+
+        {:unchecked, kind, cause} ->
+          assert {"tensor_nonfinite_result", kind, cause} in found,
+                 "expected an #{kind} from #{cause}, found #{inspect(found)}"
+
+          refute Enum.any?(found, fn {_relation, found_kind, _cause} ->
+                   not String.starts_with?(found_kind, "unchecked_")
+                 end),
+                 "expected no definite finding, found #{inspect(found)}"
+
+          assert run_lint(index) == :accepted
+
+        {:type_error, kind, subject} ->
+          assert {"tensor_type_error", kind, subject} in found,
+                 "expected a #{kind} of a #{subject}, found #{inspect(found)}"
+
+          assert_raise ArgumentError, fn -> run_lint(index) end
+
+        {:unsupported, type} ->
+          assert {"tensor_type_error", "unsupported_type", type} in found,
+                 "expected an unsupported #{type}, found #{inspect(found)}"
+
+          assert run_lint(index) == :accepted
+
+        :finite ->
+          assert found == [],
+                 "the math keeps the result finite, and the analysis finds #{inspect(found)}"
+
+          assert lint_outcome(index) == :finite
+
+        {:finds, {relation, kind, subject}, outcome} ->
+          assert Enum.any?(found, fn {found_relation, found_kind, found_subject} ->
+                   found_relation == relation and found_kind == kind and
+                     (subject == :any or found_subject == subject)
+                 end),
+                 "expected a #{relation} #{kind} (#{inspect(subject)}), found #{inspect(found)}"
+
+          assert_outcome(outcome, index)
+
+        {:finds_none, outcome} ->
+          assert found == [], "expected no finding, found #{inspect(found)}"
+          assert_outcome(outcome, index)
       end
     end
   end
+
+  # `divided/2` divides by an input in a context of its own, and by an
+  # absolute value in the context `divides_by_absolute/1` calls it in,
+  # which hands it a size variable.
+  test "an unchecked operand gives way to a definite finding at its call", %{rows: rows} do
+    function = "#{inspect(@lint_fixtures)}:divided/2"
+
+    kinds =
+      for [_id, ^function, _operation, kind | _rest] <-
+            Map.get(rows, "tensor_nonfinite_result", []),
+          uniq: true,
+          do: kind
+
+    assert kinds == ["divide_by_zero"]
+  end
+
+  # `scaled_by/2` divides by what its callers compute, an absolute value,
+  # and `shrunk_by/2` by one they keep positive.
+  test "a helper's parameter is what the program's calls hand it", %{rows: rows} do
+    kinds = fn name ->
+      function = "#{inspect(@lint_fixtures)}:#{name}"
+
+      for [_id, ^function, _operation, kind, cause | _rest] <-
+            Map.get(rows, "tensor_nonfinite_result", []),
+          uniq: true,
+          do: {kind, cause}
+    end
+
+    assert kinds.("scaled_by/2") == [{"divide_by_zero", "absolute"}]
+    assert kinds.("shrunk_by/2") == []
+  end
+
+  # `magnitude/1` is differentiated where `differentiates_magnitude/1`
+  # hands a capture of it to a grad.
+  test "a function a grad is handed is differentiated", %{rows: rows} do
+    function = "#{inspect(@lint_fixtures)}:magnitude/1"
+
+    kinds =
+      for [_id, ^function, _operation, kind | _rest] <-
+            Map.get(rows, "tensor_nonfinite_result", []),
+          uniq: true,
+          do: kind
+
+    assert kinds == ["infinite_gradient"]
+  end
+
+  # ── Options: tests of their own ──
+  # (end of Options tests)
+
+  # ── Traced: tests of their own ──
+  # (end of Traced tests)
+
+  # ── DefnFlow: tests of their own ──
+  # (end of DefnFlow tests)
+
+  # ── Containers: tests of their own ──
+  # (end of Containers tests)
+
+  # ── Gradients: tests of their own ──
+  # (end of Gradients tests)
+
+  # ── Math: tests of their own ──
+  # (end of Math tests)
+
+  # ── Indices: tests of their own ──
+  # (end of Indices tests)
+
+  # ── Literals: tests of their own ──
+  # (end of Literals tests)
+
+  # ── Access: tests of their own ──
+  # (end of Access tests)
+
+  # ── Tuples: tests of their own ──
+  # (end of Tuples tests)
+
+  # ── ShapeGaps: tests of their own ──
+  # (end of ShapeGaps tests)
+
+  # ── ReshapeOrder: tests of their own ──
+  # (end of ReshapeOrder tests)
+
+  # ── Dtypes: tests of their own ──
+  # (end of Dtypes tests)
+
+  # ── Serving: tests of their own ──
+  # (end of Serving tests)
+
+  # ── Consumption: tests of their own ──
+  # (end of Consumption tests)
+
+  # ── LinAlg: tests of their own ──
+  # (end of LinAlg tests)
 
   test "run/2 places a finding at its call", %{beam: beam, source: source} do
     {:ok, placed} = TensorShapes.run([beam])
@@ -668,11 +1073,39 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
   defp function_id(index), do: "#{inspect(@fixtures)}:case_#{index}/0"
 
-  # The findings of both relations in the lint case's function and in the
-  # functions it reaches, as `{relation, kind, detail}`.
+  # The findings of the shape relations in the lint case's function and in
+  # the functions it reaches, as `{relation, kind, detail}`, and of results
+  # that can be infinite or NaN in it, as `{relation, kind, cause}`.
   defp lint_findings(rows, index) do
     function = "#{inspect(@lint_fixtures)}:lint_#{index}/4"
 
+    # its closures' too, which a grad differentiates
+    closure = "#{inspect(@lint_fixtures)}:-lint_#{index}/4-fun-"
+
+    nonfinite =
+      for [_id, found_in, _operation, kind, cause | _origin] <-
+            Map.get(rows, "tensor_nonfinite_result", []),
+          found_in == function or String.starts_with?(found_in, closure),
+          uniq: true,
+          do: {"tensor_nonfinite_result", kind, cause}
+
+    types =
+      for [_id, ^function, _operation, kind, subject | _rest] <-
+            Map.get(rows, "tensor_type_error", []),
+          uniq: true,
+          do: {"tensor_type_error", kind, subject}
+
+    calls =
+      for [_id, found_in, _operation, kind, detail | _rest] <-
+            Map.get(rows, "tensor_call_error", []),
+          found_in == function or String.starts_with?(found_in, closure),
+          uniq: true,
+          do: {"tensor_call_error", kind, detail}
+
+    shape_findings(rows, function) ++ nonfinite ++ types ++ calls
+  end
+
+  defp shape_findings(rows, function) do
     for relation <- ["tensor_shape_mismatch", "tensor_axis_misalignment"],
         reached =
           for(
@@ -697,6 +1130,62 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       :accepted
     end)
   end
+
+  # What the lint case gives where `t` is zero and every size variable is
+  # 1: `:nonfinite` where its result holds an infinity or a NaN, or it
+  # raises dividing integers by zero, and `:finite` otherwise.
+  defp lint_outcome(index) do
+    config = Map.new(~w(heads kv_heads dim head_dim hidden rows cols a b)a, &{&1, 1})
+
+    Nx.with_default_backend(Nx.BinaryBackend, fn ->
+      shaper = struct(ArgusNxTensorAnalyses.TensorShapesTest.Wide)
+      result = apply(@lint_fixtures, :"lint_#{index}", [config, Nx.iota({1}), shaper, shaper])
+      nonfinite = Nx.logical_or(Nx.is_nan(result), Nx.is_infinity(result))
+
+      if nonfinite |> Nx.any() |> Nx.to_number() == 1, do: :nonfinite, else: :finite
+    end)
+  rescue
+    ArithmeticError -> :nonfinite
+  end
+
+  # What running lint case `index` does, as `{:finds, ...}` names it:
+  # `:raises`, `:nonfinite` where its result holds an infinity or a NaN,
+  # `:finite` otherwise; `:accepted` is anything but `:raises`, `:any`
+  # anything at all.
+  defp assert_outcome(:any, _index), do: :ok
+
+  defp assert_outcome(:accepted, index),
+    do: refute(lint_result(index) == :raises, "expected Nx to accept lint #{index}")
+
+  defp assert_outcome(outcome, index), do: assert(lint_result(index) == outcome)
+
+  defp lint_result(index) do
+    config = Map.new(~w(heads kv_heads dim head_dim hidden rows cols a b)a, &{&1, 1})
+
+    Nx.with_default_backend(Nx.BinaryBackend, fn ->
+      shaper = struct(ArgusNxTensorAnalyses.TensorShapesTest.Wide)
+      result = apply(@lint_fixtures, :"lint_#{index}", [config, Nx.iota({1}), shaper, shaper])
+      if nonfinite?(result), do: :nonfinite, else: :finite
+    end)
+  rescue
+    _error -> :raises
+  end
+
+  defp nonfinite?(%Nx.Tensor{} = tensor) do
+    tensor
+    |> Nx.is_nan()
+    |> Nx.logical_or(Nx.is_infinity(tensor))
+    |> Nx.any()
+    |> Nx.to_number() == 1
+  end
+
+  defp nonfinite?(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> nonfinite?()
+  defp nonfinite?(list) when is_list(list), do: Enum.any?(list, &nonfinite?/1)
+
+  defp nonfinite?(map) when is_map(map) and not is_struct(map),
+    do: map |> Map.values() |> nonfinite?()
+
+  defp nonfinite?(_other), do: false
 
   defp fixture_source do
     cases =
@@ -733,6 +1222,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     end
 
     #{@shaper}
+
+    #{Enum.join(@fixture_modules, "\n")}
     """
   end
 

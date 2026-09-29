@@ -157,6 +157,13 @@
 .input flow_guarded
 .decl flow_guard_node(node: symbol, func: symbol, parent: symbol, kind: symbol, source: symbol, literal: symbol, polarity: symbol)
 .input flow_guard_node
+.decl flow_checked(site: symbol, func: symbol, position: number, literal: symbol, polarity: symbol)
+.input flow_checked
+
+// The tensor types the backend the code targets does not support, as
+// the analysis is run with them (`f64`, `bf16`, ...).
+.decl unsupported_type(name: symbol)
+.input unsupported_type
 .decl flow_object(func: symbol, object: symbol, shape: symbol, arity: number)
 .input flow_object
 .decl flow_operation(object: symbol, operator: symbol)
@@ -322,10 +329,11 @@ remote_defn(site, caller, callee) :-
 .decl runs_branches(site: symbol)
 runs_branches(site) :- remote_call(site, _, "Nx.Defn.Expr", "defn_cond", 2).
 
-// A function that calls Nx, or calls one that does, and the body of every
-// `defn`, which the compiler names `__defn:name__`: Argus's backward reach
-// over its call graph, and over the calls that graph does not see, which
-// run an implementation of a protocol or another module's `defn`.
+// A function that calls Nx or its constants, or calls one that does,
+// and the body of every `defn`, which the compiler names
+// `__defn:name__`: Argus's backward reach over its call graph, and over
+// the calls that graph does not see, which run an implementation of a
+// protocol or another module's `defn`.
 .decl tensor_function(function: symbol)
 tensor_function(function) :- tensor_reach.reaches(function).
 
@@ -336,6 +344,7 @@ tensor_reach.seed(function) :-
 tensor_reach.seed(function) :-
   function_def(function, _, name, _, _),
   match("__defn:.*", name).
+tensor_reach.seed(function) :- remote_call(_, function, "Nx.Constants", _, _).
 tensor_reach.seed(caller) :-
   implementation_call(_, caller, callee),
   tensor_reach.reaches(callee).
@@ -2745,6 +2754,7 @@ option_key("vectorized_axes"). option_key("n"). option_key("name"). option_key("
 option_key("keep_names"). option_key("input_dilation"). option_key("kernel_dilation").
 option_key("feature_group_size"). option_key("batch_group_size"). option_key("input_permutation").
 option_key("kernel_permutation"). option_key("output_permutation"). option_key("left_side"). option_key("ord").
+option_key("type").
 
 // Where the call's options come from.
 .decl options_source(site: symbol, function: symbol, kind: symbol, source: symbol)
@@ -7757,6 +7767,2086 @@ misalignment(context, site, "unnamed_axis", detail) :- contraction_unnamed_axis(
 misalignment(context, site, "contracted_names", detail) :- contraction_name_disagreement(context, site, detail).
 misalignment(context, site, "vectorize_name", detail) :- vectorize_renaming(context, site, detail).
 
+// ══ Results that can be infinite or NaN ═════════════════════════════
+//
+// An Nx call whose operand the code's own math lets reach a value the
+// call is not defined at, or overflow: a divisor, or a logarithm's
+// operand, that cannot be negative but can be zero (a sum of squares, a
+// count of comparisons, an index, a spread) with nothing keeping it away
+// from zero; a square root or logarithm of a difference of values that
+// cannot be negative, which rounding takes below zero; a softmax written
+// out over values not shifted by their maximum. Nx gives an infinity or a
+// NaN there, which the rest of the computation carries, and an integer
+// quotient or remainder raises.
+//
+// Which signs a value can have is followed as its values are: for each
+// value in each context, whether some element can be negative, zero or
+// positive. An operation's possible signs follow from its operands' by
+// the usual laws (`exp` is positive, `x * x` and `abs` are not negative,
+// adding a positive constant takes zero away, a comparison is 0 or 1). A
+// value the rules cannot follow can have any sign, so a divisor that is
+// only an input is not reported: the code's math has to make it
+// non-negative and leave zero possible (it errs quiet there). Where zero
+// comes from is kept for the finding: `origin`, the call whose math lets
+// the value be zero ("" for a written zero), and `cause`, how.
+//
+// Signs are followed on demand, for the values a division reads, after
+// the values themselves: nothing the values read depends on them.
+
+// A division by a value its own math keeps from being negative but not
+// from being zero.
+.decl divides_by_zero(context: Context, site: symbol, origin: symbol, cause: symbol)
+divides_by_zero(context, site, origin, cause) :-
+  divides_by(site, position),
+  argument_can_be_zero(context, site, position, origin, cause),
+  !argument_can_be_negative(context, site, position),
+  cause != "input".
+
+// A logarithm of a value its own math keeps from being negative but not
+// from being zero: negative infinity there.
+.decl logarithm_of_zero(context: Context, site: symbol, origin: symbol, cause: symbol)
+logarithm_of_zero(context, site, origin, cause) :-
+  takes_logarithm(site, position),
+  argument_can_be_zero(context, site, position, origin, cause),
+  !argument_can_be_negative(context, site, position),
+  cause != "input".
+
+// A square root or logarithm of a difference of two values that cannot be
+// negative, such as a variance written as E[x²] - E[x]²: where they are
+// close, rounding takes the difference below zero, and the result is NaN.
+.decl root_of_cancellation(context: Context, site: symbol, kind: symbol, difference: symbol)
+root_of_cancellation(context, site, kind, difference) :-
+  takes_root(site, position, kind),
+  difference_argument(context, site, position, difference),
+  never_negative_operand(context, difference, 0),
+  never_negative_operand(context, difference, 1).
+
+// A logarithm of a softmax written out: an exponential far below the
+// largest underflows to zero, and its logarithm is negative infinity,
+// shifted by the maximum or not.
+.decl logarithm_of_softmax(site: symbol, softmax: symbol)
+logarithm_of_softmax(site, softmax) :-
+  takes_logarithm(site, 0),
+  flow_argument(site, _, 0, "result", softmax),
+  divides_by(softmax, 1),
+  normalizes_exponentials(softmax, _).
+
+// A softmax or log-sum-exp written out over values not shifted down by
+// their maximum first: a large value overflows the exponential to
+// infinity, and infinity over infinity, or its logarithm, is not finite.
+.decl unshifted_exponentials(site: symbol, exponential: symbol)
+unshifted_exponentials(site, exponential) :-
+  normalizes_exponentials(site, exponential),
+  !shifted_by_maximum(exponential).
+
+// A division by a value nothing keeps from being zero: one from an
+// input, or a difference of inputs that is zero where they meet, that no
+// test on the call's path and no select checks. Noisier than
+// `divides_by_zero`, since an input may never be zero, and reported apart
+// (`unchecked_divisor`).
+.decl unchecked_division(context: Context, site: symbol, origin: symbol, cause: symbol)
+unchecked_division(context, site, origin, cause) :-
+  divides_by(site, position),
+  argument_can_be_zero(context, site, position, origin, cause),
+  !checked_operand(site, position, "nonzero"),
+  !definite_site(site).
+
+// A call with a definite finding in some context, which an unchecked one
+// at the call would only repeat.
+.decl definite_site(site: symbol)
+definite_site(site) :- nonfinite(_, site, _, _, _).
+
+// A logarithm of a value nothing keeps positive.
+.decl unchecked_logarithm(context: Context, site: symbol, origin: symbol, cause: symbol)
+unchecked_logarithm(context, site, origin, cause) :-
+  takes_logarithm(site, position),
+  argument_can_be_zero(context, site, position, origin, cause),
+  !checked_operand(site, position, "positive"),
+  !definite_site(site).
+unchecked_logarithm(context, site, "", "negative") :-
+  takes_logarithm(site, position),
+  argument_can_be_negative(context, site, position),
+  !checked_operand(site, position, "positive"),
+  !definite_site(site).
+
+// A square root of a value nothing keeps from being negative.
+.decl unchecked_root(context: Context, site: symbol, origin: symbol, cause: symbol)
+unchecked_root(context, site, "", "negative") :-
+  takes_root(site, position, "root_of_negative"),
+  argument_can_be_negative(context, site, position),
+  !checked_operand(site, position, "nonnegative"),
+  !definite_site(site).
+
+// A square root, norm or root power in a function a `grad` or
+// `value_and_grad` differentiates, whose result its math keeps from being
+// negative but not from being zero: the derivative there is infinite, or
+// NaN for a norm (0/0), and the gradient carries it back into everything
+// before it. A square root of a value that can be negative is the
+// unchecked root instead.
+.decl infinite_gradient(context: Context, site: symbol, origin: symbol, cause: symbol)
+infinite_gradient(context, site, origin, cause) :-
+  singular_derivative(site, _),
+  gradient_asked(context, site, function),
+  can_be_zero(context, function, "result", site, origin, cause),
+  cause != "input",
+  !nonnegative_root_needed(context, site),
+  !stopped_gradient(site).
+
+// A function defined on only part of the line (`takes_domain`) whose
+// operand the code's own math takes outside it: asin of twice a tanh,
+// acosh of a tanh. NaN there. `cause` "rounding" where only rounding
+// does, as with the arc cosine of a cosine similarity, which exact
+// arithmetic keeps within [-1, 1] and floats do not.
+.decl outside_domain(context: Context, site: symbol, origin: symbol, cause: symbol)
+outside_domain(context, site, origin, cause) :-
+  takes_domain(site, domain),
+  argument_region(context, site, 0, region, origin, cause),
+  undefined_in(domain, region),
+  known_region_cause(cause).
+
+// An atanh or erf_inv of a value its math takes to ±1 (a tanh that
+// rounds to 1, a clip to ±1), or a log1p of one it takes to -1: an
+// infinity there.
+.decl infinite_at_edge(context: Context, site: symbol, origin: symbol, cause: symbol)
+infinite_at_edge(context, site, origin, cause) :-
+  takes_domain(site, domain),
+  argument_region(context, site, 0, region, origin, cause),
+  infinite_at(domain, region),
+  known_region_cause(cause),
+  !outside_domain(context, site, _, _).
+
+// A function defined on only part of the line, of a value nothing keeps
+// inside it: one from an input, or made by math the rules do not bound,
+// that no clip and no test on the call's path keeps there.
+.decl unchecked_domain(context: Context, site: symbol, origin: symbol, cause: symbol)
+unchecked_domain(context, site, origin, cause) :-
+  takes_domain(site, domain),
+  argument_region(context, site, 0, region, origin, cause),
+  not_defined_in(domain, region),
+  unknown_region_cause(cause),
+  !domain_checked(site, domain),
+  !safe_by_sign(context, site, domain),
+  !definite_site(site).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The call runs only where a test on its path says its operand is not
+// zero, is positive, or is not negative (`need`): `if n == 0`, `when n
+// > 0`. The operand has to be the tested value itself.
+.decl checked_operand(site: symbol, position: number, need: symbol)
+checked_operand(site, position, need) :-
+  check_demand(site, position),
+  flow_checked(site, _, position, literal, polarity),
+  test_ensures(literal, polarity, need).
+
+// The operands whose checks are asked of: what a call divides by, or
+// takes the logarithm, root or other partial function of.
+.decl check_demand(site: symbol, position: number)
+check_demand(site, position) :- divides_by(site, position).
+check_demand(site, position) :- takes_logarithm(site, position).
+check_demand(site, position) :- takes_root(site, position, _).
+check_demand(site, 0) :- takes_domain(site, _).
+
+// What a value passing a test against a literal is: not zero, positive,
+// not negative. An exact test against 0 (`!==`, a `case` arm) lets 0.0
+// through; it counts all the same, as the unchecked kinds err quiet.
+.decl test_ensures(literal: symbol, polarity: symbol, need: symbol)
+test_ensures(literal, "ne", "nonzero") :- guard_literal(literal), written_zero(literal).
+test_ensures(literal, "eq", need) :- guard_literal(literal), positive_literal(literal), any_need(need).
+test_ensures(literal, "eq", "nonzero") :- guard_literal(literal), negative_literal(literal).
+test_ensures(literal, "eq", "nonnegative") :- guard_literal(literal), written_zero(literal).
+test_ensures(literal, "gt", need) :- guard_literal(literal), written_zero(literal), any_need(need).
+test_ensures(literal, "gt", need) :- guard_literal(literal), positive_literal(literal), any_need(need).
+test_ensures(literal, "ge", need) :- guard_literal(literal), positive_literal(literal), any_need(need).
+test_ensures(literal, "ge", "nonnegative") :- guard_literal(literal), written_zero(literal).
+test_ensures(literal, "lt", "nonzero") :- guard_literal(literal), written_zero(literal).
+test_ensures(literal, "lt", "nonzero") :- guard_literal(literal), negative_literal(literal).
+test_ensures(literal, "le", "nonzero") :- guard_literal(literal), negative_literal(literal).
+test_ensures(literal, polarity, need) :-
+  guard_literal(literal),
+  literal_region(literal, region),
+  region_order(region, order),
+  bound_test(polarity, order, need).
+
+// What a test against a literal in a region (by its order) says of a
+// value against ±1: below 1, at most 1, above -1, at least -1, at least 1.
+// Equality says what at most and at least do.
+.decl bound_test(polarity: symbol, order: number, need: symbol)
+bound_test("lt", order, "below_one") :- region_order(_, order), order <= 3.
+bound_test("lt", order, "at_most_one") :- region_order(_, order), order <= 3.
+bound_test("le", order, "below_one") :- region_order(_, order), order <= 2.
+bound_test("le", order, "at_most_one") :- region_order(_, order), order <= 3.
+bound_test("gt", order, "above_minus_one") :- region_order(_, order), order >= 1.
+bound_test("gt", order, "at_least_minus_one") :- region_order(_, order), order >= 1.
+bound_test("gt", order, "at_least_one") :- region_order(_, order), order >= 3.
+bound_test("ge", order, "above_minus_one") :- region_order(_, order), order >= 2.
+bound_test("ge", order, "at_least_minus_one") :- region_order(_, order), order >= 1.
+bound_test("ge", order, "at_least_one") :- region_order(_, order), order >= 3.
+bound_test("eq", order, need) :- bound_test("le", order, need).
+bound_test("eq", order, need) :- bound_test("ge", order, need).
+
+// A test on the path to the call keeps its operand in its domain.
+.decl domain_checked(site: symbol, domain: symbol)
+domain_checked(site, domain) :-
+  takes_domain(site, domain),
+  domain_needs(domain, lower, upper),
+  checked_operand(site, 0, lower),
+  checked_operand(site, 0, upper).
+
+.decl domain_needs(domain: symbol, lower: symbol, upper: symbol)
+domain_needs("closed_unit", "at_least_minus_one", "at_most_one").
+domain_needs("open_unit", "above_minus_one", "below_one").
+domain_needs("above_minus_one", "above_minus_one", "above_minus_one").
+domain_needs("at_least_one", "at_least_one", "at_least_one").
+
+// A log1p of a value that cannot be negative, whatever its magnitude.
+.decl safe_by_sign(context: Context, site: symbol, domain: symbol)
+safe_by_sign(context, site, "above_minus_one") :-
+  takes_domain(site, "above_minus_one"),
+  site_active(context, site),
+  !argument_can_be_negative(context, site, 0).
+
+.decl any_need(need: symbol)
+any_need("nonzero"). any_need("positive"). any_need("nonnegative").
+
+.decl guard_literal(literal: symbol)
+guard_literal(literal) :-
+  check_demand(site, position),
+  flow_checked(site, _, position, literal, _).
+
+// A literal spelled as zero, as a positive number, as a negative one.
+.decl written_zero(text: symbol) inline
+written_zero(text) :- match("-?0(\\.0+)?(e[-+]?[0-9]+)?", text).
+.decl positive_literal(text: symbol) inline
+positive_literal(text) :-
+  match("[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text), !match("-?0(\\.0+)?(e[-+]?[0-9]+)?", text).
+.decl negative_literal(text: symbol) inline
+negative_literal(text) :-
+  match("-[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text), !match("-?0(\\.0+)?(e[-+]?[0-9]+)?", text).
+
+// The operand an Nx call divides by: a quotient's or remainder's divisor,
+// the operand of a reciprocal square root, or the base of a power written
+// negative.
+.decl divides_by(site: symbol, position: number)
+divides_by(site, position) :-
+  operation_site(site, operation, arity),
+  divisor_position(operation, arity, position).
+
+.decl divisor_position(operation: symbol, arity: number, position: number)
+divisor_position("Nx.divide", 2, 1).
+divisor_position("Nx.quotient", 2, 1).
+divisor_position("Nx.remainder", 2, 1).
+divisor_position("Nx.Defn.Kernel./", 2, 1).
+divisor_position("Nx.Defn.Kernel.div", 2, 1).
+divisor_position("Nx.Defn.Kernel.rem", 2, 1).
+divisor_position("Nx.rsqrt", 1, 0).
+
+divides_by(site, 0) :- negative_power(site).
+
+// A power whose exponent is written negative: `x ** -0.5`.
+.decl negative_power(site: symbol)
+negative_power(site) :-
+  operation_site(site, operation, 2),
+  sign_class(operation, "power"),
+  flow_argument(site, _, 1, "literal", text),
+  term_integer(text, 0, exponent),
+  exponent < 0.
+negative_power(site) :-
+  operation_site(site, operation, 2),
+  sign_class(operation, "power"),
+  flow_argument(site, _, 1, "literal", text),
+  term_float(text, 0),
+  match("-.*", text).
+
+// The operand an Nx call takes the logarithm of.
+.decl takes_logarithm(site: symbol, position: number)
+takes_logarithm(site, 0) :- operation_site(site, operation, 1), logarithm_function(operation).
+
+.decl logarithm_function(operation: symbol)
+logarithm_function("Nx.log"). logarithm_function("Nx.log2"). logarithm_function("Nx.log10").
+
+// The operand an Nx call takes a root or logarithm of, which is NaN below
+// zero, and what the finding calls that.
+.decl takes_root(site: symbol, position: number, kind: symbol)
+takes_root(site, 0, "root_of_negative") :- operation_site(site, "Nx.sqrt", 1).
+takes_root(site, 0, "root_of_negative") :- operation_site(site, "Nx.rsqrt", 1).
+takes_root(site, 0, "log_of_negative") :- takes_logarithm(site, 0).
+takes_root(site, 0, "root_of_negative") :- fractional_power(site).
+
+// A power whose exponent is written as a fraction, which is a root:
+// `x ** 0.5`.
+.decl fractional_power(site: symbol)
+fractional_power(site) :-
+  operation_site(site, operation, 2),
+  sign_class(operation, "power"),
+  flow_argument(site, _, 1, "literal", text),
+  term_float(text, 0),
+  !match("-?[0-9]+\\.0+(e[-+]?[0-9]+)?", text).
+
+// A call whose derivative is infinite where its result is zero: a square
+// root, a root power (`x ** 0.5`) and a cube root, and a norm, whose
+// gradient is 0/0 there. `signed` is 1 where the operand must not be
+// negative for the root to be real.
+.decl singular_derivative(site: symbol, signed: number)
+singular_derivative(site, 1) :- operation_site(site, "Nx.sqrt", 1).
+singular_derivative(site, 1) :- root_power(site).
+singular_derivative(site, 0) :- operation_site(site, "Nx.cbrt", 1).
+singular_derivative(site, 0) :- operation_site(site, "Nx.LinAlg.norm", _).
+
+// A power whose exponent is written between 0 and 1.
+.decl root_power(site: symbol)
+root_power(site) :-
+  fractional_power(site),
+  flow_argument(site, _, 1, "literal", text),
+  match("0\\.[0-9]*[1-9][0-9]*", text).
+
+// Such a call in a differentiated function, in a context it runs in,
+// whose result's sign is asked (`sign_demand`).
+.decl gradient_asked(context: Context, site: symbol, function: symbol)
+gradient_asked(context, site, function) :-
+  singular_derivative(site, _),
+  site_function(site, function),
+  differentiated(function),
+  site_active(context, site).
+
+// A square root whose operand can be negative.
+.decl nonnegative_root_needed(context: Context, site: symbol)
+nonnegative_root_needed(context, site) :-
+  singular_derivative(site, 1),
+  gradient_asked(context, site, _),
+  argument_can_be_negative(context, site, 0).
+
+// A call whose operand is `stop_grad`'s result, which no gradient flows
+// through.
+.decl stopped_gradient(site: symbol)
+stopped_gradient(site) :-
+  singular_derivative(site, _),
+  flow_argument(site, function, 0, "result", operand),
+  1 = count : { flow_argument(site, function, 0, _, _) },
+  operation_site(operand, "Nx.Defn.Kernel.stop_grad", 1).
+
+// A function a `grad` or `value_and_grad` differentiates: one handed to
+// it, and what that calls, closures and funs included.
+.decl differentiated(function: symbol)
+differentiated(function) :- gradient_reach.reaches(_, function).
+
+.init gradient_reach = ForwardCallReach
+gradient_reach.root(function, function) :-
+  remote_call(site, _, "Nx.Defn", name, arity),
+  gradient_function(name, arity, position),
+  fun_handed(site, _, function, position).
+
+// The position of the function `Nx.Defn`'s gradient functions take.
+.decl gradient_function(name: symbol, arity: number, position: number)
+gradient_function("grad", 1, 0). gradient_function("grad", 2, 1).
+gradient_function("value_and_grad", 1, 0). gradient_function("value_and_grad", 2, 1).
+gradient_function("value_and_grad", 3, 1).
+
+// A function defined on only part of the line, by its domain: asin and
+// acos on [-1, 1] (`closed_unit`), atanh and erf_inv inside it, infinite
+// at ±1 (`open_unit`), log1p above -1, infinite at -1, and acosh from 1.
+.decl takes_domain(site: symbol, domain: symbol)
+takes_domain(site, domain) :- operation_site(site, operation, 1), domain_function(operation, domain).
+
+.decl domain_function(operation: symbol, domain: symbol)
+domain_function("Nx.asin", "closed_unit"). domain_function("Nx.acos", "closed_unit").
+domain_function("Nx.atanh", "open_unit"). domain_function("Nx.erf_inv", "open_unit").
+domain_function("Nx.log1p", "above_minus_one"). domain_function("Nx.acosh", "at_least_one").
+
+// The regions a domain leaves out: where the function is NaN, where it is
+// infinite, and both.
+.decl undefined_in(domain: symbol, region: symbol)
+undefined_in("closed_unit", "below"). undefined_in("closed_unit", "above").
+undefined_in("open_unit", "below"). undefined_in("open_unit", "above").
+undefined_in("above_minus_one", "below").
+undefined_in("at_least_one", "below"). undefined_in("at_least_one", "minus_one").
+undefined_in("at_least_one", "inside").
+
+.decl infinite_at(domain: symbol, region: symbol)
+infinite_at("open_unit", "minus_one"). infinite_at("open_unit", "one").
+infinite_at("above_minus_one", "minus_one").
+
+.decl not_defined_in(domain: symbol, region: symbol)
+not_defined_in(domain, region) :- undefined_in(domain, region).
+not_defined_in(domain, region) :- infinite_at(domain, region).
+
+// How a value comes to a region: from math the rules follow, or from an
+// input or math they do not bound.
+.decl known_region_cause(cause: symbol) inline
+known_region_cause(cause) :- cause != "input", cause != "unbounded".
+.decl unknown_region_cause(cause: symbol) inline
+unknown_region_cause(cause) :- cause = "input".
+unknown_region_cause(cause) :- cause = "unbounded".
+
+// A call's argument is the result of a subtraction in its function.
+.decl difference_argument(context: Context, site: symbol, position: number, difference: symbol)
+difference_argument(context, site, position, difference) :-
+  signed_argument(context, site, position, _, "result", difference),
+  sign_rule(difference, "subtract").
+
+// An operand of a call can be positive and cannot be negative.
+.decl never_negative_operand(context: Context, site: symbol, position: number)
+never_negative_operand(context, site, position) :-
+  argument_can_be_positive(context, site, position),
+  !argument_can_be_negative(context, site, position).
+
+// A division of an exponential by a sum of exponentials of the same
+// values, or a logarithm of such a sum: a softmax or a log-sum-exp
+// written out. `exponential` is the one of them the sum adds up.
+.decl normalizes_exponentials(site: symbol, exponential: symbol)
+normalizes_exponentials(site, exponential) :-
+  divides_by(site, 1),
+  flow_argument(site, function, 0, "result", dividend),
+  exponential_of(dividend, function, kind, source),
+  flow_argument(site, function, 1, "result", total),
+  sum_of_exponentials(total, function, exponential),
+  exponential_of(exponential, function, kind, source).
+normalizes_exponentials(site, exponential) :-
+  takes_logarithm(site, 0),
+  flow_argument(site, function, 0, "result", total),
+  sum_of_exponentials(total, function, exponential).
+
+// An exponential, and what it is of.
+.decl exponential_of(exponential: symbol, function: symbol, kind: symbol, source: symbol)
+exponential_of(exponential, function, kind, source) :-
+  operation_site(exponential, "Nx.exp", 1),
+  flow_argument(exponential, function, 0, kind, source).
+
+// A sum of an exponential.
+.decl sum_of_exponentials(total: symbol, function: symbol, exponential: symbol)
+sum_of_exponentials(total, function, exponential) :-
+  operation_site(total, "Nx.sum", _),
+  flow_argument(total, function, 0, "result", exponential),
+  operation_site(exponential, "Nx.exp", 1).
+
+// An exponential of values shifted down by their maximum, or by anything
+// at least it, which keeps it at most 1.
+.decl shifted_by_maximum(exponential: symbol)
+shifted_by_maximum(exponential) :-
+  exponential_of(exponential, function, "result", shift),
+  sign_rule(shift, "subtract"),
+  flow_argument(shift, function, 0, kind, source),
+  flow_argument(shift, function, 1, "result", maximum),
+  at_least_maximum(maximum, function, kind, source).
+
+// The call's result is at least every element of the value: its
+// `reduce_max`, kept as it is (`stop_grad`, a reshape or broadcast), or
+// the larger of it and anything.
+.decl at_least_maximum(site: symbol, function: symbol, kind: symbol, source: symbol)
+at_least_maximum(site, function, kind, source) :-
+  operation_site(site, "Nx.reduce_max", _),
+  flow_argument(site, function, 0, kind, source).
+at_least_maximum(site, function, kind, source) :-
+  at_least_maximum(maximum, function, kind, source),
+  flow_argument(site, function, 0, "result", maximum),
+  sign_rule(site, "preserve").
+at_least_maximum(site, function, kind, source) :-
+  at_least_maximum(maximum, function, kind, source),
+  flow_argument(site, function, _, "result", maximum),
+  sign_rule(site, "maximum").
+
+// An argument of a call in a context can be negative, zero or positive:
+// some value reaching it, on some path, can.
+.decl argument_can_be_negative(context: Context, site: symbol, position: number)
+argument_can_be_negative(context, site, position) :-
+  can_be_negative(context, function, kind, source),
+  signed_argument(context, site, position, function, kind, source).
+
+.decl argument_can_be_positive(context: Context, site: symbol, position: number)
+argument_can_be_positive(context, site, position) :-
+  can_be_positive(context, function, kind, source),
+  signed_argument(context, site, position, function, kind, source).
+
+.decl argument_can_be_zero(context: Context, site: symbol, position: number, origin: symbol, cause: symbol)
+argument_can_be_zero(context, site, position, origin, cause) :-
+  can_be_zero(context, function, kind, source, origin, cause),
+  signed_argument(context, site, position, function, kind, source).
+
+// A value in a context can be negative, zero or positive: some element,
+// on some path. A value the rules do not follow can be any of them.
+.decl can_be_negative(context: Context, function: symbol, kind: symbol, source: symbol)
+.decl can_be_positive(context: Context, function: symbol, kind: symbol, source: symbol)
+.decl can_be_zero(context: Context, function: symbol, kind: symbol, source: symbol, origin: symbol, cause: symbol)
+
+// The values signs are asked of: a division's operands, then what they
+// are made of: an Nx call's operands, the returns of a function a call
+// runs, and the argument a parameter of a call's own context is handed.
+.decl sign_demand(context: Context, function: symbol, kind: symbol, source: symbol)
+sign_demand(context, function, kind, source) :-
+  signed_argument(context, _, _, function, kind, source).
+sign_demand(callee_context, callee, kind, source) :-
+  sign_demand(context, _, "result", site),
+  invocation(context, site, callee, callee_context),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at).
+sign_demand(context, function, "result", site) :- gradient_asked(context, site, function).
+sign_demand(caller, caller_function, kind, source) :-
+  sign_demand($Canonical(function, arguments), function, "param", parameter),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+sign_demand(caller, caller_function, kind, source) :-
+  sign_demand($Called(site, caller), callee, "param", parameter),
+  program_call(site, caller_function, callee),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+
+// The calls whose arguments signs are asked of, and their arguments.
+.decl sign_site(context: Context, site: symbol)
+sign_site(context, site) :- divides_by(site, _), site_active(context, site).
+sign_site(context, site) :- takes_logarithm(site, _), site_active(context, site).
+sign_site(context, site) :- takes_root(site, _, _), site_active(context, site).
+sign_site(context, site) :- takes_domain(site, _), site_active(context, site).
+sign_site(context, site) :- integer_only(site, _), site_active(context, site).
+sign_site(context, site) :- sign_demand(context, _, "result", site), type_rule(site, _).
+sign_site(context, site) :- sign_demand(context, _, "result", site), sign_rule(site, _).
+
+.decl signed_argument(context: Context, site: symbol, position: number, function: symbol, kind: symbol, source: symbol)
+signed_argument(context, site, position, function, kind, source) :-
+  sign_site(context, site),
+  flow_argument(site, function, position, kind, source).
+
+// A value the rules hold: a written number by its sign, a size, which is
+// positive, and a value not known, which can be anything.
+can_be_negative(context, function, kind, source) :-
+  signed_by_value(context, function, kind, source),
+  value_of(context, function, kind, source, value),
+  value_sign(value, "negative", _).
+can_be_positive(context, function, kind, source) :-
+  signed_by_value(context, function, kind, source),
+  value_of(context, function, kind, source, value),
+  value_sign(value, "positive", _).
+can_be_zero(context, function, kind, source, "", cause) :-
+  signed_by_value(context, function, kind, source),
+  value_of(context, function, kind, source, value),
+  value_sign(value, "zero", cause).
+
+// A value whose sign its value says: a written one, one read from a
+// field, a parameter of a context its callers share, and what a call
+// neither to Nx nor into the program returns. An Nx call's result has its
+// class's signs and a program call's its function's returns, where the
+// value says only their shape (a value not known being a shape not known).
+.decl signed_by_value(context: Context, function: symbol, kind: symbol, source: symbol)
+signed_by_value(context, function, "literal", source) :- sign_demand(context, function, "literal", source).
+signed_by_value(context, function, "load", source) :- sign_demand(context, function, "load", source).
+signed_by_value($Canonical(owner, arguments), function, "param", source) :-
+  sign_demand($Canonical(owner, arguments), function, "param", source),
+  entered_from_outside(function).
+signed_by_value($Assumed(marker, base), function, "param", source) :-
+  sign_demand($Assumed(marker, base), function, "param", source).
+signed_by_value($Called(site, caller), function, "param", source) :-
+  sign_demand($Called(site, caller), function, "param", source),
+  !program_call(site, _, function).
+signed_by_value(context, function, "result", site) :-
+  sign_demand(context, function, "result", site),
+  !operation_site(site, _, _),
+  !program_call(site, _, _).
+
+.decl value_sign(value: Value, sign: symbol, cause: symbol) inline
+value_sign(value, "negative", "input") :- value = $Opaque(_).
+value_sign(value, "zero", "input") :- value = $Opaque(_).
+value_sign(value, "positive", "input") :- value = $Opaque(_).
+value_sign(value, "positive", "size") :- value = $Integer([coefficient, _]), coefficient > 0.
+value_sign(value, "negative", "input") :- value = $Integer([0, nil]).
+value_sign(value, "zero", "input") :- value = $Integer([0, nil]).
+value_sign(value, "positive", "input") :- value = $Integer([0, nil]).
+value_sign(value, "negative", "written") :-
+  value = $Term(text, start), term_integer(text, start, number), number < 0.
+value_sign(value, "zero", "zero") :-
+  value = $Term(text, start), term_integer(text, start, number), number = 0.
+value_sign(value, "zero", "zero") :-
+  value = $Term(text, start), term_float(text, start), term_spelling(text, start, spelled),
+  match("-?0\\.0+(e[-+]?[0-9]+)?", spelled).
+value_sign(value, "negative", "written") :-
+  value = $Term(text, start), term_float(text, start), term_spelling(text, start, spelled),
+  match("-.*", spelled), !match("-?0\\.0+(e[-+]?[0-9]+)?", spelled).
+value_sign(value, "positive", "written") :-
+  value = $Term(text, start), term_float(text, start), term_spelling(text, start, spelled),
+  !match("-.*", spelled), !match("-?0\\.0+(e[-+]?[0-9]+)?", spelled).
+
+// A tensor the rules do not follow the elements of: one read from a
+// field, a parameter of a context shared by its callers, one a call hands
+// a closure or another module's `defn`, and one a call neither to Nx nor
+// into the program returns.
+.decl followed_unknown(context: Context, function: symbol, kind: symbol, source: symbol)
+followed_unknown(context, function, "load", source) :-
+  sign_demand(context, function, "load", source),
+  tensor_valued(context, function, "load", source).
+followed_unknown($Canonical(owner, arguments), function, "param", source) :-
+  sign_demand($Canonical(owner, arguments), function, "param", source),
+  entered_from_outside(function),
+  tensor_valued($Canonical(owner, arguments), function, "param", source).
+followed_unknown($Assumed(marker, base), function, "param", source) :-
+  sign_demand($Assumed(marker, base), function, "param", source),
+  tensor_valued($Assumed(marker, base), function, "param", source).
+followed_unknown($Called(site, caller), function, "param", source) :-
+  sign_demand($Called(site, caller), function, "param", source),
+  !program_call(site, _, function),
+  tensor_valued($Called(site, caller), function, "param", source).
+followed_unknown(context, function, "result", site) :-
+  sign_demand(context, function, "result", site),
+  !operation_site(site, _, _),
+  !program_call(site, _, _),
+  tensor_valued(context, function, "result", site).
+
+// Such a tensor can have any sign, and so can any value an Nx call with no
+// sign rule returns.
+.decl sign_unknown(context: Context, function: symbol, kind: symbol, source: symbol)
+sign_unknown(context, function, kind, source) :- followed_unknown(context, function, kind, source).
+sign_unknown(context, function, "result", site) :-
+  sign_demand(context, function, "result", site),
+  operation_site(site, _, _),
+  !sign_rule(site, _).
+
+.decl tensor_valued(context: Context, function: symbol, kind: symbol, source: symbol)
+tensor_valued(context, function, kind, source) :-
+  sign_demand(context, function, kind, source),
+  value_of(context, function, kind, source, $Tensor(_)).
+tensor_valued(context, function, kind, source) :-
+  sign_demand(context, function, kind, source),
+  value_of(context, function, kind, source, $Uniform(_)).
+
+can_be_negative(context, function, kind, source) :- sign_unknown(context, function, kind, source).
+can_be_positive(context, function, kind, source) :- sign_unknown(context, function, kind, source).
+can_be_zero(context, function, kind, source, "", "input") :- sign_unknown(context, function, kind, source).
+
+// What a call returns: what the function it runs returns there.
+can_be_negative(context, function, "result", site) :-
+  can_be_negative(callee_context, callee, kind, source),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  sign_demand(context, function, "result", site).
+can_be_positive(context, function, "result", site) :-
+  can_be_positive(callee_context, callee, kind, source),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  sign_demand(context, function, "result", site).
+can_be_zero(context, function, "result", site, origin, cause) :-
+  can_be_zero(callee_context, callee, kind, source, origin, cause),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  sign_demand(context, function, "result", site).
+
+// A parameter of a function's own canonical context, which the program
+// enters only through its calls: the arguments the calls that run it there
+// hand it.
+can_be_negative($Canonical(function, arguments), function, "param", to_string(position)) :-
+  can_be_negative(caller, caller_function, kind, source),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
+can_be_positive($Canonical(function, arguments), function, "param", to_string(position)) :-
+  can_be_positive(caller, caller_function, kind, source),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
+can_be_zero($Canonical(function, arguments), function, "param", to_string(position), origin, cause) :-
+  can_be_zero(caller, caller_function, kind, source, origin, cause),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
+
+// A call of the program that runs a function in its canonical context,
+// for a function the program enters only through its calls.
+.decl canonical_entry(caller: Context, site: symbol, caller_function: symbol, function: symbol, arguments: Arguments)
+canonical_entry(caller, site, caller_function, function, arguments) :-
+  invocation(caller, site, function, $Canonical(function, arguments)),
+  program_call(site, caller_function, function),
+  !entered_from_outside(function).
+
+// A function the program is entered at from outside, whose parameters in
+// its canonical context are not known: one no call of the program runs, a
+// fun value made of it other than its `defn` wrapper's, and one a call
+// runs whose arguments the rules do not follow there. A function the
+// program runs only through its calls is judged by them, exported or not.
+.decl entered_from_outside(function: symbol)
+entered_from_outside(function) :-
+  active($Canonical(function, _), function),
+  !invocation(_, _, function, _).
+entered_from_outside(function) :-
+  closure_def(parent, function),
+  !defn_wrapper(parent, function).
+entered_from_outside(function) :- fun_ref(_, function).
+entered_from_outside(function) :-
+  invocation(_, site, function, $Canonical(function, _)),
+  !program_call(site, _, function).
+
+// A `defn`'s wrapper and the body it runs, which it hands as a fun only to
+// run it outside a `defn`.
+.decl defn_wrapper(wrapper: symbol, body: symbol)
+defn_wrapper(wrapper, body) :-
+  closure_def(wrapper, body),
+  function_def(wrapper, module, name, arity, _),
+  function_def(body, module, cat("__defn:", name, "__"), arity, _).
+
+// A parameter of a call's own context: the argument the call hands it.
+can_be_negative($Called(site, caller), callee, "param", to_string(position)) :-
+  can_be_negative(caller, caller_function, kind, source),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  sign_demand($Called(site, caller), callee, "param", to_string(position)).
+can_be_positive($Called(site, caller), callee, "param", to_string(position)) :-
+  can_be_positive(caller, caller_function, kind, source),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  sign_demand($Called(site, caller), callee, "param", to_string(position)).
+can_be_zero($Called(site, caller), callee, "param", to_string(position), origin, cause) :-
+  can_be_zero(caller, caller_function, kind, source, origin, cause),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  sign_demand($Called(site, caller), callee, "param", to_string(position)).
+
+// ── What an Nx call's signs are ─────────────────────────────────────
+//
+// Each Nx function has a class (`sign_class`), and a class's rules give
+// the result's signs from its operands' (`first`, `second`, `third`: the
+// operands at the positions the class reads). An operation that makes a
+// value non-negative and so lets it be zero where its operand could be
+// anything (a square, an absolute value, a root, a norm) is where that
+// zero comes from; one whose operand's zero already has a cause keeps it.
+
+// The Nx call at `site` has sign class `class`.
+.decl sign_rule(site: symbol, class: symbol)
+sign_rule(site, class) :-
+  operation_site(site, operation, _),
+  sign_class(operation, class).
+
+// The Nx call a value in a context is the result of, and its class.
+.decl signed_call(context: Context, site: symbol, function: symbol, class: symbol)
+signed_call(context, site, function, class) :-
+  sign_demand(context, function, "result", site),
+  sign_rule(site, class).
+
+// The operands a class reads, by position: `first`, then `second` and
+// `third` where it has them.
+.decl sign_operands(site: symbol, first: number, second: number, third: number)
+sign_operands(site, 0, 1, 2) :- sign_rule(site, _), !operand_positions(site, _, _, _).
+sign_operands(site, first, second, third) :- operand_positions(site, first, second, third).
+
+.decl operand_positions(site: symbol, first: number, second: number, third: number)
+operand_positions(site, 1, 2, -1) :- sign_rule(site, "select").
+operand_positions(site, 1, -1, -1) :- sign_rule(site, "fill").
+operand_positions(site, 0, 2, -1) :-
+  operation_site(site, "Nx.dot", 4), sign_rule(site, "dot").
+operand_positions(site, 0, 3, -1) :-
+  operation_site(site, "Nx.dot", 6), sign_rule(site, "dot").
+operand_positions(site, 0, 2, -1) :- operation_site(site, "Nx.put_slice", _), sign_rule(site, "splice").
+operand_positions(site, 0, 1, -1) :- operation_site(site, "Nx.pad", _), sign_rule(site, "splice").
+
+// The signs of a class's operands in a context.
+.decl first_negative(context: Context, site: symbol)
+first_negative(context, site) :-
+  argument_can_be_negative(context, site, position), sign_operands(site, position, _, _).
+.decl first_positive(context: Context, site: symbol)
+first_positive(context, site) :-
+  argument_can_be_positive(context, site, position), sign_operands(site, position, _, _).
+.decl first_zero(context: Context, site: symbol, origin: symbol, cause: symbol)
+first_zero(context, site, origin, cause) :-
+  argument_can_be_zero(context, site, position, origin, cause), sign_operands(site, position, _, _).
+.decl second_negative(context: Context, site: symbol)
+second_negative(context, site) :-
+  argument_can_be_negative(context, site, position), sign_operands(site, _, position, _).
+.decl second_positive(context: Context, site: symbol)
+second_positive(context, site) :-
+  argument_can_be_positive(context, site, position), sign_operands(site, _, position, _).
+.decl second_zero(context: Context, site: symbol, origin: symbol, cause: symbol)
+second_zero(context, site, origin, cause) :-
+  argument_can_be_zero(context, site, position, origin, cause), sign_operands(site, _, position, _).
+.decl third_negative(context: Context, site: symbol)
+third_negative(context, site) :-
+  argument_can_be_negative(context, site, position), sign_operands(site, _, _, position).
+.decl third_positive(context: Context, site: symbol)
+third_positive(context, site) :-
+  argument_can_be_positive(context, site, position), sign_operands(site, _, _, position).
+.decl third_zero(context: Context, site: symbol, origin: symbol, cause: symbol)
+third_zero(context, site, origin, cause) :-
+  argument_can_be_zero(context, site, position, origin, cause), sign_operands(site, _, _, position).
+
+// Where a value's zero comes from once an operation makes it non-negative:
+// the operand's own cause if it has one, else this call.
+.decl zero_kept(site: symbol, origin: symbol, cause: symbol, here: symbol, kept_origin: symbol, kept_cause: symbol) inline
+zero_kept(site, origin, cause, here, origin, cause) :-
+  cause != "input", strlen(site) > 0, strlen(here) > 0.
+zero_kept(site, origin, cause, here, site, here) :-
+  cause = "input", strlen(origin) >= 0, strlen(site) > 0, strlen(here) > 0.
+
+// A class's result signs. `positive`: exp, sigmoid, cosh.
+can_be_positive(context, function, "result", site) :- signed_call(context, site, function, "positive").
+
+// `preserve`: the result has the operand's signs (a reshape, a slice, an
+// odd function through zero like tanh).
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "preserve").
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "preserve").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "preserve").
+
+// `negate`.
+can_be_negative(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "negate").
+can_be_positive(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "negate").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "negate").
+
+// `absolute`, `norm`: never negative, zero where the operand is.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, class),
+  ( class = "absolute" ; class = "norm" ).
+can_be_positive(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, class),
+  ( class = "absolute" ; class = "norm" ).
+can_be_zero(context, function, "result", site, kept_origin, kept_cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, class),
+  ( class = "absolute" ; class = "norm" ),
+  zero_kept(site, origin, cause, class, kept_origin, kept_cause).
+
+// `root`: a square root, not negative (a negative operand is NaN).
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "root").
+can_be_zero(context, function, "result", site, kept_origin, kept_cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "root"),
+  zero_kept(site, origin, cause, "root", kept_origin, kept_cause).
+
+// `reciprocal_root`: positive where its operand is (a zero operand is the
+// division `divides_by` names).
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "reciprocal_root").
+
+// `logarithm`: any sign from a positive operand, and negative (an
+// infinity) from zero.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "logarithm").
+can_be_negative(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "logarithm").
+can_be_negative(context, function, "result", site) :-
+  first_zero(context, site, _, _), signed_call(context, site, function, "logarithm").
+can_be_zero(context, function, "result", site, "", "input") :-
+  first_positive(context, site), signed_call(context, site, function, "logarithm").
+
+// `round`: floor, ceil, round keep a sign, and take a value between -1
+// and 1 to zero.
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "round").
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "round").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "round").
+can_be_zero(context, function, "result", site, site, "round") :-
+  first_positive(context, site), signed_call(context, site, function, "round").
+can_be_zero(context, function, "result", site, site, "round") :-
+  first_negative(context, site), signed_call(context, site, function, "round").
+
+// `add`: a sum is zero where both are, or where they cancel.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "add").
+can_be_positive(context, function, "result", site) :-
+  second_positive(context, site), signed_call(context, site, function, "add").
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "add").
+can_be_negative(context, function, "result", site) :-
+  second_negative(context, site), signed_call(context, site, function, "add").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), second_zero(context, site, _, _),
+  signed_call(context, site, function, "add").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  second_zero(context, site, origin, cause), first_zero(context, site, _, _),
+  signed_call(context, site, function, "add").
+can_be_zero(context, function, "result", site, site, "cancel") :-
+  first_positive(context, site), second_negative(context, site),
+  signed_call(context, site, function, "add").
+can_be_zero(context, function, "result", site, site, "cancel") :-
+  first_negative(context, site), second_positive(context, site),
+  signed_call(context, site, function, "add").
+
+// `subtract`: a difference is zero where both are, or where they meet.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "subtract").
+can_be_positive(context, function, "result", site) :-
+  second_negative(context, site), signed_call(context, site, function, "subtract").
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "subtract").
+can_be_negative(context, function, "result", site) :-
+  second_positive(context, site), signed_call(context, site, function, "subtract").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), second_zero(context, site, _, _),
+  signed_call(context, site, function, "subtract").
+can_be_zero(context, function, "result", site, site, "cancel") :-
+  first_positive(context, site), second_positive(context, site),
+  signed_call(context, site, function, "subtract").
+can_be_zero(context, function, "result", site, site, "cancel") :-
+  first_negative(context, site), second_negative(context, site),
+  signed_call(context, site, function, "subtract").
+
+// `multiply`, `dot`: a product is zero where either operand is, and a
+// value times itself is a square, never negative.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), second_positive(context, site),
+  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ).
+can_be_positive(context, function, "result", site) :-
+  first_negative(context, site), second_negative(context, site),
+  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ).
+can_be_negative(context, function, "result", site) :-
+  first_positive(context, site), second_negative(context, site),
+  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
+  !squares(site).
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), second_positive(context, site),
+  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
+  !squares(site).
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause),
+  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
+  !squares(site).
+can_be_zero(context, function, "result", site, origin, cause) :-
+  second_zero(context, site, origin, cause),
+  signed_call(context, site, function, class), ( class = "multiply" ; class = "dot" ),
+  !squares(site).
+can_be_zero(context, function, "result", site, kept_origin, kept_cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "multiply"),
+  squares(site),
+  zero_kept(site, origin, cause, "square", kept_origin, kept_cause).
+
+// A product of a value with itself: both operands the one value.
+.decl squares(site: symbol)
+squares(site) :-
+  sign_rule(site, "multiply"),
+  flow_argument(site, function, 0, kind, source),
+  flow_argument(site, function, 1, kind, source),
+  1 = count : { flow_argument(site, function, 0, _, _) },
+  1 = count : { flow_argument(site, function, 1, _, _) }.
+
+// `divide`: signs as a product's, zero where the dividend is.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), second_positive(context, site),
+  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
+can_be_positive(context, function, "result", site) :-
+  first_negative(context, site), second_negative(context, site),
+  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
+can_be_negative(context, function, "result", site) :-
+  first_positive(context, site), second_negative(context, site),
+  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), second_positive(context, site),
+  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause),
+  signed_call(context, site, function, class), ( class = "divide" ; class = "quotient" ).
+
+// `quotient`: an integer quotient is also zero where the dividend is
+// smaller than the divisor.
+can_be_zero(context, function, "result", site, site, "quotient") :-
+  first_positive(context, site), signed_call(context, site, function, "quotient").
+can_be_zero(context, function, "result", site, site, "quotient") :-
+  first_negative(context, site), signed_call(context, site, function, "quotient").
+
+// `remainder`: the dividend's sign, and zero where the division is whole.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "remainder").
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "remainder").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "remainder").
+can_be_zero(context, function, "result", site, site, "remainder") :-
+  first_positive(context, site), signed_call(context, site, function, "remainder").
+can_be_zero(context, function, "result", site, site, "remainder") :-
+  first_negative(context, site), signed_call(context, site, function, "remainder").
+
+// `maximum`: positive where either is, negative where both are, and zero
+// where one is and the other is not above it (a clamp at zero).
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "maximum").
+can_be_positive(context, function, "result", site) :-
+  second_positive(context, site), signed_call(context, site, function, "maximum").
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), second_negative(context, site),
+  signed_call(context, site, function, "maximum").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  first_zero(context, site, _, _), second_zero(context, site, _, _),
+  signed_call(context, site, function, "maximum").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  first_zero(context, site, _, _), second_negative(context, site),
+  signed_call(context, site, function, "maximum").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  second_zero(context, site, _, _), first_negative(context, site),
+  signed_call(context, site, function, "maximum").
+
+// `minimum`: the mirror of `maximum`.
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "minimum").
+can_be_negative(context, function, "result", site) :-
+  second_negative(context, site), signed_call(context, site, function, "minimum").
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), second_positive(context, site),
+  signed_call(context, site, function, "minimum").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  first_zero(context, site, _, _), second_zero(context, site, _, _),
+  signed_call(context, site, function, "minimum").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  first_zero(context, site, _, _), second_positive(context, site),
+  signed_call(context, site, function, "minimum").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  second_zero(context, site, _, _), first_positive(context, site),
+  signed_call(context, site, function, "minimum").
+
+// `clip`: within [low, high]: positive where high can be and the value
+// or low can be, negative likewise, zero where the range holds zero and
+// the value, low or high can be it.
+can_be_positive(context, function, "result", site) :-
+  third_positive(context, site), first_positive(context, site),
+  signed_call(context, site, function, "clip").
+can_be_positive(context, function, "result", site) :-
+  third_positive(context, site), second_positive(context, site),
+  signed_call(context, site, function, "clip").
+can_be_negative(context, function, "result", site) :-
+  second_negative(context, site), first_negative(context, site),
+  signed_call(context, site, function, "clip").
+can_be_negative(context, function, "result", site) :-
+  second_negative(context, site), third_negative(context, site),
+  signed_call(context, site, function, "clip").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), clip_holds_zero(context, site),
+  signed_call(context, site, function, "clip").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  second_zero(context, site, _, _), clip_reaches_high(context, site),
+  signed_call(context, site, function, "clip").
+can_be_zero(context, function, "result", site, site, "clamp") :-
+  third_zero(context, site, _, _), clip_reaches_low(context, site),
+  signed_call(context, site, function, "clip").
+
+// A clip's low bound can be at most zero, and its high at least zero.
+.decl clip_reaches_low(context: Context, site: symbol)
+clip_reaches_low(context, site) :- second_zero(context, site, _, _), sign_rule(site, "clip").
+clip_reaches_low(context, site) :- second_negative(context, site), sign_rule(site, "clip").
+.decl clip_reaches_high(context: Context, site: symbol)
+clip_reaches_high(context, site) :- third_zero(context, site, _, _), sign_rule(site, "clip").
+clip_reaches_high(context, site) :- third_positive(context, site), sign_rule(site, "clip").
+.decl clip_holds_zero(context: Context, site: symbol)
+clip_holds_zero(context, site) :- clip_reaches_low(context, site), clip_reaches_high(context, site).
+
+// `power`: an even integer power is a square, an odd one keeps the sign,
+// a zeroth is one; any other power is positive where the base is, and
+// zero where the base is.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "power").
+can_be_positive(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "power"),
+  !odd_power(site).
+can_be_positive(context, function, "result", site) :-
+  signed_call(context, site, function, "power"), power_of(site, 0).
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "power"),
+  !even_power(site).
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "power"),
+  !even_power(site), !power_of(site, 0).
+can_be_zero(context, function, "result", site, kept_origin, kept_cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "power"),
+  even_power(site),
+  zero_kept(site, origin, cause, "square", kept_origin, kept_cause).
+
+// A power written as an integer: `x ** 2`.
+.decl power_of(site: symbol, exponent: number)
+power_of(site, exponent) :-
+  sign_rule(site, "power"),
+  flow_argument(site, _, 1, "literal", text),
+  term_integer(text, 0, exponent).
+.decl even_power(site: symbol)
+even_power(site) :- power_of(site, exponent), exponent > 0, exponent % 2 = 0.
+.decl odd_power(site: symbol)
+odd_power(site) :- power_of(site, exponent), exponent > 0, exponent % 2 = 1.
+
+// `compare`: a comparison or logical operation is 1 where it holds and 0
+// where it does not.
+can_be_positive(context, function, "result", site) :- signed_call(context, site, function, "compare").
+can_be_zero(context, function, "result", site, site, "comparison") :-
+  signed_call(context, site, function, "compare").
+
+// `sum`: a sum or mean has its elements' signs, and is zero where they
+// all are, or where they cancel.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "sum").
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "sum").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "sum").
+can_be_zero(context, function, "result", site, site, "cancel") :-
+  first_positive(context, site), first_negative(context, site),
+  signed_call(context, site, function, "sum").
+
+// `product`: positive from positives, or from negatives paired; negative
+// where an element is; zero where one is.
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "product").
+can_be_positive(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "product").
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "product").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "product").
+
+// `index`, `identity`, `spread`: never negative, and zero by their own
+// math: an index or iota starts at zero, an identity matrix is zero off
+// its diagonal, a variance or standard deviation is zero where every
+// value is the same.
+can_be_positive(context, function, "result", site) :-
+  signed_call(context, site, function, class),
+  ( class = "index" ; class = "identity" ; class = "spread" ).
+can_be_zero(context, function, "result", site, site, class) :-
+  signed_call(context, site, function, class),
+  ( class = "index" ; class = "identity" ; class = "spread" ).
+
+// `fill`, `splice`: what either operand the class reads holds.
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, class),
+  ( class = "fill" ; class = "splice" ).
+can_be_negative(context, function, "result", site) :-
+  second_negative(context, site), signed_call(context, site, function, "splice").
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, class),
+  ( class = "fill" ; class = "splice" ).
+can_be_positive(context, function, "result", site) :-
+  second_positive(context, site), signed_call(context, site, function, "splice").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, class),
+  ( class = "fill" ; class = "splice" ).
+can_be_zero(context, function, "result", site, origin, cause) :-
+  second_zero(context, site, origin, cause), signed_call(context, site, function, "splice").
+
+// `select`: what either branch holds where its predicate takes it. A
+// branch taken only where a comparison of it with zero says it is not
+// zero is not zero, and one taken only where it is positive is not
+// negative either (`select_checks`): `Nx.select(Nx.equal(d, 0), 1, d)`.
+can_be_negative(context, function, "result", site) :-
+  first_negative(context, site), signed_call(context, site, function, "select"),
+  !select_checks(site, 1, "positive").
+can_be_negative(context, function, "result", site) :-
+  second_negative(context, site), signed_call(context, site, function, "select"),
+  !select_checks(site, 2, "positive").
+can_be_positive(context, function, "result", site) :-
+  first_positive(context, site), signed_call(context, site, function, "select").
+can_be_positive(context, function, "result", site) :-
+  second_positive(context, site), signed_call(context, site, function, "select").
+can_be_zero(context, function, "result", site, origin, cause) :-
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "select"),
+  !select_checks(site, 1, _).
+can_be_zero(context, function, "result", site, origin, cause) :-
+  second_zero(context, site, origin, cause), signed_call(context, site, function, "select"),
+  !select_checks(site, 2, _).
+
+// The branch of a select (`on_true` at 1, `on_false` at 2) its predicate
+// takes only where the branch's value is not zero, or is positive: the
+// predicate compares that value with a written zero.
+.decl select_checks(site: symbol, position: number, need: symbol)
+select_checks(site, position, need) :-
+  select_demand(site, function, predicate),
+  compares_with_zero(predicate, function, kind, source, relation),
+  flow_argument(site, function, position, kind, source),
+  1 = count : { flow_argument(site, function, position, _, _) },
+  branch_ensures(relation, position, need).
+
+// A select whose sign is asked of, and the one call its predicate comes
+// from. Asked in any context, as a select's checks hold in every one.
+.decl select_demand(site: symbol, function: symbol, predicate: symbol)
+select_demand(site, function, predicate) :-
+  signed_call(_, site, function, "select"),
+  operation_site(site, "Nx.select", 3),
+  flow_argument(site, function, 0, "result", predicate),
+  1 = count : { flow_argument(site, function, 0, _, _) }.
+
+.decl branch_ensures(relation: symbol, position: number, need: symbol)
+branch_ensures("equal", 2, "nonzero"). branch_ensures("not_equal", 1, "nonzero").
+branch_ensures("greater", 1, "positive"). branch_ensures("less_equal", 2, "positive").
+branch_ensures("less", 1, "nonzero"). branch_ensures("greater_equal", 2, "nonzero").
+
+// A select's predicate that compares a value with a written zero, as
+// `relation` of the value to zero, whichever side the zero is on.
+.decl compares_with_zero(comparison: symbol, function: symbol, kind: symbol, source: symbol, relation: symbol)
+compares_with_zero(comparison, function, kind, source, relation) :-
+  select_demand(_, function, comparison),
+  operation_site(comparison, operation, 2),
+  comparison_relation(operation, relation, _),
+  flow_argument(comparison, function, 0, kind, source),
+  kind != "literal",
+  flow_argument(comparison, function, 1, "literal", zero),
+  written_zero(zero).
+compares_with_zero(comparison, function, kind, source, relation) :-
+  select_demand(_, function, comparison),
+  operation_site(comparison, operation, 2),
+  comparison_relation(operation, _, relation),
+  flow_argument(comparison, function, 1, kind, source),
+  kind != "literal",
+  flow_argument(comparison, function, 0, "literal", zero),
+  written_zero(zero).
+
+// A comparison's relation of its first operand to its second, and of its
+// second to its first.
+.decl comparison_relation(operation: symbol, relation: symbol, reversed: symbol)
+comparison_relation("Nx.equal", "equal", "equal").
+comparison_relation("Nx.Defn.Kernel.__equal__", "equal", "equal").
+comparison_relation("Nx.not_equal", "not_equal", "not_equal").
+comparison_relation("Nx.Defn.Kernel.__not_equal__", "not_equal", "not_equal").
+comparison_relation("Nx.greater", "greater", "less").
+comparison_relation("Nx.Defn.Kernel.__more_than__", "greater", "less").
+comparison_relation("Nx.less", "less", "greater").
+comparison_relation("Nx.Defn.Kernel.__less_than__", "less", "greater").
+comparison_relation("Nx.greater_equal", "greater_equal", "less_equal").
+comparison_relation("Nx.Defn.Kernel.__more_than_equal_to__", "greater_equal", "less_equal").
+comparison_relation("Nx.less_equal", "less_equal", "greater_equal").
+comparison_relation("Nx.Defn.Kernel.__less_than_equal_to__", "less_equal", "greater_equal").
+
+// Each Nx function's sign class. A function with none can return any
+// sign.
+.decl sign_class(operation: symbol, class: symbol)
+sign_class("Nx.exp", "positive"). sign_class("Nx.sigmoid", "positive"). sign_class("Nx.cosh", "positive").
+sign_class(cat("Nx.", name), "preserve") :- sign_preserving(name).
+sign_class("Nx.Defn.Kernel.__unary_plus__", "preserve").
+sign_class("Nx.Defn.Kernel.stop_grad", "preserve").
+sign_class("Nx.Defn.Kernel.print_value", "preserve").
+sign_class("Nx.negate", "negate"). sign_class("Nx.Defn.Kernel.__unary_minus__", "negate").
+sign_class("Nx.abs", "absolute").
+sign_class("Nx.LinAlg.norm", "norm").
+sign_class("Nx.sqrt", "root").
+sign_class("Nx.rsqrt", "reciprocal_root").
+sign_class("Nx.log", "logarithm"). sign_class("Nx.log2", "logarithm"). sign_class("Nx.log10", "logarithm").
+sign_class("Nx.floor", "round"). sign_class("Nx.ceil", "round"). sign_class("Nx.round", "round").
+sign_class("Nx.add", "add"). sign_class("Nx.Defn.Kernel.+", "add").
+sign_class("Nx.subtract", "subtract"). sign_class("Nx.Defn.Kernel.-", "subtract").
+sign_class("Nx.multiply", "multiply"). sign_class("Nx.Defn.Kernel.*", "multiply").
+sign_class("Nx.dot", "dot"). sign_class("Nx.outer", "dot").
+sign_class("Nx.divide", "divide"). sign_class("Nx.Defn.Kernel./", "divide").
+sign_class("Nx.quotient", "quotient"). sign_class("Nx.Defn.Kernel.div", "quotient").
+sign_class("Nx.remainder", "remainder"). sign_class("Nx.Defn.Kernel.rem", "remainder").
+sign_class("Nx.max", "maximum"). sign_class("Nx.Defn.Kernel.max", "maximum").
+sign_class("Nx.min", "minimum"). sign_class("Nx.Defn.Kernel.min", "minimum").
+sign_class("Nx.clip", "clip").
+sign_class("Nx.pow", "power"). sign_class("Nx.Defn.Kernel.**", "power").
+sign_class(cat("Nx.", name), "compare") :- comparison(name).
+sign_class(cat("Nx.Defn.Kernel.", name), "compare") :- kernel_comparison(name).
+sign_class("Nx.sum", "sum"). sign_class("Nx.mean", "sum"). sign_class("Nx.cumulative_sum", "sum").
+sign_class("Nx.product", "product"). sign_class("Nx.cumulative_product", "product").
+sign_class("Nx.argmax", "index"). sign_class("Nx.argmin", "index"). sign_class("Nx.argsort", "index").
+sign_class("Nx.iota", "index").
+sign_class("Nx.eye", "identity").
+sign_class("Nx.variance", "spread"). sign_class("Nx.standard_deviation", "spread").
+sign_class("Nx.select", "select").
+sign_class("Nx.fill", "fill").
+sign_class("Nx.put_slice", "splice").
+sign_class("Nx.pad", "splice").
+
+// The functions whose result has the signs of their first operand: the
+// ones that move, pick or convert elements, and odd functions through zero.
+.decl sign_preserving(name: symbol)
+sign_preserving(name) :- moves_elements(name).
+sign_preserving("tanh"). sign_preserving("sinh"). sign_preserving("asinh").
+sign_preserving("atan"). sign_preserving("erf"). sign_preserving("erf_inv").
+sign_preserving("cbrt"). sign_preserving("expm1"). sign_preserving("log1p").
+sign_preserving("sign").
+
+// The functions whose result's elements are some of their first
+// operand's: they move, pick or convert them.
+.decl moves_elements(name: symbol)
+moves_elements("reshape"). moves_elements("transpose"). moves_elements("squeeze").
+moves_elements("new_axis"). moves_elements("broadcast"). moves_elements("slice").
+moves_elements("slice_along_axis"). moves_elements("reverse"). moves_elements("rename").
+moves_elements("as_type"). moves_elements("vectorize"). moves_elements("devectorize").
+moves_elements("revectorize"). moves_elements("take"). moves_elements("gather").
+moves_elements("take_along_axis"). moves_elements("sort"). moves_elements("flatten").
+moves_elements("tile"). moves_elements("tensor"). moves_elements("reduce_max").
+moves_elements("reduce_min"). moves_elements("cumulative_max"). moves_elements("cumulative_min").
+
+// The comparisons and logical operations, which give 0 or 1.
+.decl comparison(name: symbol)
+comparison("equal"). comparison("not_equal"). comparison("greater"). comparison("less").
+comparison("greater_equal"). comparison("less_equal"). comparison("logical_and").
+comparison("logical_or"). comparison("logical_xor"). comparison("logical_not").
+comparison("is_nan"). comparison("is_infinity").
+
+// The comparisons and logical operators a `defn` writes, as it compiles
+// them: `==` to `__equal__`, `and` to `__and__`, and so on.
+.decl kernel_comparison(name: symbol)
+kernel_comparison("__equal__"). kernel_comparison("__not_equal__").
+kernel_comparison("__less_than__"). kernel_comparison("__more_than__").
+kernel_comparison("__less_than_equal_to__"). kernel_comparison("__more_than_equal_to__").
+kernel_comparison("__and__"). kernel_comparison("__or__"). kernel_comparison("__not__").
+
+// ── Where a value lies against ±1 ─────────────────────────────────
+//
+// For the functions defined on only part of the line, where a value's
+// elements can lie against ±1: below -1 ("below"), at -1 ("minus_one"),
+// between -1 and 1 ("inside"), at 1 ("one") or above 1 ("above"). Each
+// region some element can be in, on some path, is a row, with the call
+// that puts it there (`origin`, "" for a written number) and how
+// (`cause`): a tanh or erf rounds to ±1 for large inputs ("saturation"),
+// a clip reaches its bounds ("clip"), a cosine similarity or a vector
+// over its norm is within ±1 only before rounding ("rounding"). A value
+// the rules do not follow can be anywhere ("input"), and so can what an
+// Nx call they give no region rule returns ("unbounded").
+//
+// Asked of the same values as signs are (`sign_demand`), and followed
+// the same way through calls and returns.
+
+.decl in_region(context: Context, function: symbol, kind: symbol, source: symbol, region: symbol, origin: symbol, cause: symbol)
+
+// The regions, in order along the line.
+.decl region_order(region: symbol, order: number)
+region_order("below", 0). region_order("minus_one", 1). region_order("inside", 2).
+region_order("one", 3). region_order("above", 4).
+
+.decl past_one(region: symbol)
+past_one("below"). past_one("above").
+
+// An argument of a call in a context can be in the region.
+.decl argument_region(context: Context, site: symbol, position: number, region: symbol, origin: symbol, cause: symbol)
+argument_region(context, site, position, region, origin, cause) :-
+  in_region(context, function, kind, source, region, origin, cause),
+  signed_argument(context, site, position, function, kind, source).
+
+// The regions of a call's operands, by the slot the sign rules read them
+// in (`sign_operands`).
+.decl operand_region(context: Context, site: symbol, slot: number, region: symbol, origin: symbol, cause: symbol)
+operand_region(context, site, 1, region, origin, cause) :-
+  argument_region(context, site, position, region, origin, cause), sign_operands(site, position, _, _).
+operand_region(context, site, 2, region, origin, cause) :-
+  argument_region(context, site, position, region, origin, cause), sign_operands(site, _, position, _).
+operand_region(context, site, 3, region, origin, cause) :-
+  argument_region(context, site, position, region, origin, cause), sign_operands(site, _, _, position).
+
+// A value the rules hold: a written number by where it lies, a size,
+// which is at least 1, and a value not known, which can be anywhere.
+in_region(context, function, "literal", source, region, "", "written") :-
+  signed_by_value(context, function, "literal", source),
+  value_of(context, function, "literal", source, value),
+  value_region(value, region, _).
+in_region(context, function, kind, source, region, "", cause) :-
+  signed_by_value(context, function, kind, source),
+  kind != "literal",
+  value_of(context, function, kind, source, value),
+  value_region(value, region, cause).
+
+// The values whose regions their value says.
+.decl region_value(value: Value)
+region_value(value) :-
+  signed_by_value(context, function, kind, source),
+  value_of(context, function, kind, source, value).
+
+.decl value_region(value: Value, region: symbol, cause: symbol)
+value_region(value, region, "input") :-
+  region_value(value), value = $Opaque(_), region_order(region, _).
+value_region(value, region, "input") :-
+  region_value(value), value = $Integer([0, nil]), region_order(region, _).
+value_region(value, "one", "size") :- region_value(value), value = $Integer([1, nil]).
+value_region(value, "one", "size") :- region_value(value), value = $Integer([1, [_, _]]).
+value_region(value, "above", "size") :-
+  region_value(value), value = $Integer([coefficient, nil]), coefficient > 1.
+value_region(value, "above", "size") :-
+  region_value(value), value = $Integer([coefficient, [_, _]]), coefficient > 0.
+value_region(value, region, "written") :-
+  region_value(value), value = $Term(text, start),
+  term_spelling(text, start, spelled), literal_region(spelled, region).
+
+// Where a written number lies, by its spelling, for the numbers asked of.
+.decl region_spelling(text: symbol)
+region_spelling(spelled) :-
+  region_value($Term(text, start)), term_spelling(text, start, spelled).
+region_spelling(text) :- guard_literal(text).
+region_spelling(text) :- clip_demand(site, function), flow_argument(site, function, _, "literal", text).
+
+.decl literal_region(text: symbol, region: symbol)
+literal_region(text, "minus_one") :- region_spelling(text), match("-1(\\.0+)?", text).
+literal_region(text, "one") :- region_spelling(text), match("1(\\.0+)?", text).
+literal_region(text, "inside") :- region_spelling(text), inside_literal(text).
+literal_region(text, "above") :-
+  region_spelling(text),
+  match("[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text),
+  !match("1(\\.0+)?", text), !inside_literal(text).
+literal_region(text, "below") :-
+  region_spelling(text),
+  match("-[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text),
+  !match("-1(\\.0+)?", text), !inside_literal(text).
+
+// A number spelled with no whole part, or with a negative exponent on a
+// single digit, as Elixir spells a float below 1.
+.decl inside_literal(text: symbol) inline
+inside_literal(text) :- match("-?0(\\.[0-9]+)?", text).
+inside_literal(text) :- match("-?[0-9](\\.[0-9]+)?e-[0-9]+", text).
+
+// A tensor the rules do not follow can be anywhere, and so can what an
+// Nx call with no region rule returns.
+in_region(context, function, kind, source, region, "", "input") :-
+  followed_unknown(context, function, kind, source),
+  region_order(region, _).
+in_region(context, function, "result", site, region, site, "unbounded") :-
+  sign_demand(context, function, "result", site),
+  operation_site(site, _, _),
+  !unit_rule(site, _),
+  region_order(region, _).
+
+// What a call returns: what the function it runs returns there.
+in_region(context, function, "result", site, region, origin, cause) :-
+  in_region(callee_context, callee, kind, source, region, origin, cause),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  sign_demand(context, function, "result", site).
+
+// A parameter of a canonical context the program enters only through its
+// calls, and of a call's own context: the arguments the calls hand it.
+in_region($Canonical(function, arguments), function, "param", to_string(position), region, origin, cause) :-
+  in_region(caller, caller_function, kind, source, region, origin, cause),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
+in_region($Called(site, caller), callee, "param", to_string(position), region, origin, cause) :-
+  in_region(caller, caller_function, kind, source, region, origin, cause),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  sign_demand($Called(site, caller), callee, "param", to_string(position)).
+
+// The Nx call at `site` has region class `class`, and a value in a
+// context is its result.
+.decl unit_rule(site: symbol, class: symbol)
+unit_rule(site, class) :-
+  operation_site(site, operation, _),
+  unit_class(operation, class).
+
+.decl unit_call(context: Context, site: symbol, function: symbol, class: symbol)
+unit_call(context, site, function, class) :-
+  sign_demand(context, function, "result", site),
+  unit_rule(site, class).
+
+// A class whose result lies where it does whatever its operand: tanh
+// and erf round to ±1, sine and cosine reach it, a sigmoid rounds to 1,
+// a comparison is 0 or 1, cosh is at least 1.
+in_region(context, function, "result", site, region, site, cause) :-
+  unit_call(context, site, function, class),
+  class_region(class, region, cause).
+
+.decl class_region(class: symbol, region: symbol, cause: symbol)
+class_region("saturating", "minus_one", "saturation"). class_region("saturating", "inside", "saturation").
+class_region("saturating", "one", "saturation").
+class_region("logistic", "inside", "saturation"). class_region("logistic", "one", "saturation").
+class_region("trigonometric", "minus_one", "trigonometric").
+class_region("trigonometric", "inside", "trigonometric"). class_region("trigonometric", "one", "trigonometric").
+class_region("sign", "minus_one", "sign"). class_region("sign", "inside", "sign"). class_region("sign", "one", "sign").
+class_region("compare", "inside", "comparison"). class_region("compare", "one", "comparison").
+class_region("identity", "inside", "identity"). class_region("identity", "one", "identity").
+class_region("index", "inside", "index"). class_region("index", "one", "index").
+class_region("index", "above", "index").
+class_region("cosh", "one", "cosh"). class_region("cosh", "above", "cosh").
+
+// `move` keeps the operand's regions, `negate` mirrors them, `absolute`
+// folds them onto the positive side. `select`: where either branch is.
+in_region(context, function, "result", site, image, origin, cause) :-
+  operand_region(context, site, 1, region, origin, cause),
+  unit_call(context, site, function, class),
+  region_image(class, region, image).
+in_region(context, function, "result", site, region, origin, cause) :-
+  operand_region(context, site, _, region, origin, cause),
+  unit_call(context, site, function, "select").
+
+.decl region_image(class: symbol, region: symbol, image: symbol)
+region_image("move", region, region) :- region_order(region, _).
+region_image("negate", region, image) :-
+  region_order(region, order), region_order(image, 4 - order).
+region_image("absolute", region, image) :-
+  region_order(region, order), region_order(image, max(order, 4 - order)).
+
+// `clip`: where the operand is, moved in to the bounds where they are
+// written, which it reaches there.
+in_region(context, function, "result", site, region, origin, cause) :-
+  operand_region(context, site, 1, region, origin, cause),
+  unit_call(context, site, function, "clip"),
+  clip_bounds(site, low, high),
+  clipped_region(low, high, region, region).
+in_region(context, function, "result", site, bound, site, "clip") :-
+  operand_region(context, site, 1, region, _, _),
+  unit_call(context, site, function, "clip"),
+  clip_bounds(site, low, high),
+  clipped_region(low, high, region, bound),
+  bound != region.
+
+// Where a clip between bounds in regions of orders `low` and `high` takes
+// a region.
+.decl clipped_region(low: number, high: number, region: symbol, clipped: symbol)
+clipped_region(low, high, region, clipped) :-
+  region_order(_, low),
+  region_order(_, high),
+  low <= high,
+  region_order(region, order),
+  region_order(clipped, max(low, min(high, order))).
+
+// The regions of a clip's bounds, by order: those written, and the whole
+// line for one computed.
+.decl clip_bounds(site: symbol, low: number, high: number)
+clip_bounds(site, low, high) :- written_clip(site, low, high).
+clip_bounds(site, 0, 4) :-
+  clip_demand(site, _),
+  !written_clip_site(site).
+
+.decl written_clip(site: symbol, low: number, high: number)
+written_clip(site, low, high) :-
+  clip_demand(site, function),
+  flow_argument(site, function, 1, "literal", low_text),
+  flow_argument(site, function, 2, "literal", high_text),
+  1 = count : { flow_argument(site, function, 1, _, _) },
+  1 = count : { flow_argument(site, function, 2, _, _) },
+  literal_region(low_text, low_region),
+  region_order(low_region, low),
+  literal_region(high_text, high_region),
+  region_order(high_region, high).
+
+.decl written_clip_site(site: symbol)
+written_clip_site(site) :- written_clip(site, _, _).
+
+// A clip whose regions are asked of.
+.decl clip_demand(site: symbol, function: symbol)
+clip_demand(site, function) :-
+  sign_demand(_, function, "result", site),
+  operation_site(site, "Nx.clip", 3).
+
+// `maximum`, `minimum`, `multiply`: from a pair of regions its operands
+// can be in, the region of the result, with the origin and cause of the
+// operand that puts it there (`paired_region`).
+in_region(context, function, "result", site, region, origin, cause) :-
+  region_pair(context, site, first, second),
+  unit_call(context, site, function, class),
+  paired_region(class, first, second, region, slot, from),
+  operand_region(context, site, slot, from, origin, cause).
+
+// Two regions a call's first two operands can be in.
+.decl region_pair(context: Context, site: symbol, first: symbol, second: symbol)
+region_pair(context, site, first, second) :-
+  operand_region(context, site, 1, first, _, _),
+  operand_region(context, site, 2, second, _, _).
+
+// The region of a pair's result, and the operand, by slot and region,
+// whose origin it takes: the larger or smaller of a maximum's or
+// minimum's, the one of a product's past ±1 or at it before the other.
+.decl paired_region(class: symbol, first: symbol, second: symbol, region: symbol, slot: number, from: symbol)
+paired_region("maximum", first, second, first, 1, first) :-
+  region_order(first, first_order), region_order(second, second_order), first_order >= second_order.
+paired_region("maximum", first, second, second, 2, second) :-
+  region_order(first, first_order), region_order(second, second_order), first_order < second_order.
+paired_region("minimum", first, second, first, 1, first) :-
+  region_order(first, first_order), region_order(second, second_order), first_order <= second_order.
+paired_region("minimum", first, second, second, 2, second) :-
+  region_order(first, first_order), region_order(second, second_order), first_order > second_order.
+paired_region("multiply", first, second, product, 1, first) :-
+  region_product(first, second, product),
+  region_magnitude(first, first_magnitude), region_magnitude(second, second_magnitude),
+  first_magnitude >= second_magnitude.
+paired_region("multiply", first, second, product, 2, second) :-
+  region_product(first, second, product),
+  region_magnitude(first, first_magnitude), region_magnitude(second, second_magnitude),
+  first_magnitude < second_magnitude.
+
+// How far a region is from inside: 0 inside, 1 at ±1, 2 past it.
+.decl region_magnitude(region: symbol, magnitude: number)
+region_magnitude(region, max(order - 2, 2 - order)) :- region_order(region, order).
+
+.decl region_product(first: symbol, second: symbol, product: symbol)
+region_product("inside", "inside", "inside").
+region_product("inside", "minus_one", "inside").
+region_product("inside", "one", "inside").
+region_product("inside", past, region) :- past_one(past), region_order(region, _).
+region_product("minus_one", "minus_one", "one").
+region_product("minus_one", "one", "minus_one").
+region_product("one", "one", "one").
+region_product("one", past, past) :- past_one(past).
+region_product("minus_one", "below", "above").
+region_product("minus_one", "above", "below").
+region_product("above", "above", "above").
+region_product("below", "below", "above").
+region_product("above", "below", "below").
+region_product(second, first, product) :- region_product(first, second, product).
+
+// `ratio`: a division, dot product or sum is within ±1 before rounding
+// where it is a unit ratio, and anywhere otherwise.
+in_region(context, function, "result", site, region, site, "rounding") :-
+  unit_call(context, site, function, "ratio"),
+  unit_ratio(site),
+  region_order(region, _).
+in_region(context, function, "result", site, region, site, "unbounded") :-
+  unit_call(context, site, function, "ratio"),
+  !unit_ratio(site),
+  region_order(region, _).
+
+// A value exact arithmetic keeps within ±1: a vector over its norm, an
+// inner product over the product of its operands' norms (a cosine
+// similarity), or an inner product of two vectors over their norms.
+.decl unit_ratio(site: symbol)
+unit_ratio(site) :- normalized(site).
+unit_ratio(site) :-
+  ratio_demand(site),
+  divides_by(site, 1),
+  flow_argument(site, function, 0, "result", product),
+  inner_product(product, function, left_kind, left, right_kind, right),
+  flow_argument(site, function, 1, "result", divisor),
+  at_least_norms(divisor, function, left_kind, left, right_kind, right).
+unit_ratio(site) :-
+  ratio_demand(site),
+  inner_product(site, function, "result", left, "result", right),
+  unit_vector(left, function),
+  unit_vector(right, function).
+
+// A vector over its norm, or anything at least its norm.
+.decl normalized(site: symbol)
+normalized(site) :-
+  ratio_demand(site),
+  divides_by(site, 1),
+  flow_argument(site, function, 0, kind, source),
+  flow_argument(site, function, 1, "result", divisor),
+  at_least_norm(divisor, function, kind, source).
+
+// A vector over its norm, as it is or moved.
+.decl unit_vector(site: symbol, function: symbol)
+unit_vector(site, function) :- normalized(site), site_function(site, function).
+unit_vector(site, function) :-
+  flow_argument(site, function, 0, "result", vector),
+  unit_rule(site, "move"),
+  unit_vector(vector, function).
+
+// A division, dot product or sum whose regions are asked of.
+.decl ratio_demand(site: symbol)
+ratio_demand(site) :- unit_call(_, site, _, "ratio").
+
+// A dot product, or a sum of a product, and its two operands.
+.decl inner_product(site: symbol, function: symbol, left_kind: symbol, left: symbol, right_kind: symbol, right: symbol)
+inner_product(site, function, left_kind, left, right_kind, right) :-
+  inner_demand(site),
+  operation_site(site, "Nx.dot", arity),
+  inner_operands(arity, left_position, right_position),
+  flow_argument(site, function, left_position, left_kind, left),
+  flow_argument(site, function, right_position, right_kind, right).
+inner_product(site, function, left_kind, left, right_kind, right) :-
+  inner_demand(site),
+  operation_site(site, "Nx.sum", _),
+  flow_argument(site, function, 0, "result", product),
+  unit_rule(product, "multiply"),
+  flow_argument(product, function, 0, left_kind, left),
+  flow_argument(product, function, 1, right_kind, right).
+
+// The calls asked whether they are inner products: a unit ratio's
+// dividend, the ratio itself, and what a square root is of.
+.decl inner_demand(site: symbol)
+inner_demand(site) :- ratio_demand(site).
+inner_demand(product) :-
+  ratio_demand(site),
+  divides_by(site, 1),
+  flow_argument(site, _, 0, "result", product).
+inner_demand(product) :-
+  norm_demand(site, function),
+  operation_site(site, "Nx.sqrt", 1),
+  flow_argument(site, function, 0, "result", product).
+
+.decl inner_operands(arity: number, left: number, right: number)
+inner_operands(2, 0, 1). inner_operands(4, 0, 2). inner_operands(6, 0, 3).
+
+// The norm of a value: `Nx.LinAlg.norm`, or the square root of its inner
+// product with itself.
+.decl norm_of(site: symbol, function: symbol, kind: symbol, source: symbol)
+norm_of(site, function, kind, source) :-
+  norm_demand(site, function),
+  operation_site(site, "Nx.LinAlg.norm", _),
+  flow_argument(site, function, 0, kind, source).
+norm_of(site, function, kind, source) :-
+  norm_demand(site, function),
+  operation_site(site, "Nx.sqrt", 1),
+  flow_argument(site, function, 0, "result", product),
+  inner_product(product, function, kind, source, kind, source).
+
+// At least the norm of a value: its norm, as it is or moved, the larger of
+// it and anything, or it plus a positive number.
+.decl at_least_norm(site: symbol, function: symbol, kind: symbol, source: symbol)
+at_least_norm(site, function, kind, source) :- norm_of(site, function, kind, source).
+at_least_norm(site, function, kind, source) :-
+  norm_demand(site, function),
+  norm_widening(site, function, position),
+  flow_argument(site, function, position, "result", norm),
+  at_least_norm(norm, function, kind, source).
+
+// At least the product of two values' norms, likewise.
+.decl at_least_norms(site: symbol, function: symbol, left_kind: symbol, left: symbol, right_kind: symbol, right: symbol)
+at_least_norms(site, function, left_kind, left, right_kind, right) :-
+  norm_demand(site, function),
+  unit_rule(site, "multiply"),
+  flow_argument(site, function, 0, "result", first),
+  flow_argument(site, function, 1, "result", second),
+  at_least_norm(first, function, left_kind, left),
+  at_least_norm(second, function, right_kind, right).
+at_least_norms(site, function, left_kind, left, right_kind, right) :-
+  norm_demand(site, function),
+  unit_rule(site, "multiply"),
+  flow_argument(site, function, 0, "result", first),
+  flow_argument(site, function, 1, "result", second),
+  at_least_norm(first, function, right_kind, right),
+  at_least_norm(second, function, left_kind, left).
+at_least_norms(site, function, left_kind, left, right_kind, right) :-
+  norm_demand(site, function),
+  norm_widening(site, function, position),
+  flow_argument(site, function, position, "result", norms),
+  at_least_norms(norms, function, left_kind, left, right_kind, right).
+
+// The operand a call keeps a lower bound of: a move's, either of a
+// maximum's, and an addition's where the other operand is a positive
+// written number.
+.decl norm_widening(site: symbol, function: symbol, position: number)
+norm_widening(site, function, 0) :- norm_demand(site, function), unit_rule(site, "move").
+norm_widening(site, function, position) :-
+  norm_demand(site, function),
+  unit_rule(site, "maximum"),
+  flow_argument(site, function, position, _, _).
+norm_widening(site, function, 0) :-
+  norm_demand(site, function),
+  sign_rule(site, "add"),
+  flow_argument(site, function, 1, "literal", text),
+  positive_literal(text).
+norm_widening(site, function, 1) :-
+  norm_demand(site, function),
+  sign_rule(site, "add"),
+  flow_argument(site, function, 0, "literal", text),
+  positive_literal(text).
+
+// The calls asked whether they are at least a norm: a unit ratio's
+// divisor, and what a lower bound or product of norms is made of.
+.decl norm_demand(site: symbol, function: symbol)
+norm_demand(divisor, function) :-
+  ratio_demand(site),
+  divides_by(site, 1),
+  flow_argument(site, function, 1, "result", divisor).
+norm_demand(operand, function) :-
+  norm_demand(site, function),
+  unit_rule(site, class),
+  ( class = "move" ; class = "maximum" ; class = "multiply" ),
+  flow_argument(site, function, _, "result", operand).
+norm_demand(operand, function) :-
+  norm_demand(site, function),
+  sign_rule(site, "add"),
+  flow_argument(site, function, _, "result", operand).
+
+// Each Nx function's region class. A function with none can return
+// anything.
+.decl unit_class(operation: symbol, class: symbol)
+unit_class(cat("Nx.", name), "move") :- moves_elements(name).
+unit_class("Nx.mean", "move"). unit_class("Nx.Defn.Kernel.stop_grad", "move").
+unit_class("Nx.Defn.Kernel.print_value", "move"). unit_class("Nx.Defn.Kernel.__unary_plus__", "move").
+unit_class("Nx.negate", "negate"). unit_class("Nx.Defn.Kernel.__unary_minus__", "negate").
+unit_class("Nx.abs", "absolute").
+unit_class("Nx.tanh", "saturating"). unit_class("Nx.erf", "saturating").
+unit_class("Nx.sigmoid", "logistic").
+unit_class("Nx.sin", "trigonometric"). unit_class("Nx.cos", "trigonometric").
+unit_class("Nx.sign", "sign").
+unit_class("Nx.cosh", "cosh").
+unit_class("Nx.divide", "ratio"). unit_class("Nx.Defn.Kernel./", "ratio").
+unit_class("Nx.dot", "ratio"). unit_class("Nx.sum", "ratio").
+unit_class(operation, class) :-
+  sign_class(operation, class),
+  ( class = "compare" ; class = "index" ; class = "identity" ; class = "select" ;
+    class = "clip" ; class = "maximum" ; class = "minimum" ; class = "multiply" ).
+
+// ══ Tensor types ════════════════════════════════════════════════════
+//
+// What kind of number a value's elements are, for the Nx calls that take
+// only integers, and the types tensors are made in, for a backend that
+// lacks some.
+//
+// A value's classes are "integer", "float" and "complex", a row for each
+// some path gives it, with the call that makes it so (`origin`, "" for a
+// written number). An Nx call's result follows from its operands' as
+// `Nx.Type` has it: a float operand makes the result a float, division and
+// the transcendental functions make one, comparisons, indices and bitwise
+// operations give integers, and a type the call is given gives its own. A
+// value the rules do not follow has no class: its type is not known, and
+// nothing is reported of it.
+//
+// Asked of the same values as signs are (`sign_demand`), from the operands
+// of the calls that take only integers.
+
+// An Nx call defined only on integers whose operand can be a float or a
+// complex number: a bitwise operation, an integer quotient, the indices of
+// a take, gather or indexed update. Nx raises.
+.decl non_integer_operand(context: Context, site: symbol, position: number, class: symbol, origin: symbol)
+non_integer_operand(context, site, position, class, origin) :-
+  integer_only(site, position),
+  argument_class(context, site, position, class, origin),
+  class != "integer".
+
+// An Nx call that makes a tensor of a type the backend does not support.
+.decl makes_unsupported_type(context: Context, site: symbol, name: symbol)
+makes_unsupported_type(context, site, name) :-
+  given_type(context, site, name, _),
+  unsupported_type(name).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The operands of the Nx calls defined only on integers.
+.decl integer_only(site: symbol, position: number)
+integer_only(site, position) :-
+  operation_site(site, operation, arity),
+  integer_operand(operation, arity, position).
+
+.decl integer_operand(operation: symbol, arity: number, position: number)
+integer_operand(cat("Nx.", name), 2, 0) :- integer_binary(name).
+integer_operand(cat("Nx.", name), 2, 1) :- integer_binary(name).
+integer_operand(cat("Nx.Defn.Kernel.", name), 2, 0) :- kernel_integer_binary(name).
+integer_operand(cat("Nx.Defn.Kernel.", name), 2, 1) :- kernel_integer_binary(name).
+integer_operand(cat("Nx.", name), 1, 0) :- integer_unary(name).
+integer_operand(cat("Nx.", name), arity, 1) :- takes_indices(name, arity).
+
+.decl integer_binary(name: symbol)
+integer_binary("bitwise_and"). integer_binary("bitwise_or"). integer_binary("bitwise_xor").
+integer_binary("left_shift"). integer_binary("right_shift"). integer_binary("quotient").
+
+.decl kernel_integer_binary(name: symbol)
+kernel_integer_binary("div"). kernel_integer_binary("&&&"). kernel_integer_binary("|||").
+kernel_integer_binary("<<<"). kernel_integer_binary(">>>").
+
+.decl integer_unary(name: symbol)
+integer_unary("bitwise_not"). integer_unary("population_count"). integer_unary("count_leading_zeros").
+
+// The functions whose second operand is indices, by arity.
+.decl takes_indices(name: symbol, arity: number)
+takes_indices("take", 2). takes_indices("take", 3).
+takes_indices("take_along_axis", 2). takes_indices("take_along_axis", 3).
+takes_indices("gather", 2). takes_indices("gather", 3).
+takes_indices("indexed_add", 3). takes_indices("indexed_add", 4).
+takes_indices("indexed_put", 3). takes_indices("indexed_put", 4).
+
+// An argument of a call in a context can be of the class.
+.decl argument_class(context: Context, site: symbol, position: number, class: symbol, origin: symbol)
+argument_class(context, site, position, class, origin) :-
+  value_class(context, function, kind, source, class, origin),
+  signed_argument(context, site, position, function, kind, source).
+
+// An argument whose every class in some context is one other than an
+// integer, which Nx rejects on every path there.
+.decl never_integer(site: symbol, position: number)
+never_integer(site, position) :-
+  non_integer_operand(context, site, position, _, _),
+  !argument_class(context, site, position, "integer", _).
+
+.decl value_class(context: Context, function: symbol, kind: symbol, source: symbol, class: symbol, origin: symbol)
+
+// A value the rules hold: a written integer or float, and a size, which is
+// an integer.
+value_class(context, function, kind, source, class, "") :-
+  signed_by_value(context, function, kind, source),
+  value_of(context, function, kind, source, value),
+  value_class_of(value, class).
+
+.decl value_class_of(value: Value, class: symbol)
+value_class_of(value, "integer") :- region_value(value), value = $Integer(_).
+value_class_of(value, "integer") :-
+  region_value(value), value = $Term(text, start), term_integer(text, start, _).
+value_class_of(value, "float") :-
+  region_value(value), value = $Term(text, start), term_float(text, start).
+value_class_of(value, class) :-
+  region_value(value), value = $Term(text, start), term_list(text, start),
+  term_spelling(text, start, spelled), list_class(spelled, class).
+
+// A written list of numbers is a float where any of them is.
+.decl list_class(spelled: symbol, class: symbol) inline
+list_class(spelled, "float") :- match(".*[0-9]\\.[0-9].*", spelled).
+list_class(spelled, "integer") :- match("[-0-9, \\[\\]]*[0-9][-0-9, \\[\\]]*", spelled).
+
+// What a call returns: what the function it runs returns there.
+value_class(context, function, "result", site, class, origin) :-
+  value_class(callee_context, callee, kind, source, class, origin),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  sign_demand(context, function, "result", site).
+
+// A parameter of a canonical context the program enters only through its
+// calls, and of a call's own context: the arguments the calls hand it.
+value_class($Canonical(function, arguments), function, "param", to_string(position), class, origin) :-
+  value_class(caller, caller_function, kind, source, class, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
+value_class($Called(site, caller), callee, "param", to_string(position), class, origin) :-
+  value_class(caller, caller_function, kind, source, class, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  sign_demand($Called(site, caller), callee, "param", to_string(position)).
+
+// The Nx call at `site` has type class `class`, and a value in a context
+// is its result.
+.decl type_rule(site: symbol, class: symbol)
+type_rule(site, class) :-
+  operation_site(site, operation, _),
+  type_class(operation, class).
+type_rule(site, "typed") :-
+  remote_call(site, _, "Nx.Constants", _, _).
+
+.decl type_call(context: Context, site: symbol, function: symbol, class: symbol)
+type_call(context, site, function, class) :-
+  sign_demand(context, function, "result", site),
+  type_rule(site, class).
+
+// `float`, `integer`: a class whatever the operands'.
+value_class(context, function, "result", site, class, site) :-
+  type_call(context, site, function, class),
+  ( class = "float" ; class = "integer" ).
+
+// `move`: the class of the first operand. `merge`: of any operand the
+// class reads.
+value_class(context, function, "result", site, class, origin) :-
+  argument_class(context, site, position, class, origin),
+  sign_operands(site, position, _, _),
+  type_call(context, site, function, "move").
+value_class(context, function, "result", site, class, origin) :-
+  argument_class(context, site, position, class, origin),
+  read_operand(site, position),
+  type_call(context, site, function, "merge").
+
+// A position a call's sign rules read (`sign_operands`).
+.decl read_operand(site: symbol, position: number)
+read_operand(site, position) :- sign_operands(site, position, _, _).
+read_operand(site, position) :- sign_operands(site, _, position, _).
+read_operand(site, position) :- sign_operands(site, _, _, position).
+
+// `typed`: the class of the type the call is given, and where it is given
+// none, of its default: an integer for iota and eye, a float for a random
+// uniform or normal sample and a constant, and a tensor's data's class.
+value_class(context, function, "result", site, class, site) :-
+  type_call(context, site, function, "typed"),
+  given_type(context, site, _, class).
+value_class(context, function, "result", site, class, site) :-
+  type_call(context, site, function, "typed"),
+  type_default(site, class),
+  !type_given(site).
+value_class(context, function, "result", site, class, origin) :-
+  type_call(context, site, function, "typed"),
+  operation_site(site, "Nx.tensor", _),
+  !type_given(site),
+  argument_class(context, site, 0, class, origin).
+
+.decl type_default(site: symbol, class: symbol)
+type_default(site, class) :-
+  operation_site(site, operation, _),
+  default_class(operation, class).
+type_default(site, "float") :-
+  remote_call(site, _, "Nx.Constants", _, _).
+
+.decl default_class(operation: symbol, class: symbol)
+default_class("Nx.iota", "integer"). default_class("Nx.eye", "integer").
+default_class("Nx.Random.uniform", "float"). default_class("Nx.Random.normal", "float").
+default_class("Nx.Random.randint", "integer").
+
+// A call given a type, by option or argument, known or not.
+.decl type_given(site: symbol)
+type_given(site) :- option_given(site, "type").
+type_given(site) :- type_position(site, position), flow_argument(site, _, position, _, _).
+
+// The type a call in a context is given, by name (`f32`), and its class:
+// its `type:` option, or its type argument, where it is written or a value
+// the rules hold.
+.decl given_type(context: Context, site: symbol, name: symbol, class: symbol)
+given_type(context, site, name, class) :-
+  type_asked(context, site),
+  option(site, "type", text, start),
+  term_spelling(text, start, spelled),
+  type_spelling(spelled, name, class).
+given_type(context, site, name, class) :-
+  type_asked(context, site),
+  option_pair(site, "type", kind, source),
+  kind != "literal",
+  site_function(site, function),
+  value_of(context, function, kind, source, $Term(text, start)),
+  term_spelling(text, start, spelled),
+  type_spelling(spelled, name, class).
+given_type(context, site, name, class) :-
+  type_asked(context, site),
+  type_position(site, position),
+  flow_argument(site, function, position, kind, source),
+  value_of(context, function, kind, source, $Term(text, start)),
+  term_spelling(text, start, spelled),
+  type_spelling(spelled, name, class).
+
+// The calls whose type is asked: those a class is asked of, and, where
+// the analysis is told of types the backend lacks, every call given one.
+.decl type_asked(context: Context, site: symbol)
+type_asked(context, site) :- type_call(context, site, _, "typed").
+type_asked(context, site) :-
+  unsupported_type(_),
+  type_given(site),
+  site_active(context, site).
+
+// The position of a call's type argument.
+.decl type_position(site: symbol, position: number)
+type_position(site, 1) :- operation_site(site, operation, _), typed_second(operation).
+type_position(site, 0) :- remote_call(site, _, "Nx.Constants", _, arity), arity >= 1.
+
+.decl typed_second(operation: symbol)
+typed_second("Nx.as_type"). typed_second("Nx.bitcast"). typed_second("Nx.from_binary").
+typed_second("Nx.template").
+
+// Nx's types, by family and size, and how the code spells them: `:f32`
+// or `{:f, 32}`.
+.decl type_spelling(spelled: symbol, name: symbol, class: symbol)
+type_spelling(cat(":", family, to_string(size)), cat(family, to_string(size)), class) :-
+  nx_type(family, size, class).
+type_spelling(cat("{:", family, ", ", to_string(size), "}"), cat(family, to_string(size)), class) :-
+  nx_type(family, size, class).
+
+.decl nx_type(family: symbol, size: number, class: symbol)
+nx_type("s", size, "integer") :- integer_size(size).
+nx_type("u", size, "integer") :- integer_size(size).
+nx_type("f", 8, "float"). nx_type("f", 16, "float"). nx_type("f", 32, "float").
+nx_type("f", 64, "float"). nx_type("bf", 16, "float").
+nx_type("c", 64, "complex"). nx_type("c", 128, "complex").
+
+.decl integer_size(size: number)
+integer_size(2). integer_size(4). integer_size(8). integer_size(16). integer_size(32). integer_size(64).
+
+// Each Nx function's type class. A function with none gives a value of
+// no known class.
+.decl type_class(operation: symbol, class: symbol)
+type_class(cat("Nx.", name), "move") :- moves_elements(name), name != "as_type", name != "tensor".
+type_class(operation, "move") :-
+  sign_class(operation, class),
+  operation != "Nx.mean",
+  ( class = "negate" ; class = "absolute" ; class = "round" ; class = "sum" ; class = "product" ).
+type_class("Nx.sign", "move").
+type_class("Nx.Defn.Kernel.stop_grad", "move"). type_class("Nx.Defn.Kernel.print_value", "move").
+type_class("Nx.Defn.Kernel.__unary_plus__", "move").
+type_class(operation, "merge") :-
+  sign_class(operation, class),
+  ( class = "add" ; class = "subtract" ; class = "multiply" ; class = "dot" ; class = "maximum" ;
+    class = "minimum" ; class = "remainder" ; class = "power" ; class = "select" ; class = "clip" ;
+    class = "splice" ).
+type_class(cat("Nx.", name), "float") :- floating_function(name).
+type_class("Nx.Defn.Kernel./", "float"). type_class("Nx.LinAlg.norm", "float").
+type_class(operation, "integer") :- sign_class(operation, "compare").
+type_class(operation, "integer") :- integer_operand(operation, _, 0).
+type_class("Nx.argmax", "integer"). type_class("Nx.argmin", "integer"). type_class("Nx.argsort", "integer").
+type_class(cat("Nx.", name), "typed") :- typed_function(name).
+
+// The functions whose result is a float: division and the transcendental
+// functions, and the means and spreads.
+.decl floating_function(name: symbol)
+floating_function("divide"). floating_function("exp"). floating_function("expm1").
+floating_function("log"). floating_function("log1p"). floating_function("log2").
+floating_function("log10"). floating_function("sqrt"). floating_function("rsqrt").
+floating_function("cbrt"). floating_function("sin"). floating_function("cos").
+floating_function("tan"). floating_function("asin"). floating_function("acos").
+floating_function("atan"). floating_function("sinh"). floating_function("cosh").
+floating_function("tanh"). floating_function("asinh"). floating_function("acosh").
+floating_function("atanh"). floating_function("sigmoid"). floating_function("erf").
+floating_function("erfc"). floating_function("erf_inv"). floating_function("atan2").
+floating_function("mean"). floating_function("variance"). floating_function("standard_deviation").
+floating_function("logsumexp").
+
+// The functions a type can be given to.
+.decl typed_function(name: symbol)
+typed_function("iota"). typed_function("eye"). typed_function("tensor"). typed_function("as_type").
+typed_function("bitcast"). typed_function("from_binary"). typed_function("template").
+typed_function("Random.uniform"). typed_function("Random.normal"). typed_function("Random.randint").
+
 // ══ Findings ════════════════════════════════════════════════════════
 
 // A context and site with a finding.
@@ -7812,6 +9902,45 @@ entered_from(origin, caller, depth + 1) :-
 
 .decl context_call(context: Context, call: symbol)
 context_call(origin, call) :- entered_from(origin, context, _), invocation(_, call, _, context).
+
+// A call Nx rejects for its operand's type, or that makes a tensor of a
+// type the backend does not support. `kind` names what goes wrong:
+//
+//   * "non_integer_operand": an operand at `position` of a call that
+//     takes only integers can be a float or complex number (`subject`,
+//     its class), from `origin`, the call that makes it so; `certain` is 1
+//     where it is never an integer in some context;
+//   * "unsupported_type": the call makes a tensor of type `subject`, which
+//     the analysis is told the backend does not support.
+.decl tensor_type_error(id: symbol, func: symbol, operation: symbol, kind: symbol, subject: symbol, position: number, certain: number, origin: symbol, origin_operation: symbol)
+.output tensor_type_error
+tensor_type_error(site, function, cat(operation, "/", to_string(arity)), "non_integer_operand", class, position, certain, origin, shown) :-
+  non_integer_operand(_, site, position, class, origin),
+  type_certainty(site, position, certain),
+  operation_site(site, operation, arity),
+  site_function(site, function),
+  type_origin_shown(origin, shown).
+tensor_type_error(site, function, cat(operation, "/", to_string(arity)), "unsupported_type", name, -1, 1, "", "") :-
+  makes_unsupported_type(_, site, name),
+  called_name(site, operation, arity),
+  site_function(site, function).
+
+.decl type_certainty(site: symbol, position: number, certain: number)
+type_certainty(site, position, 1) :- never_integer(site, position).
+type_certainty(site, position, 0) :-
+  non_integer_operand(_, site, position, _, _),
+  !never_integer(site, position).
+
+// The module and function a call calls, Nx's or its constants'.
+.decl called_name(site: symbol, operation: symbol, arity: number)
+called_name(site, operation, arity) :- operation_site(site, operation, arity).
+called_name(site, cat("Nx.Constants.", name), arity) :- remote_call(site, _, "Nx.Constants", name, arity).
+
+.decl type_origin_shown(origin: symbol, shown: symbol)
+type_origin_shown("", "") :- non_integer_operand(_, _, _, _, "").
+type_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
+  non_integer_operand(_, _, _, _, origin),
+  called_name(origin, operation, arity).
 
 // ── What a finding shows ───────────────────────────────────────────
 //
@@ -7984,3 +10113,156 @@ tensor_axis_misalignment_via(site, kind, order, at, function, how, subject, posi
   misalignment(context, site, kind, _),
   finding_frame(context, site, order, at, function, how, subject, position, shown).
 .output tensor_axis_misalignment_via
+
+// A call whose result the code's own math can make infinite or NaN, by
+// kind, with how and where.
+.decl nonfinite(context: Context, site: symbol, kind: symbol, cause: symbol, origin: symbol)
+nonfinite(context, site, "divide_by_zero", cause, origin) :- divides_by_zero(context, site, origin, cause).
+nonfinite(context, site, "log_of_zero", cause, origin) :- logarithm_of_zero(context, site, origin, cause).
+nonfinite(context, site, kind, "cancellation", difference) :-
+  root_of_cancellation(context, site, kind, difference).
+nonfinite(context, site, "log_of_zero", "underflow", softmax) :-
+  logarithm_of_softmax(site, softmax),
+  site_active(context, site).
+nonfinite(context, site, "exp_overflow", "unshifted", exponential) :-
+  unshifted_exponentials(site, exponential),
+  site_active(context, site).
+nonfinite(context, site, "infinite_gradient", cause, origin) :-
+  infinite_gradient(context, site, origin, cause).
+nonfinite(context, site, "outside_domain", cause, origin) :-
+  outside_domain(context, site, origin, cause).
+nonfinite(context, site, "infinite_at_edge", cause, origin) :-
+  infinite_at_edge(context, site, origin, cause).
+
+// A call whose operand nothing keeps where the call is defined, by kind:
+// noisier than `nonfinite`, and reported apart.
+.decl unchecked(context: Context, site: symbol, kind: symbol, cause: symbol, origin: symbol)
+unchecked(context, site, "unchecked_divisor", cause, origin) :-
+  unchecked_division(context, site, origin, cause).
+unchecked(context, site, "unchecked_logarithm", cause, origin) :-
+  unchecked_logarithm(context, site, origin, cause).
+unchecked(context, site, "unchecked_root", cause, origin) :-
+  unchecked_root(context, site, origin, cause).
+unchecked(context, site, "unchecked_domain", cause, origin) :-
+  unchecked_domain(context, site, origin, cause).
+
+// An Nx call whose result the code's own math can make infinite or NaN,
+// or whose operand nothing keeps where it is defined. `kind` names what
+// goes wrong:
+//
+//   * "divide_by_zero": a divisor that cannot be negative but can be
+//     zero, `cause` how ("square", "absolute", "root", "norm",
+//     "comparison", "index", "identity", "spread", "clamp", "remainder",
+//     "quotient", "round", or "zero" for a written zero);
+//   * "log_of_zero": a logarithm's operand likewise, or a softmax written
+//     out, which underflows (`cause` "underflow");
+//   * "root_of_negative", "log_of_negative": a square root's or
+//     logarithm's operand that is a difference of two values that cannot
+//     be negative (`cause` "cancellation");
+//   * "exp_overflow": a softmax or log-sum-exp over values not shifted by
+//     their maximum (`cause` "unshifted");
+//   * "infinite_gradient": a square root, norm or root power, in a
+//     function a `grad` differentiates, whose result can be zero, `cause`
+//     how, as for a divisor;
+//   * "outside_domain": asin, acos, atanh, erf_inv, log1p or acosh of a
+//     value the code's math takes where the function is NaN, `cause` how
+//     (as the regions name it: "saturation", "clip", "written", ...), or
+//     "rounding" where only rounding does;
+//   * "infinite_at_edge": atanh or erf_inv of a value its math takes to
+//     ±1, or log1p of one it takes to -1;
+//   * "unchecked_domain": one of those functions of a value from an input
+//     ("input") or from math the rules do not bound ("unbounded"), that no
+//     clip and no test on the call's path keeps in its domain;
+//   * "unchecked_divisor", "unchecked_logarithm", "unchecked_root": an
+//     operand nothing keeps from being zero, positive or not negative, and
+//     that no test on the call's path and no select checks. `cause` says
+//     how it can be zero: from an input ("input"), as terms that cancel
+//     ("cancel"), or as the definite kinds say; "negative" where it can be
+//     below zero.
+//
+// `origin` is the Nx call whose math lets it ("" for a written value),
+// with its function as `origin_operation`.
+.decl tensor_nonfinite_result(id: symbol, func: symbol, operation: symbol, kind: symbol, cause: symbol, origin: symbol, origin_operation: symbol)
+tensor_nonfinite_result(site, function, cat(operation, "/", to_string(arity)), kind, cause, origin, shown) :-
+  nonfinite(_, site, kind, cause, origin),
+  operation_site(site, operation, arity),
+  site_function(site, function),
+  origin_shown(origin, shown).
+tensor_nonfinite_result(site, function, cat(operation, "/", to_string(arity)), kind, cause, origin, shown) :-
+  unchecked(_, site, kind, cause, origin),
+  operation_site(site, operation, arity),
+  site_function(site, function),
+  origin_shown(origin, shown).
+.output tensor_nonfinite_result
+
+// An origin's Nx function as a reader writes it: `Nx.multiply/2`, or ""
+// for a written value.
+.decl origin_shown(origin: symbol, shown: symbol)
+origin_shown("", "") :- nonfinite(_, _, _, _, "").
+origin_shown("", "") :- unchecked(_, _, _, _, "").
+origin_shown(origin, cat(operation, "/", to_string(arity))) :-
+  nonfinite(_, _, _, _, origin),
+  operation_site(origin, operation, arity).
+origin_shown(origin, cat(operation, "/", to_string(arity))) :-
+  unchecked(_, _, _, _, origin),
+  operation_site(origin, operation, arity).
+
+// A call Nx rejects, or that computes something other than what the code
+// means, for a reason other than its operands' shapes, its math or its
+// types: `kind` names the rule (the files included below add them),
+// `detail` says what, and `origin` is the call it comes from, "" for none.
+.decl call_error(context: Context, site: symbol, kind: symbol, detail: symbol, origin: symbol)
+
+.decl tensor_call_error(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, origin: symbol, origin_operation: symbol)
+.output tensor_call_error
+tensor_call_error(site, function, shown, kind, detail, origin, origin_shown) :-
+  call_error(_, site, kind, detail, origin),
+  instruction(site, function, _, _),
+  call_shown(site, shown),
+  call_origin_shown(origin, origin_shown).
+
+// A call as a finding names it: the module, function and arity it calls,
+// or "" for an instruction that calls none.
+.decl call_shown(site: symbol, shown: symbol)
+call_shown(site, cat(module, ".", name, "/", to_string(arity))) :-
+  call_error(_, site, _, _, _),
+  remote_call(site, _, module, name, arity).
+call_shown(site, cat(module, ".", name, "/", to_string(arity))) :-
+  call_error(_, site, _, _, _),
+  bif_call(site, _, module, name, arity, _).
+call_shown(site, target) :-
+  call_error(_, site, _, _, _),
+  local_call(site, _, target, _).
+call_shown(site, "") :-
+  call_error(_, site, _, _, _),
+  !remote_call(site, _, _, _, _),
+  !bif_call(site, _, _, _, _, _),
+  !local_call(site, _, _, _).
+
+.decl call_origin_shown(origin: symbol, shown: symbol)
+call_origin_shown("", "") :- call_error(_, _, _, _, "").
+call_origin_shown(origin, cat(module, ".", name, "/", to_string(arity))) :-
+  call_error(_, _, _, _, origin),
+  remote_call(origin, _, module, name, arity).
+
+// ══ Further rules ═══════════════════════════════════════════════════
+//
+// Each file holds one family of checks over the words above, reported
+// through the relations above.
+
+.include "tensor_shapes/options.dl"
+.include "tensor_shapes/traced.dl"
+.include "tensor_shapes/defn_flow.dl"
+.include "tensor_shapes/containers.dl"
+.include "tensor_shapes/gradients.dl"
+.include "tensor_shapes/math.dl"
+.include "tensor_shapes/indices.dl"
+.include "tensor_shapes/literals.dl"
+.include "tensor_shapes/access.dl"
+.include "tensor_shapes/tuples.dl"
+.include "tensor_shapes/shape_gaps.dl"
+.include "tensor_shapes/reshape_order.dl"
+.include "tensor_shapes/dtypes.dl"
+.include "tensor_shapes/serving.dl"
+.include "tensor_shapes/consumption.dl"
+.include "tensor_shapes/linalg.dl"

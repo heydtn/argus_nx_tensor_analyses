@@ -32,6 +32,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       polarity)` — the tests of `node` are its parent's and this one: the
       source was (`eq`) or was not (`ne`) the literal, as `select_val` and
       `is_eq_exact` test it;
+    * `flow_checked(site, func, position, literal, polarity)` — every path
+      to the call at `site` tests its argument at `position` against the
+      literal: it was (`eq`) or was not (`ne`) the literal, or was below
+      (`lt`), at most (`le`), above (`gt`) or at least (`ge`) it. The test
+      read the same value as the argument, whatever its sources;
     * `flow_object(func, object, shape, arity)` — `func` builds `object`:
       a `tuple` of `arity` elements, a `list` cell, a `map`, an
       `operation` on its operands (`flow_operation` names it), or a
@@ -82,6 +87,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       :flow_return,
       :flow_guarded,
       :flow_guard_node,
+      :flow_checked,
       :flow_object,
       :flow_operation,
       :flow_closure,
@@ -281,6 +287,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
         )
       end)
       |> guarded(function, index, site)
+      |> checked(function, index, outs, site, arity)
 
     if Instr.tail_call?(instruction),
       do: Facts.add_fact(facts, :flow_return, [function.id, site, "result", site]),
@@ -524,8 +531,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
   # two branches share before they part.
   defp guarded(facts, function, index, at) do
     {facts, node} =
-      function.guards
-      |> Map.get(index, MapSet.new())
+      for(
+        {:guard, kind, source, literal, polarity} <- held_at(function, index),
+        do: {kind, source, literal, polarity}
+      )
       |> Enum.sort()
       |> Enum.reduce({facts, ""}, fn {kind, source, literal, polarity} = test, {acc, parent} ->
         node = guard_node(function, parent, test)
@@ -535,6 +544,28 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
     Facts.add_fact(facts, :flow_guarded, [at, function.id, node])
   end
+
+  # The tests on the path to the call that read the value of one of its
+  # arguments.
+  defp checked(facts, function, index, outs, site, arity) do
+    tests = held_at(function, index)
+
+    for position <- 0..(arity - 1)//1,
+        argument = value(function, index, outs, {:x, position}),
+        {:check, ^argument, literal, polarity} <- tests,
+        reduce: facts do
+      acc ->
+        Facts.add_fact(acc, :flow_checked, [
+          site,
+          function.id,
+          Integer.to_string(position),
+          literal,
+          polarity
+        ])
+    end
+  end
+
+  defp held_at(function, index), do: Map.get(function.guards, index, MapSet.new())
 
   defp guard_node(function, parent, test) do
     digest =
@@ -570,9 +601,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
   # ── The literal tests a path passes ──────────────────────────────────
 
   # The tests every path from the function's entry to an instruction
-  # passes, as `{kind, source, literal, polarity}`: the source was (`eq`)
-  # or was not (`ne`) the literal. A test of a value that several sources
-  # may give proves nothing about any one of them.
+  # passes, each as a check of the value it read, `{:check, value,
+  # literal, polarity}`. A check of a value one source gives, that it was
+  # (`eq`) or was not (`ne`) the literal, is a guard of that source too,
+  # `{:guard, kind, source, literal, polarity}`: a test of a value that
+  # several sources may give proves nothing about any one of them.
   #
   # A forward dataflow over the function's control-flow graph
   # (`Argus.Cfg`), meeting on every edge into a block. A test ends its
@@ -690,24 +723,61 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
     with_test(tests, tested, literal, if(kind == :branch_pass, do: passed, else: failed))
   end
 
+  # An order test against a literal: `is_lt(a, b)` passes where a < b and
+  # fails where a >= b, `is_ge` the other way round. The test is kept on
+  # the value's side: `lt`, `le`, `gt` or `ge` of the literal. The rules
+  # read it only as a check.
+  defp edge_tests(
+         {:test, test, _fail, [left, right]},
+         function,
+         outs,
+         index,
+         kind,
+         _successor,
+         tests
+       )
+       when test in [:is_lt, :is_ge] and kind in [:branch_pass, :branch_fail] do
+    below = test == :is_lt == (kind == :branch_pass)
+
+    case {tested(function, outs, index, left), tested(function, outs, index, right)} do
+      {nil, nil} -> tests
+      {nil, token} -> with_test(tests, token, left, if(below, do: "gt", else: "le"))
+      {token, _other} -> with_test(tests, token, right, if(below, do: "lt", else: "ge"))
+    end
+  end
+
   defp edge_tests(_instruction, _function, _outs, _index, _kind, _successor, tests), do: tests
 
-  # The one source an operand's value comes from, other than a literal.
+  # The value a register operand holds, none for a literal.
   defp tested(function, outs, index, operand) do
-    case function |> value(index, outs, operand) |> MapSet.to_list() do
-      [{kind, source}] when kind != :literal -> {Atom.to_string(kind), source}
-      _several -> nil
-    end
+    if register(operand), do: value(function, index, outs, operand)
   end
 
   defp with_test(tests, nil, _literal, _polarity), do: tests
 
-  defp with_test(tests, {kind, source}, literal, polarity) do
+  defp with_test(tests, value, literal, polarity) do
     case spell(literal) do
-      nil -> tests
-      spelled -> MapSet.put(tests, {kind, source, spelled, polarity})
+      nil ->
+        tests
+
+      spelled ->
+        tests
+        |> MapSet.put({:check, value, spelled, polarity})
+        |> with_guard(value, spelled, polarity)
     end
   end
+
+  defp with_guard(tests, value, spelled, polarity) when polarity in ["eq", "ne"] do
+    case MapSet.to_list(value) do
+      [{kind, source}] when kind != :literal ->
+        MapSet.put(tests, {:guard, Atom.to_string(kind), source, spelled, polarity})
+
+      _several ->
+        tests
+    end
+  end
+
+  defp with_guard(tests, _value, _spelled, _polarity), do: tests
 
   # ── Values ───────────────────────────────────────────────────────────
 

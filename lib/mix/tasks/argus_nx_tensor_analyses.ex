@@ -20,6 +20,13 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   beams, not its dependencies', and keep what they find under
   `_build/<env>/argus_nx_tensor_analyses` until the code they read
   changes; souffle must be on `PATH`.
+
+  The project configures these analyses in its `mix.exs`, under
+  `argus_nx_tensor_analyses:` in `project/0`. `unsupported_types` lists
+  the tensor types its backend lacks, and a call that makes one is
+  reported:
+
+      argus_nx_tensor_analyses: [unsupported_types: [:f64]]
   """
 
   use Mix.Task
@@ -78,7 +85,11 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
         cache =
           Path.join([Mix.Project.build_path(), "argus_nx_tensor_analyses", "#{analysis.name()}"])
 
-        Map.put(located, analysis.name(), analysis.run(beams, cache: cache))
+        Map.put(
+          located,
+          analysis.name(),
+          analysis.run(beams, [cache: cache] ++ project_options())
+        )
       end)
 
     result = %{result | located: located}
@@ -89,6 +100,14 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
     if options.fail_above && length(entries) > options.fail_above do
       Mix.raise("argus: #{length(entries)} findings exceed --fail-above #{options.fail_above}")
     end
+  end
+
+  # The options the project gives these analyses in its `mix.exs`, under
+  # `argus_nx_tensor_analyses:` (`unsupported_types: [:f64]`).
+  defp project_options do
+    Mix.Project.config()
+    |> Keyword.get(:argus_nx_tensor_analyses, [])
+    |> Keyword.take([:unsupported_types])
   end
 
   # As `mix argus` compiles: the argus compiler fails `mix compile` on its

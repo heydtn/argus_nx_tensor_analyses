@@ -1,0 +1,3 @@
+// What `defn`'s control flow and static arguments reject: predicates, branches, `while` state, values used as integers.
+//
+// Included by `priv/tensor_shapes.dl`, whose words these rules build on.

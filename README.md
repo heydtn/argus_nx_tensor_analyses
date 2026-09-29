@@ -2,8 +2,9 @@
 
 [Argus](https://github.com/QuinnWilton/argus) analyses for code that uses
 [Nx](https://github.com/elixir-nx/nx). They read a project's compiled
-modules and report tensor shapes that do not fit where they meet, before
-the code runs.
+modules and report tensor shapes that do not fit where they meet, math
+that can give an infinity or a NaN, and tensor types Nx or the backend
+rejects, before the code runs.
 
 - **Shape mismatches:** Nx calls whose operand shapes Nx rejects, such as
   shapes that do not broadcast, a `dot` over axes of different sizes, a
@@ -13,6 +14,25 @@ the code runs.
   its axes up. For example, sizes the code names differently
   (`config.heads` against `config.kv_heads`), an unnamed axis meeting a
   named one, or contracted axes with different names.
+- **Results that can be infinite or NaN:** Nx calls whose operand the
+  code's own math lets reach a value the call is not defined at. For
+  example, a divisor that is a sum of squares or a norm, which is zero for
+  a zero vector; the logarithm of a count; the square root of a variance
+  written as E[x²] − E[x]², which rounding can take below zero; a
+  softmax that does not subtract the maximum first; atanh of a tanh,
+  which rounds to 1 for large inputs; the arc cosine of a cosine
+  similarity, which rounding can take just past 1; or a square root or
+  norm that can be zero where a `grad` differentiates it.
+- **Unchecked operands:** a division, logarithm, square root, or asin,
+  acos, atanh, erf_inv, log1p or acosh of a value the analysis cannot see
+  into, such as an input or a config field, that no test on the way to
+  the call, no `Nx.select` and no clip keeps where the call is defined.
+  Such a value may never get there, so these are noisier and reported as
+  info.
+- **Tensor types:** calls that take only integers handed a float, such as
+  a bitwise operation, an integer quotient, or `Nx.take` with indices
+  computed by division; and, for a project that names the types its
+  backend lacks, calls that make a tensor of one, such as f64 on EMLX.
 
 ```
 error[argus.tensor_shapes]: Nx.dot/2 contracts axes that do not match
@@ -95,6 +115,18 @@ The analyses read your project's own modules, not its dependencies. Results
 are kept under `_build/<env>/argus_nx_tensor_analyses` and reused until the
 compiled code changes, so an edit to a comment or a doc solves nothing again.
 
+A project whose backend lacks some tensor types names them in its
+`mix.exs`, and every call that makes a tensor of one is reported:
+
+```elixir
+def project do
+  [
+    # ...
+    argus_nx_tensor_analyses: [unsupported_types: [:f64]]
+  ]
+end
+```
+
 ## How it works
 
 `ArgusNxTensorAnalyses.TensorShapes.ShapeFlow`, an Argus extractor,
@@ -116,6 +148,33 @@ follows shapes through the program to where tensors meet.
   set of arguments it is handed. A call that hands values naming size
   variables, or terms the caller built, runs its callee in a context of
   its own, up to five calls deep.
+- **Signs follow the math.** For what a call divides by, or takes the
+  logarithm or root of, the rules work out whether the value can be
+  negative, zero or positive from how it is computed: a square is never
+  negative, an exponential never zero, an iota starts at zero, and an
+  input can be anything. A finding says why its operand can be zero and
+  points at the call that makes it so. A test on the way to the call
+  (`if n == 0`, `n > 0`) or a select on a comparison with zero
+  (`Nx.select(Nx.equal(d, 0), 1, d)`) checks the operand it tests.
+- **Ranges follow the math.** For asin, acos, atanh, erf_inv, log1p and
+  acosh, the rules work out where the operand can lie against ±1: a tanh,
+  erf or sigmoid rounds to exactly ±1 for large inputs, a sine or cosine
+  reaches it, a clip reaches its bounds, and a vector over its norm or a
+  cosine similarity is within ±1 only before rounding. A clip or a test on
+  the way to the call keeps the operand where it is.
+- **Gradients.** A function handed to `Nx.Defn.grad` or `value_and_grad`,
+  and whatever it calls, is differentiated. A square root, root power or
+  norm there whose result can be zero has an infinite or NaN derivative.
+- **Types follow the math.** For the calls that take only integers, the
+  rules work out whether each operand can be an integer, a float or a
+  complex number, as `Nx.Type` has it: a float operand makes a float,
+  division and the transcendental functions make one, comparisons and
+  indices give integers, and a `type:` gives its own. A tensor whose type
+  the code does not show has none, and nothing is reported of it.
+- **Helpers take what the program hands them.** A function the program
+  enters only through its own calls takes, in each context, what those
+  calls hand it. A function the program is entered at from outside (one
+  nothing in the project calls, or one handed out as a fun) takes inputs.
 - **Literal tests pick branches.** A `case` on an option the caller writes
   takes the branch the option names, and two dispatches on one value in a
   function run one implementation. Other branches are not told apart: a
@@ -124,7 +183,11 @@ follows shapes through the program to where tensors meet.
 
 A mismatch is an error when some chain of calls reaching the call brings it
 no other operands. It is a warning when the operands also arrive otherwise,
-since not every combination may occur. Misalignments are warnings.
+since not every combination may occur. Misalignments and results that can
+be infinite or NaN are warnings, and unchecked operands are info. An
+operand that takes only integers is an error where some context hands it
+nothing else, and a warning otherwise; a type the backend lacks is an
+error.
 
 The rules model Nx 1.0. The test suite runs each of its cases through Nx
 itself and checks that the analysis agrees with what Nx computes or raises.
@@ -140,6 +203,15 @@ itself and checks that the analysis agrees with what Nx computes or raises.
   `Access.get`.
 - Branches that no literal test separates are merged, so a finding on
   such a path is reported as a warning rather than an error.
+- A check has to test the operand itself: `if n > 0` checks
+  `Nx.divide(t, n)`, not `Nx.divide(t, Nx.multiply(t, n))`.
+- A function the project calls is judged by what the project hands it,
+  even where code outside the project calls it too.
+- Only the `grad` calls in the project are seen: a training library that
+  differentiates a function the project hands it does not make that
+  function differentiated here. A `custom_grad` is not modeled.
+- A clip's bounds keep a value in range only where they are written
+  numbers.
 
 ## Development
 

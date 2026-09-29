@@ -1,0 +1,3 @@
+// Gradients that are infinite or NaN, or that Nx cannot compute, where a `grad` differentiates.
+//
+// Included by `priv/tensor_shapes.dl`, whose words these rules build on.

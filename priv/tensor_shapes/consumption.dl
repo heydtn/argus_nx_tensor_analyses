@@ -1,0 +1,3 @@
+// Values used again after they are spent: random keys, and tensors after a transfer or deallocation.
+//
+// Included by `priv/tensor_shapes.dl`, whose words these rules build on.

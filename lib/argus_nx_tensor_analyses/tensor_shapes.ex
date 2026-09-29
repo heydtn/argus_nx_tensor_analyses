@@ -32,6 +32,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
 
   alias Argus.Findings
   alias ArgusNxTensorAnalyses.TensorShapes.ShapeFlow
+  alias ArgusNxTensorAnalyses.TensorShapes.Wording
 
   @external_resource Path.expand("../../priv/tensor_shapes.dl", __DIR__)
 
@@ -289,6 +290,53 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
         evidence: %{of: :tensor_axis_misalignment, on: [:id, :kind], limit: 8},
         doc:
           "Where an operand of a tensor axis misalignment gets its shape, or a call on the way to it."
+      },
+      %{
+        name: :tensor_nonfinite_result,
+        fields: [
+          {:id, :instr_id, "the Nx call"},
+          {:func, :func_id, "the function making it"},
+          {:operation, :symbol, "the Nx function, as Nx.divide/2"},
+          {:kind, :symbol, "what goes wrong: divide_by_zero, ..."},
+          {:cause, :symbol, "how the operand gets there: square, comparison, index, ..."},
+          {:origin, :symbol, "the Nx call whose math lets it, or empty for a written value"},
+          {:origin_operation, :symbol, "that call's Nx function, as Nx.multiply/2"}
+        ],
+        key: [:id, :kind],
+        doc: "An Nx call whose result the code's own math can make infinite or NaN."
+      },
+      %{
+        name: :tensor_type_error,
+        fields: [
+          {:id, :instr_id, "the Nx call"},
+          {:func, :func_id, "the function making it"},
+          {:operation, :symbol, "the Nx function, as Nx.take/2"},
+          {:kind, :symbol, "what goes wrong: non_integer_operand or unsupported_type"},
+          {:subject, :symbol, "the operand's class (float, complex), or the type made (f64)"},
+          {:position, :number, "the operand's argument position, or -1 for a type made"},
+          {:certain, :number, "1 where the operand is never an integer in some context"},
+          {:origin, :symbol, "the Nx call that makes the operand what it is, or empty"},
+          {:origin_operation, :symbol, "that call's Nx function, as Nx.divide/2"}
+        ],
+        key: [:id, :kind, :position],
+        doc:
+          "An Nx call Nx rejects for its operand's type, or that makes a tensor of a type the backend does not support."
+      },
+      %{
+        name: :tensor_call_error,
+        fields: [
+          {:id, :instr_id, "the call"},
+          {:func, :func_id, "the function making it"},
+          {:operation, :symbol,
+           "the function it calls, as Nx.sum/2, or empty for an instruction"},
+          {:kind, :symbol, "the rule it breaks: unknown_option, ..."},
+          {:detail, :symbol, "what breaks it: the option, the value, ..."},
+          {:origin, :symbol, "the call it comes from, or empty"},
+          {:origin_operation, :symbol, "that call's function, as Nx.divide/2"}
+        ],
+        key: [:id, :kind, :detail],
+        doc:
+          "A call Nx rejects, or that computes something other than what the code means, for a reason other than its operands' shapes, math or types."
       }
     ]
   end
@@ -358,20 +406,402 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     )
   end
 
+  def finding(:tensor_nonfinite_result, [id, _func, operation, kind, cause, origin, shown]) do
+    %{title: title, detail: detail, label: label, help: help, frame: frame} =
+      wording = hazard(kind, cause, operation)
+
+    Findings.new(Map.get(wording, :severity, severity(kind)), "#{operation} #{title}", detail,
+      at: Findings.at_instr(id),
+      at_label: label,
+      help: [help],
+      related: origin_frame(frame, origin, shown)
+    )
+  end
+
+  def finding(:tensor_type_error, [
+        id,
+        _func,
+        operation,
+        "non_integer_operand",
+        class,
+        position,
+        certain,
+        origin,
+        shown
+      ]) do
+    {rejects, help} = integer_only(operation)
+
+    Findings.new(
+      if(to_integer(certain) == 1, do: :error, else: :warning),
+      "#{operation} takes integers, and its #{ordinal(to_string(position))} argument can be a #{class}",
+      "#{rejects} Nx raises for a #{class} tensor there.",
+      at: Findings.at_instr(id),
+      at_label: "gets a #{class} here",
+      help: [help],
+      related: origin_frame("makes it a #{class}:", origin, shown)
+    )
+  end
+
+  def finding(:tensor_type_error, [id, _func, operation, "unsupported_type", name | _rest]) do
+    Findings.new(
+      :error,
+      "#{operation} makes #{article(name)} #{name} tensor, which the backend does not support",
+      "The analysis is run with #{name} among the types the backend lacks (the " <>
+        ":unsupported_types option). A backend without #{name} raises making it, or at the " <>
+        "first operation over it.",
+      at: Findings.at_instr(id),
+      at_label: "makes #{name} here",
+      help: [
+        "make it a type the backend supports, such as f32, or run this on a backend that has #{name}"
+      ]
+    )
+  end
+
+  def finding(:tensor_type_error, [id, _func, operation, kind, subject, _position, certain | rest]) do
+    [origin, shown] = rest
+    wording = Wording.type_error(kind, subject, operation) || unknown_wording(kind, subject)
+
+    Findings.new(
+      Map.get(wording, :severity, if(to_integer(certain) == 1, do: :error, else: :warning)),
+      "#{operation} #{wording.title}",
+      wording.detail,
+      at: Findings.at_instr(id),
+      at_label: wording.label,
+      help: [wording.help],
+      related: origin_frame(wording.frame, origin, shown)
+    )
+  end
+
+  def finding(:tensor_call_error, [id, _func, operation, kind, detail, origin, shown]) do
+    wording = Wording.call_error(kind, detail, operation) || unknown_wording(kind, detail)
+
+    Findings.new(
+      Map.get(wording, :severity, :error),
+      String.trim("#{operation} #{wording.title}"),
+      wording.detail,
+      at: Findings.at_instr(id),
+      at_label: wording.label,
+      help: [wording.help],
+      related: origin_frame(wording.frame, origin, shown)
+    )
+  end
+
+  # A kind the program has and no wording module describes still reads.
+  defp unknown_wording(kind, detail) do
+    %{
+      title: "breaks a rule of Nx's (#{kind})",
+      detail: "The analysis reports #{kind}: #{detail}.",
+      label: "here",
+      help: "see what Nx expects of this call",
+      frame: "because of this"
+    }
+  end
+
+  # What a function that takes only integers raises for anything else, and
+  # what to change.
+  defp integer_only(operation) do
+    name = String.replace(operation, ~r{/\d+$}, "")
+
+    cond do
+      name in ~w(Nx.take Nx.take_along_axis Nx.gather Nx.indexed_add Nx.indexed_put) ->
+        {"Its indices must be an integer tensor.",
+         "compute the indices as integers: round and then Nx.as_type(x, :s32), or use integer operations (Nx.quotient rather than Nx.divide)"}
+
+      name in ~w(Nx.quotient Nx.Defn.Kernel.div) ->
+        {"An integer quotient takes integer tensors only.",
+         "make the operands integers, such as Nx.as_type(x, :s32), or divide and round (Nx.floor(Nx.divide(x, y))) to keep floats"}
+
+      true ->
+        {"Bitwise operations take integer tensors only.",
+         "make the operand an integer tensor, such as Nx.as_type(x, :s32)"}
+    end
+  end
+
+  # The article before a type's name as it is read: an f64, a u8.
+  defp article(name), do: if(String.starts_with?(name, ["f", "s"]), do: "an", else: "a")
+
+  defp to_integer(value) when is_integer(value), do: value
+  defp to_integer(value) when is_binary(value), do: String.to_integer(value)
+
+  # An operand nothing checks may still never reach where the call is not
+  # defined, so those kinds are noisier than the rest and report as info.
+  @unchecked ["unchecked_divisor", "unchecked_logarithm", "unchecked_root", "unchecked_domain"]
+
+  defp severity(kind) when kind in @unchecked, do: :info
+  defp severity(_kind), do: :warning
+
   @impl true
   def evidence(relation, [_id, _kind, _order, at, _func, how, subject, position, shown])
       when relation in [:tensor_shape_mismatch_via, :tensor_axis_misalignment_via] do
     Findings.related(frame_label(how, subject, position, shown), Findings.at_instr(at))
   end
 
+  # How a divisor can be zero, by the cause the program names.
+  @causes %{
+    "square" => "it is made of a square, which is zero where its operand is",
+    "absolute" => "it is made of an absolute value, which is zero where its operand is",
+    "root" => "it is made of a square root, which is zero where its operand is",
+    "norm" => "it is a norm, which is zero for a zero vector",
+    "comparison" =>
+      "it is made of a comparison, which is 0 where it does not hold, as nowhere on a row with nothing selected",
+    "index" => "it is made of an index or an iota, which starts at zero",
+    "identity" => "it is made of an identity matrix, which is zero off its diagonal",
+    "spread" =>
+      "it is a variance or standard deviation, which is zero where every value is the same",
+    "clamp" => "it is clamped at zero, so it is zero wherever the value clamped is not above it",
+    "remainder" => "it is a remainder, which is zero where the division comes out whole",
+    "quotient" =>
+      "it is an integer quotient, which is zero where the dividend is smaller than the divisor",
+    "round" => "it is rounded, which takes a value between -1 and 1 to zero",
+    "zero" => "it is a written zero",
+    "input" => "it comes from an input, or from a value the analysis cannot follow",
+    "cancel" => "it is a sum or difference whose terms can cancel",
+    "negative" => "nothing in how it is computed keeps it from going below zero"
+  }
+
+  # A cause the program has and this module does not describe still reads.
+  defp cause(cause), do: Map.get(@causes, cause, "its math lets it be zero")
+
+  # Where each function defined on only part of the line is defined, by
+  # the function's name.
+  @domains %{
+    "Nx.asin" => "is defined on [-1, 1]",
+    "Nx.acos" => "is defined on [-1, 1]",
+    "Nx.atanh" => "is defined between -1 and 1, and infinite at ±1",
+    "Nx.erf_inv" => "is defined between -1 and 1, and infinite at ±1",
+    "Nx.log1p" => "is defined above -1, and negative infinity at -1",
+    "Nx.acosh" => "is defined from 1 up"
+  }
+
+  # How an operand comes to the edge of a domain or past it, by the cause
+  # the program names.
+  @domain_causes %{
+    "rounding" =>
+      "it is within ±1 only before rounding, as a cosine similarity or a vector over its norm is, and rounding can take it just past",
+    "saturation" =>
+      "it is made of a tanh, erf or sigmoid, which rounds to exactly ±1 for large inputs",
+    "trigonometric" => "it is made of a sine or cosine, which reaches ±1",
+    "clip" => "it is clipped to a bound at the edge",
+    "written" => "a written number puts it there",
+    "size" => "it is a size, which is at least 1",
+    "index" => "it is made of an index or an iota, which counts up from zero",
+    "comparison" => "it is made of a comparison, which is 0 or 1",
+    "sign" => "it is a sign, which is -1, 0 or 1",
+    "identity" => "it is made of an identity matrix, which is 0 or 1",
+    "input" => "it comes from an input, or from a value the analysis cannot follow",
+    "unbounded" => "its math does not keep it within the domain"
+  }
+
+  defp domain(operation) do
+    name = String.replace(operation, ~r{/\d+$}, "")
+    "#{name} #{Map.get(@domains, name, "is defined on only part of the line")}"
+  end
+
+  defp domain_cause(cause), do: Map.get(@domain_causes, cause, "its math takes it there")
+
+  # What each kind of result that can be infinite or NaN says: its title,
+  # why, the label at the call, what to change, and the frame at its origin.
+  defp hazard("outside_domain", cause, operation) do
+    %{
+      title: "can take a value outside its domain",
+      detail:
+        "#{domain(operation)}, and its operand can go outside it: #{domain_cause(cause)}. " <>
+          "The result there is NaN.",
+      label: "takes it here",
+      help:
+        "clip the operand into the domain first, such as Nx.clip(x, -1.0, 1.0) before asin or acos",
+      frame: "the operand leaves the domain because of this"
+    }
+  end
+
+  defp hazard("infinite_at_edge", cause, operation) do
+    %{
+      title: "can reach the edge of its domain",
+      detail:
+        "#{domain(operation)}, and its operand can reach the edge: #{domain_cause(cause)}. " <>
+          "The result there is infinite.",
+      label: "takes it here",
+      help:
+        "keep the operand strictly inside: clip it a little short of the edge, such as Nx.clip(x, -1 + eps, 1 - eps)",
+      frame: "the operand reaches the edge because of this"
+    }
+  end
+
+  defp hazard("unchecked_domain", cause, operation) do
+    %{
+      title: "takes a value nothing keeps in its domain",
+      detail:
+        "#{domain(operation)}. Its operand can be outside it as far as the code shows: " <>
+          "#{domain_cause(cause)}, and no clip and no test on the way to the call keeps it inside.",
+      label: "takes it here",
+      help: "clip the operand into the domain, or check it first",
+      frame: "the operand can leave the domain because of this"
+    }
+  end
+
+  defp hazard(kind, cause, operation),
+    do: Wording.hazard(kind, cause, operation) || hazard(kind, cause)
+
+  defp hazard("divide_by_zero", cause) do
+    %{
+      title: "can divide by zero",
+      detail:
+        "The divisor cannot be negative, but it can be zero: #{cause(cause)}. " <>
+          "Nx gives an infinity or a NaN there, and an integer quotient or remainder raises.",
+      label: "divides here",
+      help:
+        "keep the divisor away from zero: add a positive epsilon to it, or take Nx.max of it and one",
+      frame: "the divisor can be zero because of this"
+    }
+  end
+
+  defp hazard("infinite_gradient", cause) do
+    %{
+      title: "has an infinite gradient where its result is zero",
+      detail:
+        "A grad differentiates it, and its result cannot be negative but can be zero: " <>
+          "#{cause(cause)}. The derivative of a square root or root there is infinite, and " <>
+          "of a norm NaN (0/0), and the gradient carries it back into everything before it.",
+      label: "differentiated here",
+      help:
+        "keep the operand away from zero where it is differentiated, such as Nx.sqrt(Nx.add(x, 1.0e-12))",
+      frame: "the result can be zero because of this"
+    }
+  end
+
+  defp hazard("log_of_zero", "underflow") do
+    %{
+      title: "can take the logarithm of zero",
+      detail:
+        "Its operand is a softmax written out: an exponential far below the largest underflows " <>
+          "to zero, and the logarithm of zero is negative infinity.",
+      label: "takes the logarithm here",
+      help:
+        "take the logarithm of a softmax directly: Nx.subtract(x, Nx.logsumexp(x, axes: [...], keep_axes: true))",
+      frame: "the softmax is taken here"
+    }
+  end
+
+  defp hazard("log_of_zero", cause) do
+    %{
+      title: "can take the logarithm of zero",
+      detail:
+        "Its operand cannot be negative, but it can be zero: #{cause(cause)}. " <>
+          "The logarithm of zero is negative infinity.",
+      label: "takes the logarithm here",
+      help:
+        "keep the operand away from zero: add a positive epsilon to it, or take Nx.max of it and one",
+      frame: "the operand can be zero because of this"
+    }
+  end
+
+  defp hazard("root_of_negative", _cause) do
+    %{
+      title: "can take the square root of a negative value",
+      detail:
+        "Its operand is a difference of two values that cannot be negative, such as a variance " <>
+          "written as E[x²] - E[x]². Where they are close, rounding takes the difference below " <>
+          "zero, and the square root there is NaN.",
+      label: "takes the root here",
+      help:
+        "clamp the difference at zero first (Nx.max of it and 0), or use a form that cannot go negative, such as Nx.variance/2",
+      frame: "the difference is taken here"
+    }
+  end
+
+  defp hazard("log_of_negative", _cause) do
+    %{
+      title: "can take the logarithm of a negative value",
+      detail:
+        "Its operand is a difference of two values that cannot be negative. Where they are " <>
+          "close, rounding takes the difference below zero, and the logarithm there is NaN.",
+      label: "takes the logarithm here",
+      help: "keep the difference above zero first (Nx.max of it and a positive epsilon)",
+      frame: "the difference is taken here"
+    }
+  end
+
+  defp hazard("exp_overflow", _cause) do
+    %{
+      title: "can overflow its exponentials",
+      detail:
+        "It normalizes exponentials of values not shifted down by their maximum first: a large " <>
+          "value overflows the exponential to infinity, and infinity over infinity, or its " <>
+          "logarithm, is not finite.",
+      label: "normalizes here",
+      help:
+        "subtract the maximum first (Nx.subtract(x, Nx.reduce_max(x, axes: [...], keep_axes: true))), which leaves the result as it is, or use Nx.logsumexp/2",
+      frame: "the exponential that can overflow"
+    }
+  end
+
+  defp hazard("unchecked_divisor", cause) do
+    %{
+      title: "divides by a value nothing checks is nonzero",
+      detail:
+        "The divisor can be zero as far as the code shows: #{cause(cause)}, and no test on " <>
+          "the way to the call and no select keeps it from zero. Nx gives an infinity or a NaN " <>
+          "there, and an integer quotient or remainder raises.",
+      label: "divides here",
+      help:
+        "check the divisor first (a guard, or Nx.select on Nx.equal(divisor, 0)), or keep it from zero with a positive epsilon",
+      frame: "the divisor can be zero because of this"
+    }
+  end
+
+  defp hazard("unchecked_logarithm", cause) do
+    %{
+      title: "takes the logarithm of a value nothing checks is positive",
+      detail:
+        "The operand can be zero or negative as far as the code shows: #{cause(cause)}, and " <>
+          "no test on the way to the call and no select keeps it positive. The logarithm of " <>
+          "zero is negative infinity, and of a negative value NaN.",
+      label: "takes the logarithm here",
+      help:
+        "check the operand first (a guard, or Nx.select on Nx.greater(operand, 0)), or take Nx.max of it and a positive epsilon",
+      frame: "the operand can be zero because of this"
+    }
+  end
+
+  defp hazard("unchecked_root", _cause) do
+    %{
+      title: "takes the square root of a value nothing checks is not negative",
+      detail:
+        "Nothing in how the operand is computed keeps it from going below zero, and no test " <>
+          "on the way to the call and no select checks it. The square root of a negative " <>
+          "value is NaN.",
+      label: "takes the root here",
+      help: "check the operand first, or clamp it at zero (Nx.max of it and 0)",
+      frame: "the operand can be negative because of this"
+    }
+  end
+
+  # A kind the program has and this module does not describe still reads.
+  defp hazard(_kind, cause) do
+    %{
+      title: "can give an infinity or a NaN",
+      detail: "Its operand can reach a value the call is not defined at: #{cause(cause)}.",
+      label: "here",
+      help: "keep the operand where the call is defined",
+      frame: "because of this"
+    }
+  end
+
+  # The frame at the call a finding comes from, none for a written value.
+  defp origin_frame(_frame, "", _shown), do: []
+
+  defp origin_frame(frame, origin, shown),
+    do: [Findings.related("#{frame} #{shown}", Findings.at_instr(origin))]
+
   # A kind the program has and this module does not describe still reads
   # as a finding.
   defp kind(kind) do
-    Map.get(@kinds, kind, %{
-      title: "rejects these tensor shapes",
-      why: "The operands' shapes do not fit the operation.",
-      help: "make the operands' shapes fit the operation"
-    })
+    Map.get(@kinds, kind) || Wording.violation(kind) ||
+      %{
+        title: "rejects these tensor shapes",
+        why: "The operands' shapes do not fit the operation.",
+        help: "make the operands' shapes fit the operation"
+      }
   end
 
   # The label under the call: the shapes it gets, or nil where some
@@ -430,6 +860,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       edit that leaves the compiled code as it was (a comment, a doc, a
       comment in the rules) solves nothing. Only the latest rows are
       kept. Default: nil, no cache.
+    * `:unsupported_types` — the tensor types the backend the code runs
+      on does not support, as Nx names them (`:f64`, `{:f, 64}`): a call
+      that makes a tensor of one is reported. EMLX on Metal, for one, has
+      no f64. Default: none.
   """
   @spec solve([module() | Path.t()], Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def solve(modules, program \\ rules_file(), options \\ []),
@@ -469,11 +903,35 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   end
 
   defp solve_facts(directory, program, options) do
+    File.write!(
+      Path.join(directory, "unsupported_type.facts"),
+      options
+      |> Keyword.get(:unsupported_types, [])
+      |> Enum.map(&[type_name(&1), "\n"])
+    )
+
     case Keyword.get(options, :cache) do
       nil -> solve_rules(directory, program)
       cache -> solve_cached(directory, program, cache)
     end
   end
+
+  # The rules files `rules_file/0` includes, as they are read.
+  defp hash_rules_files(hash) do
+    rules_file()
+    |> Path.dirname()
+    |> Path.join("tensor_shapes/*.dl")
+    |> Path.wildcard()
+    |> Enum.sort()
+    |> Enum.reduce(hash, fn file, acc ->
+      :crypto.hash_update(acc, file |> File.read!() |> Argus.Souffle.Program.uncommented())
+    end)
+  end
+
+  # A type as the rules name it: `f64` for `:f64` or `{:f, 64}`.
+  defp type_name({family, size}) when is_atom(family) and is_integer(size), do: "#{family}#{size}"
+  defp type_name(type) when is_atom(type), do: Atom.to_string(type)
+  defp type_name(type) when is_binary(type), do: type
 
   defp extract(modules, directory) do
     with {:ok, directory} <- Argus.Pipeline.run(modules, directory, extractors: [ShapeFlow]) do
@@ -561,6 +1019,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     end)
     |> :crypto.hash_update(program |> File.read!() |> Argus.Souffle.Program.uncommented())
     |> :crypto.hash_update(rules_file() |> File.read!() |> Argus.Souffle.Program.uncommented())
+    |> hash_rules_files()
     |> :crypto.hash_update(to_string(Application.spec(:argus_beam, :vsn)))
     |> :crypto.hash_update(Argus.Souffle.version(Argus.Souffle.executable() || "souffle"))
     |> :crypto.hash_final()
