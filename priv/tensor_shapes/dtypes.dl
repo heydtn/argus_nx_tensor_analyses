@@ -1184,8 +1184,8 @@ bit_width(32, 2147483647, 2147483647).
 // ── What a value's type is ─────────────────────────────────────────
 
 // The values whose types are asked: the operands of the typed calls,
-// then what they are made of: the returns of a function a call runs, and
-// the argument a parameter of a call's own context is handed.
+// then what they are made of: the values they arrive from across a call
+// (`arrives_from`).
 .decl dtype_demand(context: Context, function: symbol, kind: symbol, source: symbol)
 dtype_demand(context, function, kind, source) :-
   typed_argument(context, _, _, function, kind, source).
@@ -1195,19 +1195,9 @@ dtype_demand(context, function, kind, source) :-
 dtype_demand(context, function, kind, source) :-
   typed_site(context, site),
   list_element(site, function, _, kind, source, _).
-dtype_demand(callee_context, callee, kind, source) :-
-  dtype_demand(context, _, "result", site),
-  invocation(context, site, callee, callee_context),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at).
-dtype_demand(caller, caller_function, kind, source) :-
-  dtype_demand($Canonical(function, arguments), function, "param", parameter),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
-dtype_demand(caller, caller_function, kind, source) :-
-  dtype_demand($Called(site, caller), callee, "param", parameter),
-  program_call(site, caller_function, callee),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
+dtype_demand(from_context, from_function, from_kind, from_source) :-
+  dtype_demand(context, function, kind, source),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
 
 // The Nx calls whose types are asked in a context: those a check reads,
 // and those a value asked of is the result of.
@@ -1257,26 +1247,12 @@ value_dtype(context, function, "result", site, type, origin) :-
   call_type(context, site, type, origin),
   dtype_demand(context, function, "result", site).
 
-// What a call returns: what the function it runs returns there.
-value_dtype(context, function, "result", site, type, origin) :-
-  value_dtype(callee_context, callee, kind, source, type, origin),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  dtype_demand(context, function, "result", site).
-
-// A parameter of a canonical context the program enters only through its
-// calls, and of a call's own context: the arguments the calls hand it.
-value_dtype($Canonical(function, arguments), function, "param", to_string(position), type, origin) :-
-  value_dtype(caller, caller_function, kind, source, type, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  dtype_demand($Canonical(function, arguments), function, "param", to_string(position)).
-value_dtype($Called(site, caller), callee, "param", to_string(position), type, origin) :-
-  value_dtype(caller, caller_function, kind, source, type, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  dtype_demand($Called(site, caller), callee, "param", to_string(position)).
+// A value that arrives across a call (`arrives_from`): the types of the
+// value it arrives from.
+value_dtype(context, function, kind, source, type, origin) :-
+  value_dtype(from_context, from_function, from_kind, from_source, type, origin),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  dtype_demand(context, function, kind, source).
 
 // An operand's type, as a tensor.
 .decl argument_dtype(context: Context, site: symbol, position: number, type: symbol, origin: symbol)

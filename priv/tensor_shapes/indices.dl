@@ -39,19 +39,9 @@ negative_asked(context, function, kind, source) :-
   negative_asked(context, function, "result", site),
   read_operand(site, position),
   flow_argument(site, function, position, kind, source).
-negative_asked(callee_context, callee, kind, source) :-
-  negative_asked(context, _, "result", site),
-  invocation(context, site, callee, callee_context),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at).
-negative_asked(caller, caller_function, kind, source) :-
-  negative_asked($Canonical(function, arguments), function, "param", parameter),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
-negative_asked(caller, caller_function, kind, source) :-
-  negative_asked($Called(site, caller), callee, "param", parameter),
-  program_call(site, caller_function, callee),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
+negative_asked(from_context, from_function, from_kind, from_source) :-
+  negative_asked(context, function, kind, source),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
 
 // An Nx call's result whose negativity is asked, and its sign class.
 .decl negative_call(context: Context, site: symbol, function: symbol, class: symbol)
@@ -193,26 +183,12 @@ can_go_negative(context, function, "result", site, site, "ddof") :-
   operation_site(site, operation, _),
   spread(operation, _, 1).
 
-// What a call returns: what the function it runs returns there.
-can_go_negative(context, function, "result", site, origin, cause) :-
-  can_go_negative(callee_context, callee, kind, source, origin, cause),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  negative_asked(context, function, "result", site).
-
-// A parameter the program enters only through its calls, and one of a
-// call's own context: what the calls hand it.
-can_go_negative($Canonical(function, arguments), function, "param", to_string(position), origin, cause) :-
-  can_go_negative(caller, caller_function, kind, source, origin, cause),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  negative_asked($Canonical(function, arguments), function, "param", to_string(position)).
-can_go_negative($Called(site, caller), callee, "param", to_string(position), origin, cause) :-
-  can_go_negative(caller, caller_function, kind, source, origin, cause),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  negative_asked($Called(site, caller), callee, "param", to_string(position)).
+// A value that arrives across a call (`arrives_from`): what makes the
+// value it arrives from negative.
+can_go_negative(context, function, kind, source, origin, cause) :-
+  can_go_negative(from_context, from_function, from_kind, from_source, origin, cause),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  negative_asked(context, function, kind, source).
 
 // A select branch (1 `on_true`, 2 `on_false`) its predicate takes only
 // where the branch is not negative: `Nx.select(Nx.less(i, 0), 0, i)`.

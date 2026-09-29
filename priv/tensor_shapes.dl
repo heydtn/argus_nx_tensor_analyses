@@ -8385,25 +8385,15 @@ summed_operand("Nx.weighted_mean", 2, 1). summed_operand("Nx.weighted_mean", 3, 
 .decl can_be_zero(context: Context, function: symbol, kind: symbol, source: symbol, origin: symbol, cause: symbol)
 
 // The values signs are asked of: a division's operands, then what they
-// are made of: an Nx call's operands, the returns of a function a call
-// runs, and the argument a parameter of a call's own context is handed.
+// are made of: an Nx call's operands, and the values they arrive from
+// across a call (`arrives_from`).
 .decl sign_demand(context: Context, function: symbol, kind: symbol, source: symbol)
 sign_demand(context, function, kind, source) :-
   signed_argument(context, _, _, function, kind, source).
-sign_demand(callee_context, callee, kind, source) :-
-  sign_demand(context, _, "result", site),
-  invocation(context, site, callee, callee_context),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at).
+sign_demand(from_context, from_function, from_kind, from_source) :-
+  sign_demand(context, function, kind, source),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
 sign_demand(context, function, "result", site) :- gradient_asked(context, site, function).
-sign_demand(caller, caller_function, kind, source) :-
-  sign_demand($Canonical(function, arguments), function, "param", parameter),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
-sign_demand(caller, caller_function, kind, source) :-
-  sign_demand($Called(site, caller), callee, "param", parameter),
-  program_call(site, caller_function, callee),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
 
 // The calls whose arguments signs are asked of, and their arguments.
 .decl sign_site(context: Context, site: symbol)
@@ -8531,44 +8521,20 @@ can_be_negative(context, function, kind, source) :- sign_unknown(context, functi
 can_be_positive(context, function, kind, source) :- sign_unknown(context, function, kind, source).
 can_be_zero(context, function, kind, source, "", "input") :- sign_unknown(context, function, kind, source).
 
-// What a call returns: what the function it runs returns there.
-can_be_negative(context, function, "result", site) :-
-  can_be_negative(callee_context, callee, kind, source),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  sign_demand(context, function, "result", site).
-can_be_positive(context, function, "result", site) :-
-  can_be_positive(callee_context, callee, kind, source),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  sign_demand(context, function, "result", site).
-can_be_zero(context, function, "result", site, origin, cause) :-
-  can_be_zero(callee_context, callee, kind, source, origin, cause),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  sign_demand(context, function, "result", site).
-
-// A parameter of a function's own canonical context, which the program
-// enters only through its calls: the arguments the calls that run it there
-// hand it.
-can_be_negative($Canonical(function, arguments), function, "param", to_string(position)) :-
-  can_be_negative(caller, caller_function, kind, source),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
-can_be_positive($Canonical(function, arguments), function, "param", to_string(position)) :-
-  can_be_positive(caller, caller_function, kind, source),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
-can_be_zero($Canonical(function, arguments), function, "param", to_string(position), origin, cause) :-
-  can_be_zero(caller, caller_function, kind, source, origin, cause),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
+// A value that arrives across a call (`arrives_from`): what the value it
+// arrives from can be.
+can_be_negative(context, function, kind, source) :-
+  can_be_negative(from_context, from_function, from_kind, from_source),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  sign_demand(context, function, kind, source).
+can_be_positive(context, function, kind, source) :-
+  can_be_positive(from_context, from_function, from_kind, from_source),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  sign_demand(context, function, kind, source).
+can_be_zero(context, function, kind, source, origin, cause) :-
+  can_be_zero(from_context, from_function, from_kind, from_source, origin, cause),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  sign_demand(context, function, kind, source).
 
 // A call of the program that runs a function in its canonical context,
 // for a function the program enters only through its calls.
@@ -8577,6 +8543,29 @@ canonical_entry(caller, site, caller_function, function, arguments) :-
   invocation(caller, site, function, $Canonical(function, arguments)),
   program_call(site, caller_function, function),
   !entered_from_outside(function).
+
+// A value in a context made, across a call, of a value in another: a
+// call's result of what the function it runs returns there, a parameter
+// of a canonical context the program enters only through its calls of
+// what those calls hand it, and a parameter of a call's own context of
+// what the call hands it.
+//
+// Not seeded itself: a join, not a walk, over the contexts the rules
+// already derive values in, as `call_edge` is over calls. Each lattice and
+// demand that steps along it stays seeded by what it asks of.
+.decl arrives_from(context: Context, function: symbol, kind: symbol, source: symbol, from_context: Context, from_function: symbol, from_kind: symbol, from_source: symbol)
+arrives_from(context, function, "result", site, callee_context, callee, kind, source) :-
+  invocation(context, site, callee, callee_context),
+  site_function(site, function),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at).
+arrives_from($Canonical(function, arguments), function, "param", to_string(position), caller, caller_function, kind, source) :-
+  canonical_entry(caller, site, caller_function, function, arguments),
+  flow_argument(site, caller_function, position, kind, source).
+arrives_from($Called(site, caller), callee, "param", to_string(position), caller, caller_function, kind, source) :-
+  invocation(caller, site, callee, $Called(site, caller)),
+  program_call(site, caller_function, callee),
+  flow_argument(site, caller_function, position, kind, source).
 
 // A function the program is entered at from outside, whose parameters in
 // its canonical context are not known: one no call of the program runs, a
@@ -8602,23 +8591,6 @@ defn_wrapper(wrapper, body) :-
   closure_def(wrapper, body),
   function_def(wrapper, module, name, arity, _),
   function_def(body, module, cat("__defn:", name, "__"), arity, _).
-
-// A parameter of a call's own context: the argument the call hands it.
-can_be_negative($Called(site, caller), callee, "param", to_string(position)) :-
-  can_be_negative(caller, caller_function, kind, source),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  sign_demand($Called(site, caller), callee, "param", to_string(position)).
-can_be_positive($Called(site, caller), callee, "param", to_string(position)) :-
-  can_be_positive(caller, caller_function, kind, source),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  sign_demand($Called(site, caller), callee, "param", to_string(position)).
-can_be_zero($Called(site, caller), callee, "param", to_string(position), origin, cause) :-
-  can_be_zero(caller, caller_function, kind, source, origin, cause),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  sign_demand($Called(site, caller), callee, "param", to_string(position)).
 
 // ── What an Nx call's signs are ─────────────────────────────────────
 //
@@ -9319,26 +9291,12 @@ in_region(context, function, "result", site, region, site, "unbounded") :-
   !unit_rule(site, _),
   region_order(region, _).
 
-// What a call returns: what the function it runs returns there.
-in_region(context, function, "result", site, region, origin, cause) :-
-  in_region(callee_context, callee, kind, source, region, origin, cause),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  sign_demand(context, function, "result", site).
-
-// A parameter of a canonical context the program enters only through its
-// calls, and of a call's own context: the arguments the calls hand it.
-in_region($Canonical(function, arguments), function, "param", to_string(position), region, origin, cause) :-
-  in_region(caller, caller_function, kind, source, region, origin, cause),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
-in_region($Called(site, caller), callee, "param", to_string(position), region, origin, cause) :-
-  in_region(caller, caller_function, kind, source, region, origin, cause),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  sign_demand($Called(site, caller), callee, "param", to_string(position)).
+// A value that arrives across a call (`arrives_from`): where the value it
+// arrives from lies.
+in_region(context, function, kind, source, region, origin, cause) :-
+  in_region(from_context, from_function, from_kind, from_source, region, origin, cause),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  sign_demand(context, function, kind, source).
 
 // The Nx call at `site` has region class `class`, and a value in a
 // context is its result.
@@ -9787,26 +9745,12 @@ value_class_of(value, class) :-
 list_class(spelled, "float") :- match(".*[0-9]\\.[0-9].*", spelled).
 list_class(spelled, "integer") :- match("[-0-9, \\[\\]]*[0-9][-0-9, \\[\\]]*", spelled).
 
-// What a call returns: what the function it runs returns there.
-value_class(context, function, "result", site, class, origin) :-
-  value_class(callee_context, callee, kind, source, class, origin),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  sign_demand(context, function, "result", site).
-
-// A parameter of a canonical context the program enters only through its
-// calls, and of a call's own context: the arguments the calls hand it.
-value_class($Canonical(function, arguments), function, "param", to_string(position), class, origin) :-
-  value_class(caller, caller_function, kind, source, class, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  sign_demand($Canonical(function, arguments), function, "param", to_string(position)).
-value_class($Called(site, caller), callee, "param", to_string(position), class, origin) :-
-  value_class(caller, caller_function, kind, source, class, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  sign_demand($Called(site, caller), callee, "param", to_string(position)).
+// A value that arrives across a call (`arrives_from`): the classes of the
+// value it arrives from.
+value_class(context, function, kind, source, class, origin) :-
+  value_class(from_context, from_function, from_kind, from_source, class, origin),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  sign_demand(context, function, kind, source).
 
 // The Nx call at `site` has type class `class`, and a value in a context
 // is its result.

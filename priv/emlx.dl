@@ -480,25 +480,11 @@ placed_on(context, function, "result", site, backend, origin) :-
   keeps_backend(site),
   site_active(context, site).
 
-// What a call returns, where the function it runs returns it.
-placed_on(context, function, "result", site, backend, origin) :-
-  placed_on(callee_context, callee, kind, source, backend, origin),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  site_function(site, function).
-
-// A parameter of a function the program enters only through its calls,
-// and of a call's own context: what the calls hand it.
-placed_on($Canonical(function, arguments), function, "param", to_string(position), backend, origin) :-
-  placed_on(caller, caller_function, kind, source, backend, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments).
-placed_on($Called(site, caller), callee, "param", to_string(position), backend, origin) :-
-  placed_on(caller, caller_function, kind, source, backend, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  invocation(caller, site, callee, $Called(site, caller)).
+// A value that arrives across a call (`arrives_from`): where the value it
+// arrives from is.
+placed_on(context, function, kind, source, backend, origin) :-
+  placed_on(from_context, from_function, from_kind, from_source, backend, origin),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
 
 // A field of a container on a backend, which a compile or a transfer
 // moves as a whole, and what a lookup finds in one.
@@ -536,19 +522,9 @@ default_demand(context, function, kind, source) :-
   default_demand(context, function, "result", site),
   keeps_backend(site),
   tensor_argument(site, function, _, kind, source).
-default_demand(callee_context, callee, kind, source) :-
-  default_demand(context, _, "result", site),
-  invocation(context, site, callee, callee_context),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at).
-default_demand(caller, caller_function, kind, source) :-
-  default_demand($Canonical(function, arguments), function, "param", parameter),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
-default_demand(caller, caller_function, kind, source) :-
-  default_demand($Called(site, caller), callee, "param", parameter),
-  program_call(site, caller_function, callee),
-  flow_argument(site, caller_function, to_number(parameter), kind, source).
+default_demand(from_context, from_function, from_kind, from_source) :-
+  default_demand(context, function, kind, source),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
 default_demand(object_context, builder, field_kind, field_source) :-
   default_demand(context, function, "load", load),
   flow_load(function, load, selector, kind, source),
@@ -567,22 +543,10 @@ made_on_default(context, function, "result", site, origin) :-
   tensor_argument(site, function, _, kind, source),
   keeps_backend(site),
   default_demand(context, function, "result", site).
-made_on_default(context, function, "result", site, origin) :-
-  made_on_default(callee_context, callee, kind, source, origin),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  default_demand(context, function, "result", site).
-made_on_default($Canonical(function, arguments), function, "param", to_string(position), origin) :-
-  made_on_default(caller, caller_function, kind, source, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments),
-  default_demand($Canonical(function, arguments), function, "param", to_string(position)).
-made_on_default($Called(site, caller), callee, "param", to_string(position), origin) :-
-  made_on_default(caller, caller_function, kind, source, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  default_demand($Called(site, caller), callee, "param", to_string(position)).
+made_on_default(context, function, kind, source, origin) :-
+  made_on_default(from_context, from_function, from_kind, from_source, origin),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
+  default_demand(context, function, kind, source).
 made_on_default(context, function, "load", load, origin) :-
   made_on_default(object_context, builder, field_kind, field_source, origin),
   flow_field(builder, object, selector, field_kind, field_source),
@@ -662,21 +626,9 @@ carries_mix(context, function, "result", site, origin) :-
   tensor_argument(site, function, _, kind, source),
   keeps_backend(site),
   site_active(context, site).
-carries_mix(context, function, "result", site, origin) :-
-  carries_mix(callee_context, callee, kind, source, origin),
-  flow_return(callee, at, kind, source),
-  feasible(callee_context, at),
-  invocation(context, site, callee, callee_context),
-  site_function(site, function).
-carries_mix($Canonical(function, arguments), function, "param", to_string(position), origin) :-
-  carries_mix(caller, caller_function, kind, source, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  canonical_entry(caller, site, caller_function, function, arguments).
-carries_mix($Called(site, caller), callee, "param", to_string(position), origin) :-
-  carries_mix(caller, caller_function, kind, source, origin),
-  flow_argument(site, caller_function, position, kind, source),
-  program_call(site, caller_function, callee),
-  invocation(caller, site, callee, $Called(site, caller)).
+carries_mix(context, function, kind, source, origin) :-
+  carries_mix(from_context, from_function, from_kind, from_source, origin),
+  arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
 
 // Two backends whose tensors cannot meet, the first not EMLX's: any two
 // the code names, but Nx.BinaryBackend, which meets any other.
