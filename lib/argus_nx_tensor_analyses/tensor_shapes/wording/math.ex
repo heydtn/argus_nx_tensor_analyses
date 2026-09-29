@@ -6,16 +6,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
 
   import ArgusNxTensorAnalyses.Text
 
-  # How a value can be zero, for the causes these rules add.
-  @zero_causes %{
-    "sample" =>
-      "it is a random sample, which is exactly its minimum now and then: a uniform sample " <>
-        "from zero is zero once in 2^7 elements in bf16, 2^10 in f16 and 2^23 in f32, and an " <>
-        "integer sample from zero once in as many draws as its range is wide",
-    "product_underflow" =>
-      "it is a product of fractions over many elements, which underflows to zero: 0.01 to " <>
-        "the 23rd is below the smallest f32"
-  }
+  alias ArgusNxTensorAnalyses.TensorShapes.Wording.Causes
 
   @impl true
   def hazard("exp_overflow", "softplus", _operation) do
@@ -65,7 +56,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
       title: "can take a logarithm to base 1",
       detail:
         "Nx.log/2 divides the logarithm of its operand by the logarithm of its base, and the " <>
-          "base can be exactly 1: #{base_cause(cause)}. The logarithm of 1 is zero, so the " <>
+          "base can be exactly 1: #{Causes.one(cause)}. The logarithm of 1 is zero, so the " <>
           "result there is an infinity or NaN, and Nx raises for a base that is the number 1.",
       label: "takes the logarithm here",
       help:
@@ -78,10 +69,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
       when kind in ["log_of_zero", "unchecked_logarithm"],
       do: scaling_hazard(kind, cause)
 
-  def hazard(kind, cause, _operation) when is_map_key(@zero_causes, cause),
-    do: zero_hazard(kind, Map.fetch!(@zero_causes, cause))
-
-  def hazard(_kind, _cause, _operation), do: nil
+  def hazard(kind, cause, _operation) do
+    if why = Causes.sampled(cause), do: zero_hazard(kind, why)
+  end
 
   # A log-sum-exp whose scaling factor can be zero or negative.
   defp scaling_hazard("log_of_zero", _cause) do
@@ -192,23 +182,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
   defp zero_help do
     "keep the value away from zero: sample from a positive minimum (such as the type's smallest positive normal number), add a positive epsilon, or sum logarithms rather than take the logarithm of a product"
   end
-
-  # How a logarithm's base can be exactly 1, by the region cause.
-  @base_causes %{
-    "size" => "it is a size, which can be 1",
-    "clip" => "it is clipped to a bound of 1",
-    "written" => "it is written as 1",
-    "index" => "it is made of an index or an iota, which counts through 1",
-    "comparison" => "it is made of a comparison, which is 0 or 1",
-    "identity" => "it is made of an identity matrix, which is 0 or 1",
-    "sign" => "it is a sign, which is -1, 0 or 1",
-    "saturation" => "it is made of a tanh, erf or sigmoid, which rounds to exactly 1",
-    "trigonometric" => "it is made of a sine or cosine, which reaches 1",
-    "cosh" => "it is a cosh, which is 1 at zero",
-    "rounding" => "it is a ratio that is 1 where its operands meet"
-  }
-
-  defp base_cause(cause), do: Map.get(@base_causes, cause, "its math takes it there")
 
   @impl true
   def call_error("nan_comparison", relation, _operation) do

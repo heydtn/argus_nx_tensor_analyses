@@ -6,16 +6,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
 
   import ArgusNxTensorAnalyses.Text
 
-  # How a value can go negative, by the cause the rules name.
-  @negative_causes %{
-    "written" => "a written negative number reaches it",
-    "subtract" =>
-      "it is a subtraction, which goes below zero where it takes more than there is, as one less than an index or position of 0 does",
-    "negate" => "it is a negation, which is negative wherever its operand is positive",
-    "remainder" =>
-      "it is a remainder, which keeps the sign of what it divides: rem(-1, 3) is -1 in Nx and Elixir, where Python's % gives 2",
-    "ddof" => "it is a variance whose ddof is past its count, which is negative"
-  }
+  alias ArgusNxTensorAnalyses.TensorShapes.Wording.Causes
 
   # The function Nx's message names for a complex operand of each call: its
   # own, with every argument it takes, or the one it reaches that checks.
@@ -51,7 +42,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "can get a negative index",
       detail:
-        "Its indices can be negative: #{negative(cause)}. Nx reads no index from the end, " <>
+        "Its indices can be negative: #{Causes.negative(cause)}. Nx reads no index from the end, " <>
           "and its backends disagree on a negative one, none as the code means: the binary " <>
           "backend raises that it is out of bounds, EXLA clamps a gathered index to 0 and drops " <>
           "an indexed update, and EMLX wraps -1 to the last element and drops an update out " <>
@@ -70,7 +61,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "can start a slice below zero",
       detail:
-        "Its start can be negative: #{negative(cause)}. Nx does not count a negative start " <>
+        "Its start can be negative: #{Causes.negative(cause)}. Nx does not count a negative start " <>
           "from the end, as NumPy does, nor raise: it moves the start to 0, and the slice " <>
           "#{verb(operation)} the first elements (Nx.slice(Nx.iota({6}), [-1], [1]) is [0]).",
       label: "#{verb(operation)} from here",
@@ -256,8 +247,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     do:
       "The count less ddof is negative: a variance or covariance comes out negative, and a " <>
         "standard deviation, its square root, NaN."
-
-  defp negative(cause), do: Map.get(@negative_causes, cause, "its math takes it below zero")
 
   # A slice reads its elements, and `put_slice` writes them.
   defp verb(operation) do

@@ -33,6 +33,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   alias Argus.Findings
   alias ArgusNxTensorAnalyses.TensorShapes.ShapeFlow
   alias ArgusNxTensorAnalyses.TensorShapes.Wording
+  alias ArgusNxTensorAnalyses.TensorShapes.Wording.Causes
 
   import ArgusNxTensorAnalyses.Text
 
@@ -535,32 +536,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     Findings.related(frame_label(how, subject, position, shown), Findings.at_instr(at))
   end
 
-  # How a divisor can be zero, by the cause the program names.
-  @causes %{
-    "square" => "it is made of a square, which is zero where its operand is",
-    "absolute" => "it is made of an absolute value, which is zero where its operand is",
-    "root" => "it is made of a square root, which is zero where its operand is",
-    "norm" => "it is a norm, which is zero for a zero vector",
-    "comparison" =>
-      "it is made of a comparison, which is 0 where it does not hold, as nowhere on a row with nothing selected",
-    "index" => "it is made of an index or an iota, which starts at zero",
-    "identity" => "it is made of an identity matrix, which is zero off its diagonal",
-    "spread" =>
-      "it is a variance or standard deviation, which is zero where every value is the same",
-    "clamp" => "it is clamped at zero, so it is zero wherever the value clamped is not above it",
-    "remainder" => "it is a remainder, which is zero where the division comes out whole",
-    "quotient" =>
-      "it is an integer quotient, which is zero where the dividend is smaller than the divisor",
-    "round" => "it is rounded, which takes a value between -1 and 1 to zero",
-    "zero" => "it is a written zero",
-    "input" => "it comes from an input, or from a value the analysis cannot follow",
-    "cancel" => "it is a sum or difference whose terms can cancel",
-    "negative" => "nothing in how it is computed keeps it from going below zero"
-  }
-
-  # A cause the program has and this module does not describe still reads.
-  defp cause(cause), do: Map.get(@causes, cause, "its math lets it be zero")
-
   # Where each function defined on only part of the line is defined, by
   # the function's name.
   @domains %{
@@ -572,31 +547,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     "Nx.acosh" => "is defined from 1 up"
   }
 
-  # How an operand comes to the edge of a domain or past it, by the cause
-  # the program names.
-  @domain_causes %{
-    "rounding" =>
-      "it is within ±1 only before rounding, as a cosine similarity or a vector over its norm is, and rounding can take it just past",
-    "saturation" =>
-      "it is made of a tanh, erf or sigmoid, which rounds to exactly ±1 for large inputs",
-    "trigonometric" => "it is made of a sine or cosine, which reaches ±1",
-    "clip" => "it is clipped to a bound at the edge",
-    "written" => "a written number puts it there",
-    "size" => "it is a size, which is at least 1",
-    "index" => "it is made of an index or an iota, which counts up from zero",
-    "comparison" => "it is made of a comparison, which is 0 or 1",
-    "sign" => "it is a sign, which is -1, 0 or 1",
-    "identity" => "it is made of an identity matrix, which is 0 or 1",
-    "input" => "it comes from an input, or from a value the analysis cannot follow",
-    "unbounded" => "its math does not keep it within the domain"
-  }
-
   defp domain(operation) do
     name = without_arity(operation)
     "#{name} #{Map.get(@domains, name, "is defined on only part of the line")}"
   end
-
-  defp domain_cause(cause), do: Map.get(@domain_causes, cause, "its math takes it there")
 
   # What each kind of result that can be infinite or NaN says: its title,
   # why, the label at the call, what to change, and the frame at its origin.
@@ -604,7 +558,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     %{
       title: "can take a value outside its domain",
       detail:
-        "#{domain(operation)}, and its operand can go outside it: #{domain_cause(cause)}. " <>
+        "#{domain(operation)}, and its operand can go outside it: #{Causes.domain(cause)}. " <>
           "The result there is NaN.",
       label: "takes it here",
       help:
@@ -617,7 +571,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     %{
       title: "can reach the edge of its domain",
       detail:
-        "#{domain(operation)}, and its operand can reach the edge: #{domain_cause(cause)}. " <>
+        "#{domain(operation)}, and its operand can reach the edge: #{Causes.domain(cause)}. " <>
           "The result there is infinite.",
       label: "takes it here",
       help:
@@ -631,7 +585,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       title: "takes a value nothing keeps in its domain",
       detail:
         "#{domain(operation)}. Its operand can be outside it as far as the code shows: " <>
-          "#{domain_cause(cause)}, and no clip and no test on the way to the call keeps it inside.",
+          "#{Causes.domain(cause)}, and no clip and no test on the way to the call keeps it inside.",
       label: "takes it here",
       help: "clip the operand into the domain, or check it first",
       frame: "the operand can leave the domain because of this"
@@ -645,7 +599,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     %{
       title: "can divide by zero",
       detail:
-        "The divisor cannot be negative, but it can be zero: #{cause(cause)}. " <>
+        "The divisor cannot be negative, but it can be zero: #{Causes.zero(cause)}. " <>
           "Nx gives an infinity or a NaN there, and an integer quotient or remainder raises.",
       label: "divides here",
       help:
@@ -659,7 +613,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       title: "has an infinite gradient where its result is zero",
       detail:
         "A grad differentiates it, and its result cannot be negative but can be zero: " <>
-          "#{cause(cause)}. The derivative of a square root or root there is infinite, and " <>
+          "#{Causes.zero(cause)}. The derivative of a square root or root there is infinite, and " <>
           "of a norm NaN (0/0), and the gradient carries it back into everything before it.",
       label: "differentiated here",
       help:
@@ -685,7 +639,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     %{
       title: "can take the logarithm of zero",
       detail:
-        "Its operand cannot be negative, but it can be zero: #{cause(cause)}. " <>
+        "Its operand cannot be negative, but it can be zero: #{Causes.zero(cause)}. " <>
           "The logarithm of zero is negative infinity.",
       label: "takes the logarithm here",
       help:
@@ -738,7 +692,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     %{
       title: "divides by a value nothing checks is nonzero",
       detail:
-        "The divisor can be zero as far as the code shows: #{cause(cause)}, and no test on " <>
+        "The divisor can be zero as far as the code shows: #{Causes.zero(cause)}, and no test on " <>
           "the way to the call and no select keeps it from zero. Nx gives an infinity or a NaN " <>
           "there, and an integer quotient or remainder raises.",
       label: "divides here",
@@ -752,7 +706,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     %{
       title: "takes the logarithm of a value nothing checks is positive",
       detail:
-        "The operand can be zero or negative as far as the code shows: #{cause(cause)}, and " <>
+        "The operand can be zero or negative as far as the code shows: #{Causes.zero(cause)}, and " <>
           "no test on the way to the call and no select keeps it positive. The logarithm of " <>
           "zero is negative infinity, and of a negative value NaN.",
       label: "takes the logarithm here",
@@ -779,7 +733,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   defp hazard(_kind, cause) do
     %{
       title: "can give an infinity or a NaN",
-      detail: "Its operand can reach a value the call is not defined at: #{cause(cause)}.",
+      detail: "Its operand can reach a value the call is not defined at: #{Causes.zero(cause)}.",
       label: "here",
       help: "keep the operand where the call is defined",
       frame: "because of this"

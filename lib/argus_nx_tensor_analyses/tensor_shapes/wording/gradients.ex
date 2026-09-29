@@ -6,37 +6,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
 
   import ArgusNxTensorAnalyses.Text
 
-  # How a value comes to be zero, or to the edge of a domain, by the cause
-  # the rules name.
-  @causes %{
-    "square" => "it is made of a square, which is zero where its operand is",
-    "absolute" => "it is made of an absolute value, which is zero where its operand is",
-    "root" => "it is made of a square root, which is zero where its operand is",
-    "norm" => "it is a norm, which is zero for a zero vector",
-    "comparison" => "it is made of a comparison, which is 0 where it does not hold",
-    "index" => "it is made of an index or an iota, which starts at zero",
-    "identity" => "it is made of an identity matrix, which is zero off its diagonal",
-    "spread" =>
-      "it is a variance or standard deviation, which is zero where every value is the same",
-    "clamp" => "it is clamped at zero",
-    "remainder" => "it is a remainder, which is zero where the division comes out whole",
-    "quotient" => "it is an integer quotient, which is zero where the dividend is smaller",
-    "round" => "it is rounded, which takes a value between -1 and 1 to zero",
-    "zero" => "it is a written zero",
-    "cancel" => "it is a sum or difference whose terms can cancel",
-    "input" => "both come from inputs, or from values the analysis cannot follow",
-    "clip" => "it is clipped to a bound at the edge",
-    "saturation" =>
-      "it is made of a tanh, erf or sigmoid, which rounds to exactly ±1 for large inputs",
-    "trigonometric" => "it is made of a sine or cosine, which reaches ±1",
-    "rounding" =>
-      "it is within ±1 only before rounding, as a cosine similarity is, and reaches ±1 where its vectors line up",
-    "written" => "a written number puts it there",
-    "size" => "it is a size, which can be 1",
-    "sign" => "it is a sign, which is -1, 0 or 1"
-  }
-
-  defp cause(cause), do: Map.get(@causes, cause, "its math takes it there")
+  alias ArgusNxTensorAnalyses.TensorShapes.Wording.Causes
 
   @impl true
   def hazard("infinite_gradient", "spread", operation) do
@@ -60,7 +30,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
     %{
       title: "has a NaN gradient where both its coordinates are zero",
       detail:
-        "A grad differentiates it, and both of its coordinates can be zero: #{cause(cause)}. " <>
+        "A grad differentiates it, and both of its coordinates can be zero: #{Causes.gradient(cause)}. " <>
           "The angle is 0 there, but its derivative, y/(x² + y²), is 0/0, so the gradient is " <>
           "NaN, and it carries back into everything before it.",
       label: "differentiated here",
@@ -78,7 +48,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
       title: "has an infinite gradient at the edge of its domain",
       detail:
         "A grad differentiates it, and its operand can reach the edge of its domain: " <>
-          "#{cause(cause)}. The value is finite there, but the derivative, #{derivative}, is " <>
+          "#{Causes.gradient(cause)}. The value is finite there, but the derivative, #{derivative}, is " <>
           "infinite, and the gradient carries it back into everything before it.",
       label: "differentiated here",
       help: help,
