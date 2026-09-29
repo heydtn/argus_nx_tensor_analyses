@@ -155,6 +155,9 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
         )
     end)
 
+    ArgusNxTensorAnalyses.FixtureBeams.keep(directory, "emlx")
+    ArgusNxTensorAnalyses.FixtureBeams.keep(on_exla_directory, "emlx_on_exla")
+
     # c128 listed as unsupported: the tensor shapes analysis reports its
     # tensors, and this analysis leaves them to it.
     {:ok, rows} =

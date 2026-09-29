@@ -3116,6 +3116,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
         Kernel.ParallelCompiler.compile_to_path([source], directory, return_diagnostics: true)
     end)
 
+    ArgusNxTensorAnalyses.FixtureBeams.keep(directory, "tensor_shapes")
     beam = Path.join(directory, "Elixir.#{inspect(@fixtures)}.beam")
     probe = Path.join(directory, "probe.dl")
     File.write!(probe, probe_program())
