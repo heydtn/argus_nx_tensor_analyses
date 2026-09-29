@@ -8,8 +8,9 @@
 # must change no row.
 #
 # The data directory is `_build/identity` of the main checkout of the
-# repository this script is in, shared by its worktrees (ARGUS_NX_IDENTITY_DIR overrides it). README.md there says
-# how to fill it.
+# repository this script is in, shared by its worktrees
+# (ARGUS_NX_IDENTITY_DIR overrides it). The README next to this script
+# says how to fill it.
 #
 # A change that renames or merges one of the internal relations keeps it
 # comparable with a view in the checkout's `_build/probe/identity_views.dl`,
