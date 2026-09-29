@@ -140,7 +140,8 @@ negative_by_math(context, site, position, origin) :-
   signed_argument(context, site, position, function, kind, source),
   may_have_sign(context, function, kind, source, "negative", _, _),
   in_region(context, function, kind, source, region, origin, cause),
-  negative_region(region),
+  region_order(region, order),
+  order <= 1,
   made_by_math(cause, origin).
 
 // A cause of a value's region that is the code's own math: any but an
@@ -166,7 +167,8 @@ negative_cause(cause, origin) :-
   divergence_negative_asked(site, position),
   signed_argument(context, site, position, function, kind, source),
   in_region(context, function, kind, source, region, origin, cause),
-  negative_region(region).
+  region_order(region, order),
+  order <= 1.
 
 // The operands of a remainder, by position.
 .decl remainder_operand(position: number, operand: symbol)
@@ -178,10 +180,6 @@ remainder_operand(0, "dividend"). remainder_operand(1, "divisor").
 divergence_negative_asked(site, 0) :- takes_remainder(site).
 divergence_negative_asked(site, 1) :- takes_remainder(site).
 divergence_negative_asked(site, 1) :- takes_power(site).
-
-// The regions of the line at or below -1.
-.decl negative_region(region: symbol)
-negative_region("below"). negative_region("minus_one").
 
 // ══ Integer powers with negative exponents ══════════════════════════
 //
@@ -254,20 +252,20 @@ lands_on_half(context, site, "halved") :-
   rounded_operand(_, site),
   sign_rule(site, "divide"),
   written_operand(site, 1, text),
-  even_number(text),
+  written_number(text, "parity", "even"),
   argument_class(context, site, 0, "integer", _).
 lands_on_half(context, site, "halved") :-
   rounded_operand(_, site),
   sign_rule(site, "multiply"),
   written_operand(site, written, text),
-  half_number(text),
+  written_number(text, "fraction", "half"),
   other_operand(written, position),
   argument_class(context, site, position, "integer", _).
 lands_on_half(context, site, "half_added") :-
   rounded_operand(_, site),
   ( sign_rule(site, "add") ; sign_rule(site, "subtract") ),
   written_operand(site, written, text),
-  half_number(text),
+  written_number(text, "fraction", "half"),
   other_operand(written, position),
   argument_class(context, site, position, "integer", _).
 lands_on_half(context, site, "mean") :-
@@ -286,17 +284,6 @@ written_operand(site, position, text) :-
 
 .decl other_operand(position: number, other: number)
 other_operand(0, 1). other_operand(1, 0).
-
-// A number spelled as a nonzero even integer, or as a float with such a
-// whole part and no fraction.
-.decl even_number(text: symbol) inline
-even_number(text) :-
-  match("-?[0-9]*[02468](\\.0+)?", text),
-  !match("-?0+(\\.0+)?", text).
-
-// A number spelled with a fraction of exactly one half.
-.decl half_number(text: symbol) inline
-half_number(text) :- match("-?[0-9]+\\.50*", text).
 
 // ══ Tensors of two backends ═════════════════════════════════════════
 //

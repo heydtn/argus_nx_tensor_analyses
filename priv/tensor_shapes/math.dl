@@ -323,7 +323,7 @@ samples_from_zero(site) :-
   tuple_sampler(operation),
   arity >= 3,
   flow_argument(site, _, 1, "literal", text),
-  written_zero(text).
+  written_number(text, "sign", "zero").
 
 // A tuple sampler whose minimum cannot be negative: its sample is
 // positive but at the minimum.
@@ -334,7 +334,7 @@ samples_from_nonnegative(site) :-
   tuple_sampler(operation),
   arity >= 3,
   flow_argument(site, _, 1, "literal", text),
-  positive_literal(text).
+  written_number(text, "sign", "positive").
 
 // A sample is a float, or an integer for randint, unless the sampler is
 // given a type.

@@ -2762,6 +2762,212 @@ escape_code("0", 0). escape_code("a", 7). escape_code("b", 8). escape_code("t", 
 escape_code("v", 11). escape_code("f", 12). escape_code("r", 13). escape_code("e", 27). escape_code("d", 127).
 escape_code("\"", 34). escape_code("#", 35). escape_code("\\", 92).
 
+// ══ Written numbers ═════════════════════════════════════════════════
+//
+// What the spelling of a number says of it, for the numbers the rules
+// ask about: its kind, sign, region against ±1 and more
+// (`written_number`), its value and magnitude where Souffle reads them,
+// and the types that cannot hold it (`number_misfit`).
+//
+// Souffle's numbers are 32 bits and its floats f32s, and `to_number` and
+// `to_float` abort the whole solve on a spelling outside their range. So
+// a spelling is converted only where `written_number` says it is in
+// range, in the head of a relation outside any recursion: a guard in the
+// same rule does not keep a conversion from the spellings it rejects.
+
+// The spellings whose numbers are asked about: those written as an
+// argument of an Nx call, the terms of values the rules hold, and the
+// literals the code tests values against. A power written with a
+// negative exponent divides, and what divides is asked for its sign, so
+// the words below feed the demand for signs: seeded from the values whose
+// signs are asked, they would be one recursion with it. They are seeded
+// instead from what is known before any sign is asked.
+.decl number_asked(spelled: symbol)
+number_asked(text) :- argument_literal(_, _, text).
+number_asked(spelled) :- value_of(_, _, _, _, $Term(text, start)), term_spelling(text, start, spelled).
+number_asked(literal) :- flow_checked(_, _, _, literal, _).
+
+// What a number's spelling says of it, by facet:
+//
+//   * "kind": "integer", "float", or "nonfinite" for `:nan`, `:infinity`
+//     and `:neg_infinity`, which Nx takes as numbers;
+//   * "sign": "negative", "zero" or "positive";
+//   * "region": where it lies against ±1, as `region_order` names it;
+//   * "fraction": "nonzero" for a float written with a fraction other
+//     than zero, "proper" for one between 0 and 1 written without an
+//     exponent (`0.5`), "half" for one whose fraction is one half;
+//   * "parity": "even" for an even integer other than zero, or a float
+//     with such a whole part and no fraction;
+//   * "range": "s32" for an integer of at most nine digits, which
+//     `to_number` reads; "f32" for a number `to_float` reads, zero or
+//     within f32's normal range; "above_f32" and "below_f32" for an
+//     exponent past either end of those.
+//
+// Read from the spellings Elixir gives numbers (`inspect/1`): a float has
+// a fraction, and an exponent where it is large or small (`1.0e-5`).
+.decl written_number(spelled: symbol, facet: symbol, value: symbol)
+written_number(spelled, "kind", "integer") :- number_asked(spelled), match("-?[0-9]+", spelled).
+written_number(spelled, "kind", "float") :-
+  number_asked(spelled),
+  match("-?[0-9]+\\.[0-9]+(e[-+]?[0-9]+)?", spelled).
+written_number(spelled, "kind", "nonfinite") :-
+  number_asked(spelled),
+  match(":nan|:infinity|:neg_infinity", spelled).
+written_number(spelled, "sign", "zero") :-
+  number_asked(spelled),
+  match("-?0(\\.0+)?(e[-+]?[0-9]+)?", spelled).
+written_number(spelled, "sign", "positive") :-
+  number_asked(spelled),
+  match("[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", spelled),
+  !match("0(\\.0+)?(e[-+]?[0-9]+)?", spelled).
+written_number(spelled, "sign", "negative") :-
+  number_asked(spelled),
+  match("-[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", spelled),
+  !match("-0(\\.0+)?(e[-+]?[0-9]+)?", spelled).
+written_number(spelled, "region", "minus_one") :- number_asked(spelled), match("-1(\\.0+)?", spelled).
+written_number(spelled, "region", "one") :- number_asked(spelled), match("1(\\.0+)?", spelled).
+written_number(spelled, "region", "inside") :-
+  number_asked(spelled),
+  match("-?0(\\.[0-9]+)?|-?[0-9](\\.[0-9]+)?e-[0-9]+", spelled).
+written_number(spelled, "region", "above") :-
+  number_asked(spelled),
+  match("[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", spelled),
+  !match("1(\\.0+)?|0(\\.[0-9]+)?|[0-9](\\.[0-9]+)?e-[0-9]+", spelled).
+written_number(spelled, "region", "below") :-
+  number_asked(spelled),
+  match("-[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", spelled),
+  !match("-(1(\\.0+)?|0(\\.[0-9]+)?|[0-9](\\.[0-9]+)?e-[0-9]+)", spelled).
+written_number(spelled, "fraction", "nonzero") :-
+  number_asked(spelled),
+  match("-?[0-9]+\\.[0-9]+(e[-+]?[0-9]+)?", spelled),
+  !match("-?[0-9]+\\.0+(e[-+]?[0-9]+)?", spelled).
+written_number(spelled, "fraction", "proper") :- number_asked(spelled), match("0\\.[0-9]*[1-9][0-9]*", spelled).
+written_number(spelled, "fraction", "half") :- number_asked(spelled), match("-?[0-9]+\\.50*", spelled).
+written_number(spelled, "parity", "even") :-
+  number_asked(spelled),
+  match("-?[0-9]*[02468](\\.0+)?", spelled),
+  !match("-?0+(\\.0+)?", spelled).
+written_number(spelled, "range", "s32") :- number_asked(spelled), match("-?[0-9]{1,9}", spelled).
+written_number(spelled, "range", "f32") :-
+  number_asked(spelled),
+  match("-?([0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7]))", spelled).
+written_number(spelled, "range", "above_f32") :-
+  number_asked(spelled),
+  match("-?[0-9]\\.[0-9]+e(3[89]|[4-9][0-9]|[1-9][0-9][0-9])", spelled).
+written_number(spelled, "range", "below_f32") :-
+  number_asked(spelled),
+  match("-?[0-9]\\.[0-9]+e-(3[89]|[4-9][0-9]|[1-9][0-9][0-9])", spelled).
+
+// A written integer's value, where `to_number` reads it.
+.decl number_value(spelled: symbol, value: number)
+number_value(spelled, to_number(spelled)) :- written_number(spelled, "range", "s32").
+
+// A written number's magnitude as an f32, where `to_float` reads it.
+.decl number_magnitude(spelled: symbol, magnitude: float)
+number_magnitude(spelled, max(to_float(spelled), -to_float(spelled))) :-
+  written_number(spelled, "range", "f32").
+
+// A type that cannot hold a written number, and what Nx makes of it:
+//
+//   * "wraps": an integer outside an integer type's range, which Nx
+//     writes modulo the type's width (300 as u8 is 44), in data and in a
+//     scalar alike (EMLX saturates a scalar instead);
+//   * "overflows": a number past a float type's largest, which becomes
+//     infinity (70000.0 as f16);
+//   * "flushes": a float nearer zero than a float type's smallest
+//     subnormal rounds to, which becomes 0.0 (1.0e-8 as f16);
+//   * "not_integer": a float, `:nan` or an infinity in an integer type,
+//     which Nx cannot write: it raises building the data (EMLX truncates
+//     a scalar float instead).
+//
+// An integer that may not fit an s32 is compared by its digits, and a
+// float by patterns over its spelling. The types of 2 and 4 bits are left
+// out of "wraps": Nx packs their data in bits, and a list of them fails
+// before any value wraps.
+.decl number_misfit(spelled: symbol, type: symbol, outcome: symbol)
+number_misfit(spelled, name, "wraps") :-
+  integer_digits(spelled, sign, digits),
+  integer_bound(name, sign, bound),
+  digits_at_least(digits, bound),
+  digits != bound.
+number_misfit(spelled, name, "not_integer") :-
+  written_number(spelled, "kind", kind),
+  kind != "integer",
+  type_spelling(_, name, "integer").
+number_misfit(spelled, name, outcome) :-
+  written_number(spelled, "kind", "float"),
+  float_limit(names, outcome, pattern),
+  match(pattern, spelled),
+  type_spelling(_, name, _),
+  match(names, name).
+number_misfit(spelled, name, "overflows") :-
+  integer_digits(spelled, _, digits),
+  integer_limit(names, limit),
+  digits_at_least(digits, limit),
+  type_spelling(_, name, _),
+  match(names, name).
+
+// An integer spelled, by its sign and the digits of its magnitude.
+.decl integer_digits(spelled: symbol, sign: symbol, digits: symbol)
+integer_digits(spelled, "positive", spelled) :-
+  written_number(spelled, "kind", "integer"),
+  written_number(spelled, "sign", "positive").
+integer_digits(spelled, "negative", substr(spelled, 1, strlen(spelled) - 1)) :-
+  written_number(spelled, "kind", "integer"),
+  written_number(spelled, "sign", "negative").
+
+// An integer type's largest magnitude on each side of zero, in digits: 0
+// below zero for an unsigned type.
+.decl integer_bound(name: symbol, sign: symbol, bound: symbol)
+integer_bound("s8", "positive", "127"). integer_bound("s8", "negative", "128").
+integer_bound("s16", "positive", "32767"). integer_bound("s16", "negative", "32768").
+integer_bound("s32", "positive", "2147483647"). integer_bound("s32", "negative", "2147483648").
+integer_bound("s64", "positive", "9223372036854775807").
+integer_bound("s64", "negative", "9223372036854775808").
+integer_bound("u8", "positive", "255"). integer_bound("u8", "negative", "0").
+integer_bound("u16", "positive", "65535"). integer_bound("u16", "negative", "0").
+integer_bound("u32", "positive", "4294967295"). integer_bound("u32", "negative", "0").
+integer_bound("u64", "positive", "18446744073709551615"). integer_bound("u64", "negative", "0").
+
+// A magnitude, in digits, at least a bound: more digits, or as many and
+// not before it in order (digit strings of one length compare as their
+// numbers do).
+.decl digits_at_least(digits: symbol, bound: symbol) inline
+digits_at_least(digits, bound) :- strlen(digits) > strlen(bound).
+digits_at_least(digits, bound) :- strlen(digits) = strlen(bound), digits >= bound.
+
+// The float spellings past the limits of the float types a pattern of
+// names matches, as `Float.to_string/1` and `inspect/1` write them
+// (`65520.0`, `7.0e4`), a little inside each limit where it has more
+// digits than the pattern compares:
+//
+//   * f16 overflows from 65520, halfway past its largest, 65504, and f8
+//     with it (Nx converts f8 through f16);
+//   * f32 overflows from 3.4028236e38, halfway past its largest,
+//     3.4028235677973366e38, and bf16 (which keeps f32's exponent) and
+//     c64 (whose parts are f32s) with it;
+//   * f16 flushes to zero at or below 2.98e-8 (half its smallest
+//     subnormal, 2.9802322387695312e-8), f8 below 1.52e-5, bf16 below
+//     9.18e-41, and f32 and c64 at or below 7.0e-46 (half of
+//     1.401298464324817e-45).
+//
+// f64 and c128 hold any float literal, and f8_e4m3fn, which saturates,
+// is not checked.
+.decl float_limit(names: symbol, outcome: symbol, pattern: symbol)
+float_limit("f16|f8", "overflows", "-?([1-9][0-9]{5,}|6552[0-9]|655[3-9][0-9]|65[6-9][0-9]{2}|6[6-9][0-9]{3}|[7-9][0-9]{4})\\.[0-9]+").
+float_limit("f16|f8", "overflows", "-?([1-9]\\.[0-9]+e([5-9]|[1-9][0-9]+)|(6\\.55[2-9]|6\\.5[6-9]|6\\.[6-9]|[7-9]\\.)[0-9]*e4)").
+float_limit("bf16|f32|c64", "overflows", "-?([1-9]\\.[0-9]+e(39|[4-9][0-9]|[1-9][0-9]{2,})|(3\\.4028236|3\\.402823[7-9]|3\\.40282[4-9]|3\\.4028[3-9]|3\\.4029|3\\.40[3-9]|3\\.4[1-9]|3\\.[5-9]|[4-9]\\.)[0-9]*e38)").
+float_limit("f16", "flushes", "-?([1-9]\\.[0-9]+e-(9|[1-9][0-9]+)|(1\\.[0-9]+|2\\.[0-8][0-9]*|2\\.9|2\\.9[0-7][0-9]*|2\\.98)e-8)").
+float_limit("f8", "flushes", "-?([1-9]\\.[0-9]+e-([6-9]|[1-9][0-9]+)|(1\\.[0-4][0-9]*|1\\.5|1\\.5[01][0-9]*)e-5)").
+float_limit("bf16", "flushes", "-?([1-9]\\.[0-9]+e-(4[2-9]|[5-9][0-9]|[1-9][0-9]{2,})|([1-8]\\.[0-9]+|9\\.0[0-9]*|9\\.1|9\\.1[0-7][0-9]*)e-41)").
+float_limit("f32|c64", "flushes", "-?([1-9]\\.[0-9]+e-(4[7-9]|[5-9][0-9]|[1-9][0-9]{2,})|([1-6]\\.[0-9]+|7\\.0)e-46)").
+
+// The smallest integer magnitude the float types a pattern of names
+// matches overflow at, in digits: 65520 for f16, 2^128 - 2^103 for f32.
+.decl integer_limit(names: symbol, limit: symbol)
+integer_limit("f16|f8", "65520").
+integer_limit("bf16|f32|c64", "340282356779733661637539395458142568448").
+
 // ══ Options ═════════════════════════════════════════════════════════
 
 // The operation takes a keyword list of options as argument `position`,
@@ -8045,20 +8251,20 @@ check_demand(site, 0) :- takes_domain(site, _).
 // not negative. An exact test against 0 (`!==`, a `case` arm) lets 0.0
 // through; it counts all the same, as the unchecked kinds err quiet.
 .decl test_ensures(literal: symbol, polarity: symbol, need: symbol)
-test_ensures(literal, "ne", "nonzero") :- guard_literal(literal), written_zero(literal).
-test_ensures(literal, "eq", need) :- guard_literal(literal), positive_literal(literal), any_need(need).
-test_ensures(literal, "eq", "nonzero") :- guard_literal(literal), negative_literal(literal).
-test_ensures(literal, "eq", "nonnegative") :- guard_literal(literal), written_zero(literal).
-test_ensures(literal, "gt", need) :- guard_literal(literal), written_zero(literal), any_need(need).
-test_ensures(literal, "gt", need) :- guard_literal(literal), positive_literal(literal), any_need(need).
-test_ensures(literal, "ge", need) :- guard_literal(literal), positive_literal(literal), any_need(need).
-test_ensures(literal, "ge", "nonnegative") :- guard_literal(literal), written_zero(literal).
-test_ensures(literal, "lt", "nonzero") :- guard_literal(literal), written_zero(literal).
-test_ensures(literal, "lt", "nonzero") :- guard_literal(literal), negative_literal(literal).
-test_ensures(literal, "le", "nonzero") :- guard_literal(literal), negative_literal(literal).
+test_ensures(literal, "ne", "nonzero") :- guard_literal(literal), written_number(literal, "sign", "zero").
+test_ensures(literal, "eq", need) :- guard_literal(literal), written_number(literal, "sign", "positive"), any_need(need).
+test_ensures(literal, "eq", "nonzero") :- guard_literal(literal), written_number(literal, "sign", "negative").
+test_ensures(literal, "eq", "nonnegative") :- guard_literal(literal), written_number(literal, "sign", "zero").
+test_ensures(literal, "gt", need) :- guard_literal(literal), written_number(literal, "sign", "zero"), any_need(need).
+test_ensures(literal, "gt", need) :- guard_literal(literal), written_number(literal, "sign", "positive"), any_need(need).
+test_ensures(literal, "ge", need) :- guard_literal(literal), written_number(literal, "sign", "positive"), any_need(need).
+test_ensures(literal, "ge", "nonnegative") :- guard_literal(literal), written_number(literal, "sign", "zero").
+test_ensures(literal, "lt", "nonzero") :- guard_literal(literal), written_number(literal, "sign", "zero").
+test_ensures(literal, "lt", "nonzero") :- guard_literal(literal), written_number(literal, "sign", "negative").
+test_ensures(literal, "le", "nonzero") :- guard_literal(literal), written_number(literal, "sign", "negative").
 test_ensures(literal, polarity, need) :-
   guard_literal(literal),
-  literal_region(literal, region),
+  written_number(literal, "region", region),
   region_order(region, order),
   bound_test(polarity, order, need).
 
@@ -8108,16 +8314,6 @@ guard_literal(literal) :-
   check_demand(site, position),
   flow_checked(site, _, position, literal, _).
 
-// A literal spelled as zero, as a positive number, as a negative one.
-.decl written_zero(text: symbol) inline
-written_zero(text) :- match("-?0(\\.0+)?(e[-+]?[0-9]+)?", text).
-.decl positive_literal(text: symbol) inline
-positive_literal(text) :-
-  match("[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text), !match("-?0(\\.0+)?(e[-+]?[0-9]+)?", text).
-.decl negative_literal(text: symbol) inline
-negative_literal(text) :-
-  match("-[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text), !match("-?0(\\.0+)?(e[-+]?[0-9]+)?", text).
-
 // The operand an Nx call divides by: a quotient's or remainder's divisor,
 // the operand of a reciprocal square root, or the base of a power written
 // negative.
@@ -8144,14 +8340,7 @@ negative_power(site) :-
   operation_site(site, operation, 2),
   sign_class(operation, "power"),
   flow_argument(site, _, 1, "literal", text),
-  term_integer(text, 0, exponent),
-  exponent < 0.
-negative_power(site) :-
-  operation_site(site, operation, 2),
-  sign_class(operation, "power"),
-  flow_argument(site, _, 1, "literal", text),
-  term_float(text, 0),
-  match("-.*", text).
+  written_number(text, "sign", "negative").
 
 // The operand an Nx call takes the logarithm of.
 .decl takes_logarithm(site: symbol, position: number)
@@ -8175,8 +8364,7 @@ fractional_power(site) :-
   operation_site(site, operation, 2),
   sign_class(operation, "power"),
   flow_argument(site, _, 1, "literal", text),
-  term_float(text, 0),
-  !match("-?[0-9]+\\.0+(e[-+]?[0-9]+)?", text).
+  written_number(text, "fraction", "nonzero").
 
 // A call whose derivative is infinite where its result is zero: a square
 // root, a root power (`x ** 0.5`) and a cube root, and a norm and a
@@ -8195,7 +8383,7 @@ singular_derivative(site, 0) :- operation_site(site, "Nx.standard_deviation", _)
 root_power(site) :-
   fractional_power(site),
   flow_argument(site, _, 1, "literal", text),
-  match("0\\.[0-9]*[1-9][0-9]*", text).
+  written_number(text, "fraction", "proper").
 
 // Such a call in a differentiated function, in a context it runs in,
 // whose result's sign is asked (`sign_demand`).
@@ -8445,19 +8633,12 @@ value_sign(value, "positive", "size") :- value = $Integer([coefficient, _factors
 value_sign(value, "negative", "input") :- value = $Integer([0, nil]).
 value_sign(value, "zero", "input") :- value = $Integer([0, nil]).
 value_sign(value, "positive", "input") :- value = $Integer([0, nil]).
-value_sign(value, "negative", "written") :-
-  value = $Term(text, start), term_integer(text, start, number), number < 0.
 value_sign(value, "zero", "zero") :-
-  value = $Term(text, start), term_integer(text, start, number), number = 0.
-value_sign(value, "zero", "zero") :-
-  value = $Term(text, start), term_float(text, start), term_spelling(text, start, spelled),
-  match("-?0\\.0+(e[-+]?[0-9]+)?", spelled).
-value_sign(value, "negative", "written") :-
-  value = $Term(text, start), term_float(text, start), term_spelling(text, start, spelled),
-  match("-.*", spelled), !match("-?0\\.0+(e[-+]?[0-9]+)?", spelled).
-value_sign(value, "positive", "written") :-
-  value = $Term(text, start), term_float(text, start), term_spelling(text, start, spelled),
-  !match("-.*", spelled), !match("-?0\\.0+(e[-+]?[0-9]+)?", spelled).
+  value = $Term(text, start), term_scalar(text, start), term_spelling(text, start, spelled),
+  written_number(spelled, "sign", "zero").
+value_sign(value, sign, "written") :-
+  value = $Term(text, start), term_scalar(text, start), term_spelling(text, start, spelled),
+  written_number(spelled, "sign", sign), sign != "zero".
 
 // A tensor the rules do not follow the elements of: one read from a
 // field, a parameter of a context shared by its callers, one a call hands
@@ -8976,7 +9157,7 @@ compares_with_zero(comparison, function, kind, source, relation) :-
   flow_argument(comparison, function, 0, kind, source),
   kind != "literal",
   flow_argument(comparison, function, 1, "literal", zero),
-  written_zero(zero).
+  written_number(zero, "sign", "zero").
 compares_with_zero(comparison, function, kind, source, relation) :-
   select_demand(_, function, comparison),
   operation_site(comparison, operation, 2),
@@ -8984,7 +9165,7 @@ compares_with_zero(comparison, function, kind, source, relation) :-
   flow_argument(comparison, function, 1, kind, source),
   kind != "literal",
   flow_argument(comparison, function, 0, "literal", zero),
-  written_zero(zero).
+  written_number(zero, "sign", "zero").
 
 // A comparison's relation of its first operand to its second, and of its
 // second to its first.
@@ -9147,33 +9328,7 @@ value_region(value, "above", "size") :-
   region_value(value), value = $Integer([coefficient, [_, _]]), coefficient > 0.
 value_region(value, region, "written") :-
   region_value(value), value = $Term(text, start),
-  term_spelling(text, start, spelled), literal_region(spelled, region).
-
-// Where a written number lies, by its spelling, for the numbers asked of.
-.decl region_spelling(text: symbol)
-region_spelling(spelled) :-
-  region_value($Term(text, start)), term_spelling(text, start, spelled).
-region_spelling(text) :- guard_literal(text).
-region_spelling(text) :- clip_demand(site, function), flow_argument(site, function, _, "literal", text).
-
-.decl literal_region(text: symbol, region: symbol)
-literal_region(text, "minus_one") :- region_spelling(text), match("-1(\\.0+)?", text).
-literal_region(text, "one") :- region_spelling(text), match("1(\\.0+)?", text).
-literal_region(text, "inside") :- region_spelling(text), inside_literal(text).
-literal_region(text, "above") :-
-  region_spelling(text),
-  match("[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text),
-  !match("1(\\.0+)?", text), !inside_literal(text).
-literal_region(text, "below") :-
-  region_spelling(text),
-  match("-[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text),
-  !match("-1(\\.0+)?", text), !inside_literal(text).
-
-// A number spelled with no whole part, or with a negative exponent on a
-// single digit, as Elixir spells a float below 1.
-.decl inside_literal(text: symbol) inline
-inside_literal(text) :- match("-?0(\\.[0-9]+)?", text).
-inside_literal(text) :- match("-?[0-9](\\.[0-9]+)?e-[0-9]+", text).
+  term_spelling(text, start, spelled), written_number(spelled, "region", region).
 
 // A tensor the rules do not follow can be anywhere, and so can what an
 // Nx call with no region rule returns.
@@ -9281,9 +9436,9 @@ written_clip(site, low, high) :-
   flow_argument(site, function, 2, "literal", high_text),
   1 = count : { flow_argument(site, function, 1, _, _) },
   1 = count : { flow_argument(site, function, 2, _, _) },
-  literal_region(low_text, low_region),
+  written_number(low_text, "region", low_region),
   region_order(low_region, low),
-  literal_region(high_text, high_region),
+  written_number(high_text, "region", high_region),
   region_order(high_region, high).
 
 .decl written_clip_site(site: symbol)
@@ -9491,12 +9646,12 @@ norm_widening(site, function, 0) :-
   norm_demand(site, function),
   sign_rule(site, "add"),
   flow_argument(site, function, 1, "literal", text),
-  positive_literal(text).
+  written_number(text, "sign", "positive").
 norm_widening(site, function, 1) :-
   norm_demand(site, function),
   sign_rule(site, "add"),
   flow_argument(site, function, 0, "literal", text),
-  positive_literal(text).
+  written_number(text, "sign", "positive").
 
 // The calls asked whether they are at least a norm: a unit ratio's
 // divisor, and what a lower bound or product of norms is made of.

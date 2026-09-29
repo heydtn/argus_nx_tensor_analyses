@@ -50,7 +50,7 @@ tensor_type_error(site, function, operation, kind, subject, position, 1, "", "")
 //   * "invalid_type": a type Nx does not have, which raises;
 //   * "literal_wraps", "literal_overflows", "literal_flushes",
 //     "float_as_integer": literal data the type written at the call
-//     cannot hold (`cannot_hold`, below).
+//     cannot hold (`number_misfit`).
 //
 // A literal with several values a type cannot hold is reported at the
 // first of them.
@@ -75,7 +75,8 @@ call_named(site, cat(module, ".", name, "/", to_string(arity))) :-
 .decl literal_outside_type(site: symbol, position: number, kind: symbol, text: symbol, start: number, name: symbol)
 literal_outside_type(site, position, kind, text, start, name) :-
   made_as(site, position, text, start, name, how),
-  cannot_hold(name, text, start, outcome),
+  term_spelling(text, start, spelled),
+  number_misfit(spelled, name, outcome),
   misread_kind(how, outcome, kind).
 
 // The kind of a literal a type cannot hold, by where the type comes from
@@ -106,12 +107,14 @@ made_as(site, position, text, start, "s32", "inferred") :-
   inferred_operand(site, position),
   site_active(context, site),
   argument_value(context, site, position, $Term(text, start)),
-  integer_spelled(text, start).
+  term_spelling(text, start, spelled),
+  written_number(spelled, "kind", "integer").
 made_as(site, 0, text, element, "s32", "inferred") :-
   untyped_data(site, text, data),
   !data_holds_float(text, data),
   data_element(text, data, element),
-  integer_spelled(text, element).
+  term_spelling(text, element, spelled),
+  written_number(spelled, "kind", "integer").
 made_as(site, 0, text, element, name, "written") :-
   typed_data(site, text, data, name),
   data_element(text, data, element).
@@ -134,12 +137,6 @@ inferred_operand(site, position) :-
   match("Nx\\.Random\\.(randint|uniform|normal)(_split)?", operation),
   arity >= 3,
   position = range(1, 3).
-
-// A term spelled as an integer, of any size.
-.decl integer_spelled(text: symbol, start: number) inline
-integer_spelled(text, start) :-
-  term_spelling(text, start, spelled),
-  match("-?[0-9]+", spelled).
 
 // Literal data a creation is handed, by the term it starts at: the data
 // of `Nx.tensor/1,2` or a shorthand (`Nx.u8/1`), and the number of
@@ -194,142 +191,23 @@ type_named(context, site, name) :-
   type_spelling(spelled, name, _).
 
 // The terms of literal data: its own, and its lists' elements, at any
-// depth.
+// depth. Their numbers are asked about.
 .decl data_element(text: symbol, data: number, start: number)
 data_element(text, data, data) :- data_given(_, _, text, data).
 data_element(text, data, child) :-
   data_element(text, data, start),
   term_list(text, start),
   term_child(text, start, _, child).
+number_asked(spelled) :- data_element(text, _, start), term_spelling(text, start, spelled).
 
-// Data with a float in it, which Nx types f32 when it is given no type.
+// Data with a float in it, or `:nan` or an infinity, which Nx takes as
+// one: it types the data f32 when given no type.
 .decl data_holds_float(text: symbol, data: number)
 data_holds_float(text, data) :-
   data_element(text, data, start),
-  noninteger_scalar(text, start).
-
-// A float in literal data, or `:nan` or an infinity, which Nx takes as
-// one.
-.decl noninteger_scalar(text: symbol, start: number)
-noninteger_scalar(text, start) :- data_element(text, _, start), term_float(text, start).
-noninteger_scalar(text, start) :-
-  data_element(text, _, start),
-  term_atom(text, start, atom),
-  match(":nan|:infinity|:neg_infinity", atom).
-
-// A type cannot hold a literal, and what Nx makes of it:
-//
-//   * "wraps": an integer outside an integer type's range, which Nx
-//     writes modulo the type's width (300 as u8 is 44), in data and in a
-//     scalar alike (EMLX saturates a scalar instead);
-//   * "overflows": a number past a float type's largest, which becomes
-//     infinity (70000.0 as f16);
-//   * "flushes": a float nearer zero than a float type's smallest
-//     subnormal rounds to, which becomes 0.0 (1.0e-8 as f16);
-//   * "not_integer": a float, `:nan` or an infinity in an integer type,
-//     which Nx cannot write: it raises building the data (EMLX truncates
-//     a scalar float instead).
-//
-// The types of 2 and 4 bits are left out of "wraps": Nx packs their
-// data in bits, and a list of them fails before any value wraps.
-.decl cannot_hold(name: symbol, text: symbol, start: number, outcome: symbol)
-cannot_hold(name, text, start, "wraps") :-
-  fit_asked(name, text, start),
-  integer_written(text, start, _, _),
-  integer_bound(name, _, _),
-  !integer_held(name, text, start).
-cannot_hold(name, text, start, "not_integer") :-
-  fit_asked(name, text, start),
-  type_spelling(_, name, "integer"),
-  noninteger_scalar(text, start).
-cannot_hold(name, text, start, outcome) :-
-  fit_asked(name, text, start),
-  float_limit(names, outcome, pattern),
-  match(names, name),
   term_spelling(text, start, spelled),
-  match(pattern, spelled).
-cannot_hold(name, text, start, "overflows") :-
-  fit_asked(name, text, start),
-  integer_limit(names, limit),
-  match(names, name),
-  integer_written(text, start, _, digits),
-  digits_at_least(digits, limit).
-
-// The literals whose fit in a type is asked.
-.decl fit_asked(name: symbol, text: symbol, start: number)
-fit_asked(name, text, start) :- made_as(_, _, text, start, name, _).
-
-// An integer literal asked about, as its sign ("+" or "-") and its
-// digits.
-.decl integer_written(text: symbol, start: number, sign: symbol, digits: symbol)
-integer_written(text, start, "+", spelled) :-
-  fit_asked(_, text, start),
-  term_spelling(text, start, spelled),
-  match("[0-9]+", spelled).
-integer_written(text, start, "-", substr(spelled, 1, strlen(spelled) - 1)) :-
-  fit_asked(_, text, start),
-  term_spelling(text, start, spelled),
-  match("-[0-9]+", spelled).
-
-// An integer type holds an integer literal: its magnitude is at most the
-// type's bound on that side of zero. An unsigned type has no bound below.
-.decl integer_held(name: symbol, text: symbol, start: number)
-integer_held(name, text, start) :-
-  fit_asked(name, text, start),
-  integer_written(text, start, sign, digits),
-  integer_bound(name, sign, bound),
-  digits_at_most(digits, bound).
-
-// An integer type's largest magnitude on each side of zero, in digits.
-.decl integer_bound(name: symbol, sign: symbol, bound: symbol)
-integer_bound("s8", "+", "127"). integer_bound("s8", "-", "128").
-integer_bound("s16", "+", "32767"). integer_bound("s16", "-", "32768").
-integer_bound("s32", "+", "2147483647"). integer_bound("s32", "-", "2147483648").
-integer_bound("s64", "+", "9223372036854775807"). integer_bound("s64", "-", "9223372036854775808").
-integer_bound("u8", "+", "255"). integer_bound("u16", "+", "65535").
-integer_bound("u32", "+", "4294967295"). integer_bound("u64", "+", "18446744073709551615").
-
-// A magnitude, in digits, at most or at least a bound: fewer or more
-// digits, or as many and not after or before it in order.
-.decl digits_at_most(digits: symbol, bound: symbol) inline
-digits_at_most(digits, bound) :- strlen(digits) < strlen(bound).
-digits_at_most(digits, bound) :- strlen(digits) = strlen(bound), digits <= bound.
-
-.decl digits_at_least(digits: symbol, bound: symbol) inline
-digits_at_least(digits, bound) :- strlen(digits) > strlen(bound).
-digits_at_least(digits, bound) :- strlen(digits) = strlen(bound), digits >= bound.
-
-// The float spellings past the limits of the float types a pattern of
-// names matches, as `Float.to_string/1` and `inspect/1` write them
-// (`65520.0`, `7.0e4`), a little inside each limit where it has more
-// digits than the pattern compares:
-//
-//   * f16 overflows from 65520, halfway past its largest, 65504, and f8
-//     with it (Nx converts f8 through f16);
-//   * f32 overflows from 3.4028236e38, halfway past its largest,
-//     3.4028235677973366e38, and bf16 (which keeps f32's exponent) and
-//     c64 (whose parts are f32s) with it;
-//   * f16 flushes to zero at or below 2.98e-8 (half its smallest
-//     subnormal, 2.9802322387695312e-8), f8 below 1.52e-5, bf16 below
-//     9.18e-41, and f32 and c64 at or below 7.0e-46 (half of
-//     1.401298464324817e-45).
-//
-// f64 and c128 hold any float literal, and f8_e4m3fn, which saturates,
-// is not checked.
-.decl float_limit(names: symbol, outcome: symbol, pattern: symbol)
-float_limit("f16|f8", "overflows", "-?([1-9][0-9]{5,}|6552[0-9]|655[3-9][0-9]|65[6-9][0-9]{2}|6[6-9][0-9]{3}|[7-9][0-9]{4})\\.[0-9]+").
-float_limit("f16|f8", "overflows", "-?([1-9]\\.[0-9]+e([5-9]|[1-9][0-9]+)|(6\\.55[2-9]|6\\.5[6-9]|6\\.[6-9]|[7-9]\\.)[0-9]*e4)").
-float_limit("bf16|f32|c64", "overflows", "-?([1-9]\\.[0-9]+e(39|[4-9][0-9]|[1-9][0-9]{2,})|(3\\.4028236|3\\.402823[7-9]|3\\.40282[4-9]|3\\.4028[3-9]|3\\.4029|3\\.40[3-9]|3\\.4[1-9]|3\\.[5-9]|[4-9]\\.)[0-9]*e38)").
-float_limit("f16", "flushes", "-?([1-9]\\.[0-9]+e-(9|[1-9][0-9]+)|(1\\.[0-9]+|2\\.[0-8][0-9]*|2\\.9|2\\.9[0-7][0-9]*|2\\.98)e-8)").
-float_limit("f8", "flushes", "-?([1-9]\\.[0-9]+e-([6-9]|[1-9][0-9]+)|(1\\.[0-4][0-9]*|1\\.5|1\\.5[01][0-9]*)e-5)").
-float_limit("bf16", "flushes", "-?([1-9]\\.[0-9]+e-(4[2-9]|[5-9][0-9]|[1-9][0-9]{2,})|([1-8]\\.[0-9]+|9\\.0[0-9]*|9\\.1|9\\.1[0-7][0-9]*)e-41)").
-float_limit("f32|c64", "flushes", "-?([1-9]\\.[0-9]+e-(4[7-9]|[5-9][0-9]|[1-9][0-9]{2,})|([1-6]\\.[0-9]+|7\\.0)e-46)").
-
-// The smallest integer magnitude the float types a pattern of names
-// matches overflow at, in digits: 65520 for f16, 2^128 - 2^103 for f32.
-.decl integer_limit(names: symbol, limit: symbol)
-integer_limit("f16|f8", "65520").
-integer_limit("bf16|f32|c64", "340282356779733661637539395458142568448").
+  written_number(spelled, "kind", kind),
+  kind != "integer".
 
 // ══ Short atom types ════════════════════════════════════════════════
 

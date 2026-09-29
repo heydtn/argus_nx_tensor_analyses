@@ -218,7 +218,7 @@ cast_wraparound(context, site, type) :-
   cast_operand_goes_negative(context, site).
 cast_wraparound(context, site, type) :-
   casts_written_number(context, site, type, number),
-  integer_number(number, value),
+  number_value(number, value),
   outside_integer_type(value, type).
 
 // A value only an input may make negative, made unsigned: it wraps around
@@ -327,7 +327,7 @@ integer_determinant(context, site, type, origin) :-
 literal_overflow(context, site, concrete) :-
   casts_written_number(context, site, type, number),
   type_instance(type, concrete),
-  past_largest(number, concrete).
+  number_misfit(number, concrete, "past_largest").
 
 // A written number too small for the float type it is made, which rounds
 // it to zero (an epsilon of 1.0e-12 in f16): whatever it was to keep away
@@ -336,7 +336,7 @@ literal_overflow(context, site, concrete) :-
 literal_underflow(context, site, number, concrete) :-
   casts_written_number(context, site, type, number),
   type_instance(type, concrete),
-  below_smallest(number, concrete).
+  number_misfit(number, concrete, "below_smallest").
 
 // A value holding a number beyond a float type's range made that type: a
 // number written where it is made (-1.0e9), or a constant at the edge of a
@@ -515,8 +515,8 @@ descends(context, site) :-
   dtype_call(site, "linspace"),
   argument_number(context, site, 0, start),
   argument_number(context, site, 1, stop),
-  integer_number(start, first),
-  integer_number(stop, last),
+  number_value(start, first),
+  number_value(stop, last),
   first > last.
 
 // A tensor of an even number of elements in the context.
@@ -538,18 +538,14 @@ multiplied_out(context, site) :-
   size <= 3.
 
 // A written number at or past the magnitude a float type rounds to
-// infinity.
-.decl past_largest(number: symbol, type: symbol)
-past_largest(number, type) :-
+// infinity ("past_largest"), and one, not zero, below the magnitude it
+// rounds to zero ("below_smallest").
+number_misfit(number, type, "past_largest") :-
   number_magnitude(number, magnitude),
   float_range(type, _, overflow, _),
   overflow > 0.0,
   magnitude >= overflow.
-
-// A written number, not zero, below the magnitude a float type rounds to
-// zero.
-.decl below_smallest(number: symbol, type: symbol)
-below_smallest(number, type) :-
+number_misfit(number, type, "below_smallest") :-
   number_magnitude(number, magnitude),
   float_range(type, _, _, underflow),
   magnitude != 0.0,
@@ -561,7 +557,7 @@ below_smallest(number, type) :-
 .decl makes_value_past_largest(site: symbol, type: symbol)
 makes_value_past_largest(site, type) :-
   argument_number(_, site, _, number),
-  past_largest(number, type).
+  number_misfit(number, type, "past_largest").
 makes_value_past_largest(site, type) :-
   remote_call(site, _, "Nx.Constants", name, _),
   ( name = "min_finite" ; name = "max_finite" ),
@@ -788,16 +784,16 @@ casts_written_number(context, site, type, number) :-
 // or below its smallest (0, or one below minus the largest).
 .decl outside_integer_type(value: number, type: symbol)
 outside_integer_type(value, type) :-
-  integer_number(_, value),
+  number_value(_, value),
   type_trait(type, "integer"),
   exact_limit(type, limit),
   value > limit.
 outside_integer_type(value, type) :-
-  integer_number(_, value),
+  number_value(_, value),
   value < 0,
   type_trait(type, "unsigned").
 outside_integer_type(value, type) :-
-  integer_number(_, value),
+  number_value(_, value),
   dtype(type, "s", _),
   exact_limit(type, limit),
   value < -limit - 1.
@@ -1117,30 +1113,17 @@ argument_number(context, site, position, "integer") :-
   dtype_operand(site, position),
   argument_value(context, site, position, $Integer([0, nil])).
 
+// The numbers typed calls take as operands, whose spellings are asked
+// about.
 .decl number_demand(number: symbol)
 number_demand(number) :- argument_number(_, _, _, number).
-
-// A whole number written, and its value.
-.decl integer_number(number: symbol, value: number)
-integer_number(number, to_number(number)) :-
-  number_demand(number),
-  match("-?[0-9]{1,9}", number).
-
-// A written number's magnitude as a float, for the spellings Elixir gives
-// a number within f32's normal range.
-.decl number_magnitude(number: symbol, magnitude: float)
-number_magnitude(number, to_float(number)) :-
-  number_demand(number),
-  match("[0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7])", number).
-number_magnitude(number, to_float(substr(number, 1, strlen(number) - 1))) :-
-  number_demand(number),
-  match("-([0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7]))", number).
+number_asked(number) :- number_demand(number).
 
 // The tensor Nx makes of a number: s32 for a whole one, f32 for a float.
 .decl number_type(number: symbol, type: symbol)
-number_type(number, "s32") :- integer_number(number, _).
+number_type(number, "s32") :- number_demand(number), number_value(number, _).
 number_type("integer", "s32") :- number_demand("integer").
-number_type(number, "f32") :- number_demand(number), match("-?[0-9]+\\.[0-9]+(e-?[0-9]+)?", number).
+number_type(number, "f32") :- number_demand(number), written_number(number, "kind", "float").
 
 // `Nx.Type.merge_number/2`: a number meeting a tensor. Any number keeps a
 // float's type but FP8 E4M3FN's, which becomes f32, as an integer does
@@ -1156,20 +1139,20 @@ number_merged(type, number, "f32") :-
   number_type(number, "f32"),
   type_trait(type, "integer").
 number_merged(type, number, merged) :-
-  integer_number(number, value),
+  number_value(number, value),
   value >= 0,
   dtype(type, "u", size),
   bits = min width : { bit_width(width, largest, _), value <= largest },
   dtype(merged, "u", max(bits, size)).
 number_merged(type, number, merged) :-
-  integer_number(number, value),
+  number_value(number, value),
   value < 0,
   dtype(type, "u", size),
   magnitude = -value - 1,
   bits = min width : { bit_width(width, _, largest), magnitude <= largest },
   dtype(merged, "s", max(bits, min(size * 2, 64))).
 number_merged(type, number, merged) :-
-  integer_number(number, value),
+  number_value(number, value),
   dtype(type, "s", size),
   magnitude = max(value, -value - 1),
   bits = min width : { bit_width(width, _, largest), magnitude <= largest },

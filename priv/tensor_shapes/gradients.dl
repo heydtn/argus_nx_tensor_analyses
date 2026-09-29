@@ -319,7 +319,7 @@ differentiated_at_edge(context, site, origin, cause) :-
   flow_argument(site, function, 0, "result", addition),
   sign_rule(addition, "add"),
   flow_argument(addition, function, position, "literal", one),
-  match("1(\\.0+)?", one),
+  written_number(one, "region", "one"),
   argument_sign(context, addition, 1 - position, "zero", origin, cause),
   cause != "input".
 
@@ -394,7 +394,7 @@ sign_site(context, site) :- differentiated_exponent(site), site_active(context, 
 negative_base_written(site) :-
   differentiated_exponent(site),
   flow_argument(site, _, 0, "literal", text),
-  negative_literal(text).
+  written_number(text, "sign", "negative").
 
 // An exponent a power holds where the call does not write it: a value the
 // rules hold for it, spelled as written (an option, a return). Held in
@@ -431,40 +431,29 @@ divided_exponent(site, numerator / denominator) :-
 
 // A written number, by its value, for the numbers these rules read: the
 // terms of an exponent's quotient, and the numbers a mask can hold.
-// Soufflé's floats are f32, and `to_float` aborts the solve on a spelling
-// past f32's normal range, so such a number is read as the nearest value
+// Soufflé's floats are f32, and `to_float` reads only a spelling within
+// f32's normal range, so a number past it is read as the nearest value
 // within it: 3.0e38 past its largest, 0.0 below its smallest.
 .decl number_spelled(text: symbol, value: float)
-number_spelled(text, to_float(text)) :-
-  number_spelling_asked(text),
-  match("-?([0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7]))", text).
-number_spelled(text, value) :-
-  number_spelling_asked(text),
-  match("-?[0-9]\\.[0-9]+e(3[89]|[4-9][0-9]|[1-9][0-9][0-9])", text),
-  ( match("-.*", text), value = -300000000000000000000000000000000000000.0 ;
-    !match("-.*", text), value = 300000000000000000000000000000000000000.0 ).
-number_spelled(text, 0.0) :-
-  number_spelling_asked(text),
-  match("-?[0-9]\\.[0-9]+e-(3[89]|[4-9][0-9]|[1-9][0-9][0-9])", text).
-
-.decl number_spelling_asked(text: symbol)
-number_spelling_asked(text) :- exponent_quotient(_, text, _).
-number_spelling_asked(text) :- exponent_quotient(_, _, text).
-number_spelling_asked(text) :- far_value_demand(_, "literal", text).
+number_spelled(text, to_float(text)) :- written_number(text, "range", "f32").
+number_spelled(text, 300000000000000000000000000000000000000.0) :-
+  written_number(text, "range", "above_f32"),
+  written_number(text, "sign", "positive").
+number_spelled(text, -300000000000000000000000000000000000000.0) :-
+  written_number(text, "range", "above_f32"),
+  written_number(text, "sign", "negative").
+number_spelled(text, 0.0) :- written_number(text, "range", "below_f32").
 
 // A power whose exponent is held negative, as a fraction (a quotient
 // `to_number` changes by dropping its fraction), or between 0 and 1.
-negative_power(site) :- held_exponent(site, spelled), negative_literal(spelled).
+negative_power(site) :- held_exponent(site, spelled), written_number(spelled, "sign", "negative").
 negative_power(site) :- divided_exponent(site, exponent), exponent < 0.0.
-fractional_power(site) :-
-  held_exponent(site, spelled),
-  match("-?[0-9]+\\.[0-9]+(e[-+]?[0-9]+)?", spelled),
-  !match("-?[0-9]+\\.0+(e[-+]?[0-9]+)?", spelled).
+fractional_power(site) :- held_exponent(site, spelled), written_number(spelled, "fraction", "nonzero").
 fractional_power(site) :-
   divided_exponent(site, exponent),
   whole = min(max(exponent, -1000000000.0), 1000000000.0),
   to_float(to_number(whole)) != whole.
-root_power(site) :- held_exponent(site, spelled), match("0\\.[0-9]*[1-9][0-9]*", spelled).
+root_power(site) :- held_exponent(site, spelled), written_number(spelled, "fraction", "proper").
 root_power(site) :- divided_exponent(site, exponent), exponent > 0.0, exponent < 1.0.
 
 // ── Additive masks ────────────────────────────────────────────────────

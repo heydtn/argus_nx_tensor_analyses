@@ -230,7 +230,7 @@ holds(function, "result", site, "expression", "") :-
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
   flow_argument(site, function, position, "literal", text),
-  match("-?[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text).
+  written_number(text, "sign", _).
 
 // A field read of an expression: a leaf of a container.
 held_asked(function, kind, source, "expression") :-
@@ -450,6 +450,9 @@ raises_bad_boolean(site, substr(atom, 1, strlen(atom) - 1), function, kind, sour
   flow_field(function, reason, "{1}", "literal", atom),
   flow_field(function, reason, "{2}", kind, source).
 
+// The literals an operator applies to are asked whether they are numbers.
+number_asked(text) :- flow_operand(_, _, _, _, "literal", text).
+
 // What a tensor is compared with: a written number, a number the rules
 // hold, or, ordering it, another tensor.
 .decl compared_with(context: Context, site: symbol, position: number, other: symbol)
@@ -457,7 +460,7 @@ compared_with(context, site, position, text) :-
   operand_holds_tensor(context, site, position, _),
   flow_operand(site, _, _, other_position, "literal", text),
   other_position != position,
-  match("-?[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text).
+  written_number(text, "sign", _).
 compared_with(context, site, position, "a number") :-
   operand_holds_tensor(context, site, position, _),
   flow_operand(site, function, _, other_position, kind, source),
