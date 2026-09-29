@@ -72,8 +72,10 @@ def project do
 end
 ```
 
-You also need [Soufflé](https://souffle-lang.github.io/install) on your
-`PATH`, as Argus does.
+You also need [Soufflé](https://souffle-lang.github.io/install) 2.5 on
+your `PATH`, as Argus needs Soufflé. The rules do not compile under 2.4,
+which is what Soufflé's Ubuntu PPA installs: take 2.5's package from its
+[release](https://github.com/souffle-lang/souffle/releases/tag/2.5).
 
 ## Usage
 
@@ -146,7 +148,7 @@ mix deps.get
 mix test
 ```
 
-The tests need Soufflé on `PATH`.
+The tests need Soufflé 2.5 on `PATH`.
 `test/argus_nx_tensor_analyses/tensor_shapes_test.exs` compiles its
 fixtures into a temporary directory, runs each case through Nx and through
 the analysis, and checks that they agree.
