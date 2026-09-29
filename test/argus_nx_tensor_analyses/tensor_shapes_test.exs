@@ -2,19 +2,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # Nx is the oracle: each case below is compiled into a module, run for
   # the shape Nx gives it or the error Nx raises, and the analysis of the
   # compiled module has to agree.
-  #
-  # Not async: `setup_all` loads the compiled fixtures into the VM, and
-  # silences the compiler by capturing `:stderr`, which every process
-  # shares.
-  use ExUnit.Case, async: false
+  use ArgusNxTensorAnalyses.TensorAnalysisCase
 
   import ExUnit.CaptureIO
 
   alias ArgusNxTensorAnalyses.TensorShapes
-
-  unless Argus.Souffle.available?() do
-    @moduletag skip: "souffle is not on PATH"
-  end
 
   @fixtures ArgusNxTensorAnalyses.TensorShapesTest.Fixtures
   @lint_fixtures ArgusNxTensorAnalyses.TensorShapesTest.LintFixtures
@@ -3099,34 +3091,27 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   """
 
   setup_all do
-    directory =
-      Path.join(
-        System.tmp_dir!(),
-        "tensor_shapes_test_#{Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)}"
-      )
+    %{directory: directory, source: source, beams: beams} =
+      compile_fixtures("tensor_shapes", fixture_source())
 
-    File.mkdir_p!(directory)
-    on_exit(fn -> File.rm_rf!(directory) end)
-
-    source = Path.join(directory, "fixtures.ex")
-    File.write!(source, fixture_source())
-
-    capture_io(:stderr, fn ->
-      {:ok, _modules, _diagnostics} =
-        Kernel.ParallelCompiler.compile_to_path([source], directory, return_diagnostics: true)
-    end)
-
-    ArgusNxTensorAnalyses.FixtureBeams.keep(directory, "tensor_shapes")
-    beam = Path.join(directory, "Elixir.#{inspect(@fixtures)}.beam")
     probe = Path.join(directory, "probe.dl")
     File.write!(probe, probe_program())
 
-    {:ok, rows} =
-      TensorShapes.solve(Path.wildcard(Path.join(directory, "*.beam")), probe,
-        unsupported_types: [:f64]
+    configured =
+      Path.join(directory, "Elixir.ArgusNxTensorAnalyses.TensorShapesTest.DtypesConfigured.beam")
+
+    solved =
+      solve_concurrently(
+        rows: fn -> TensorShapes.solve(beams, probe, unsupported_types: [:f64]) end,
+        placed: fn -> TensorShapes.run(beams) end,
+        float_rows: fn ->
+          TensorShapes.solve([configured], TensorShapes.rules_file(),
+            float_types: [:f16, :bf16, :f32]
+          )
+        end
       )
 
-    %{beam: beam, source: source, rows: rows}
+    Map.put(solved, :source, source)
   end
 
   for {spec, index} <- Enum.with_index(@cases, 1) do
@@ -3138,13 +3123,21 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
     test "#{index}: #{String.replace(body, "\n", "; ")}", %{rows: rows} do
       index = unquote(index)
+      function = function_id(@fixtures, "case_#{index}", 0)
 
-      assert_agrees(
-        unquote(expectation),
-        run_case(index),
-        derived_shapes(rows, index),
-        findings(rows, index)
-      )
+      # the findings in the case's function, and in the functions it calls
+      # with the shapes it gives them
+      found =
+        rows
+        |> reached_findings("tensor_shape_mismatch", function, [
+          :operation,
+          :kind,
+          :detail,
+          :certainty
+        ])
+        |> Enum.uniq()
+
+      assert_agrees(unquote(expectation), run_case(index), returned_shapes(rows, function), found)
     end
   end
 
@@ -3158,59 +3151,50 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
           assert found == [],
                  "the code lines its axes up, and the analysis finds #{inspect(found)}"
 
-          assert run_lint(index) == :accepted
+          assert {:returns, _value} = lint_outcome(index)
 
         {:misaligned, kind} ->
           assert [_ | _] = for({"tensor_axis_misalignment", ^kind, _detail} <- found, do: kind),
                  "expected a #{kind} misalignment, found #{inspect(found)}"
 
           refute Enum.any?(found, &match?({"tensor_shape_mismatch", _, _}, &1)), inspect(found)
-          assert run_lint(index) == :accepted
+          assert {:returns, _value} = lint_outcome(index)
 
         {:mismatch, kind} ->
           assert [_ | _] = for({"tensor_shape_mismatch", ^kind, _detail} <- found, do: kind),
                  "expected a #{kind} mismatch, found #{inspect(found)}"
 
         {:nonfinite, kind, cause} ->
-          assert {"tensor_nonfinite_result", kind, cause} in found,
-                 "expected a #{kind} from a #{cause}, found #{inspect(found)}"
-
-          assert lint_outcome(index) == :nonfinite
+          assert_finding(found, {"tensor_nonfinite_result", kind, cause})
+          assert classify_outcome(lint_outcome(index), :nonfinite) == :nonfinite
 
         {:hazard, kind, cause} ->
-          assert {"tensor_nonfinite_result", kind, cause} in found,
-                 "expected a #{kind} from #{cause}, found #{inspect(found)}"
-
-          assert run_lint(index) == :accepted
+          assert_finding(found, {"tensor_nonfinite_result", kind, cause})
+          assert {:returns, _value} = lint_outcome(index)
 
         {:unchecked, kind, cause} ->
-          assert {"tensor_nonfinite_result", kind, cause} in found,
-                 "expected an #{kind} from #{cause}, found #{inspect(found)}"
+          assert_finding(found, {"tensor_nonfinite_result", kind, cause})
 
           refute Enum.any?(found, fn {_relation, found_kind, _cause} ->
                    not String.starts_with?(found_kind, "unchecked_")
                  end),
                  "expected no definite finding, found #{inspect(found)}"
 
-          assert run_lint(index) == :accepted
+          assert {:returns, _value} = lint_outcome(index)
 
         {:type_error, kind, subject} ->
-          assert {"tensor_type_error", kind, subject} in found,
-                 "expected a #{kind} of a #{subject}, found #{inspect(found)}"
-
-          assert_raise ArgumentError, fn -> run_lint(index) end
+          assert_finding(found, {"tensor_type_error", kind, subject})
+          assert {:raises, %ArgumentError{}} = lint_outcome(index)
 
         {:unsupported, type} ->
-          assert {"tensor_type_error", "unsupported_type", type} in found,
-                 "expected an unsupported #{type}, found #{inspect(found)}"
-
-          assert run_lint(index) == :accepted
+          assert_finding(found, {"tensor_type_error", "unsupported_type", type})
+          assert {:returns, _value} = lint_outcome(index)
 
         :finite ->
           assert found == [],
                  "the math keeps the result finite, and the analysis finds #{inspect(found)}"
 
-          assert lint_outcome(index) == :finite
+          assert classify_outcome(lint_outcome(index), :nonfinite) == :finite
 
         {:finds, {relation, kind, subject}, outcome} ->
           assert Enum.any?(found, fn {found_relation, found_kind, found_subject} ->
@@ -3232,13 +3216,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # absolute value in the context `divides_by_absolute/1` calls it in,
   # which hands it a size variable.
   test "an unchecked operand gives way to a definite finding at its call", %{rows: rows} do
-    function = "#{inspect(@lint_fixtures)}:divided/2"
-
-    kinds =
-      for [_id, ^function, _operation, kind | _rest] <-
-            Map.get(rows, "tensor_nonfinite_result", []),
-          uniq: true,
-          do: kind
+    function = function_id(@lint_fixtures, :divided, 2)
+    kinds = rows |> findings_for("tensor_nonfinite_result", function, :kind) |> Enum.uniq()
 
     assert kinds == ["divide_by_zero"]
   end
@@ -3247,54 +3226,64 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # and `shrunk_by/2` by one they keep positive.
   test "a helper's parameter is what the program's calls hand it", %{rows: rows} do
     kinds = fn name ->
-      function = "#{inspect(@lint_fixtures)}:#{name}"
-
-      for [_id, ^function, _operation, kind, cause | _rest] <-
-            Map.get(rows, "tensor_nonfinite_result", []),
-          uniq: true,
-          do: {kind, cause}
+      rows
+      |> findings_for("tensor_nonfinite_result", function_id(@lint_fixtures, name, 2), [
+        :kind,
+        :cause
+      ])
+      |> Enum.uniq()
     end
 
-    assert kinds.("scaled_by/2") == [{"divide_by_zero", "absolute"}]
-    assert kinds.("shrunk_by/2") == []
+    assert kinds.(:scaled_by) == [{"divide_by_zero", "absolute"}]
+    assert kinds.(:shrunk_by) == []
   end
 
   # `magnitude/1` is differentiated where `differentiates_magnitude/1`
   # hands a capture of it to a grad.
   test "a function a grad is handed is differentiated", %{rows: rows} do
-    function = "#{inspect(@lint_fixtures)}:magnitude/1"
-
-    kinds =
-      for [_id, ^function, _operation, kind | _rest] <-
-            Map.get(rows, "tensor_nonfinite_result", []),
-          uniq: true,
-          do: kind
+    function = function_id(@lint_fixtures, :magnitude, 1)
+    kinds = rows |> findings_for("tensor_nonfinite_result", function, :kind) |> Enum.uniq()
 
     assert kinds == ["infinite_gradient"]
   end
 
+  # The lint case that samples integers of a float type it is given.
+  @float_randint Enum.find_index(@lint_cases, fn {_expectation, body} ->
+                   body == "Nx.Random.randint(Nx.Random.key(1), 0, 5, type: :f32)"
+                 end) + 1
+
+  # With the default options, a sampler's type is checked whether or not
+  # anything else asks for the call's type.
+  test "run/2 with the default options checks the type a sampler makes", %{placed: placed} do
+    titles =
+      for %{finding: finding} <- placed_in(placed, @lint_fixtures),
+          finding.mfa == {@lint_fixtures, :"lint_#{@float_randint}", 4},
+          do: finding.title
+
+    assert "Nx.Random.randint/4 samples integers of a float type" in titles, inspect(titles)
+  end
+
   # ── Options: tests of their own ──
+  @options_fixtures ArgusNxTensorAnalyses.TensorShapesTest.Options
 
   # A call Nx raises for gives no shape: `Nx.sum(t, axis: 1)` is no full
   # reduction, and `Nx.transpose(t, [0, 2, 1])` no full reversal.
   test "options Nx rejects give no shape", %{rows: rows} do
-    returned = fn name ->
-      function = "ArgusNxTensorAnalyses.TensorShapesTest.Options:#{name}/0"
-      for [^function, shape] <- Map.get(rows, "returned_shape", []), do: shape
-    end
+    returned = &returned_shapes(rows, function_id(@options_fixtures, &1, 0))
 
-    assert returned.("summed_by_axis") == []
-    assert returned.("transposed_by_list") == []
-    assert returned.("summed_by_axes") == ["{2}[nil]"]
+    assert returned.(:summed_by_axis) == []
+    assert returned.(:transposed_by_list) == []
+    assert returned.(:summed_by_axes) == ["{2}[nil]"]
   end
 
   test "a shape Nx never computes meets nothing downstream", %{rows: rows} do
-    function = "ArgusNxTensorAnalyses.TensorShapesTest.Options:reshaped_after_axis/0"
+    function = function_id(@options_fixtures, :reshaped_after_axis, 0)
 
     found =
-      for relation <- ["tensor_shape_mismatch", "tensor_call_error"],
-          [_id, ^function, _operation, kind | _rest] <- Map.get(rows, relation, []),
-          do: {relation, kind}
+      findings_for(rows, ["tensor_shape_mismatch", "tensor_call_error"], function, [
+        :relation,
+        :kind
+      ])
 
     assert found == [{"tensor_call_error", "unknown_option"}]
   end
@@ -3304,17 +3293,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # tests its argument's type before it builds the option, so the integer
   # its caller gives does not reach the call.
   test "options a caller hands down are checked at the call", %{rows: rows} do
-    call_errors = fn name ->
-      function = "ArgusNxTensorAnalyses.TensorShapesTest.Options:#{name}"
+    call_errors =
+      &findings_for(rows, "tensor_call_error", function_id(@options_fixtures, &1, 2), [
+        :kind,
+        :detail
+      ])
 
-      for [_id, ^function, _operation, kind, detail | _rest] <-
-            Map.get(rows, "tensor_call_error", []),
-          do: {kind, detail}
-    end
-
-    assert call_errors.("sums/2") == [{"unknown_option", "axis"}]
-    assert call_errors.("sorts/2") == [{"option_value", "direction: :descending"}]
-    assert call_errors.("sums_axes/2") == []
+    assert call_errors.(:sums) == [{"unknown_option", "axis"}]
+    assert call_errors.(:sorts) == [{"option_value", "direction: :descending"}]
+    assert call_errors.(:sums_axes) == []
   end
 
   test "a finding says what Nx takes instead" do
@@ -3371,26 +3358,27 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # another `defn`, whose wrapper runs `jit_apply` only outside a trace,
   # and a transform that reads only a shape.
   test "a data read a defn reaches through a transform and a helper", %{rows: rows} do
-    module = "ArgusNxTensorAnalyses.TensorShapesTest.TracedDefn"
+    traced = ArgusNxTensorAnalyses.TensorShapesTest.TracedDefn
+    module = inspect(traced)
 
     found =
-      for [_id, function, _operation, kind, detail | _rest] <-
-            Map.get(rows, "tensor_call_error", []),
-          String.starts_with?(function, module <> ":"),
-          uniq: true,
-          do: {function, kind, detail}
+      rows
+      |> findings_for("tensor_call_error", &String.starts_with?(&1, module <> ":"), [
+        :func,
+        :kind,
+        :detail
+      ])
+      |> Enum.uniq()
 
     assert found == [{module <> ":log_value/1", "data_read_in_trace", "defn"}]
 
-    traced = ArgusNxTensorAnalyses.TensorShapesTest.TracedDefn
+    assert {:raises, %ArgumentError{} = error} =
+             outcome_on_binary_backend(traced, :logs_loss, [Nx.iota({2})])
 
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      assert_raise ArgumentError, ~r/Nx.Defn.Expr/, fn ->
-        apply(traced, :logs_loss, [Nx.iota({2})])
-      end
+    assert Exception.message(error) =~ ~r/Nx.Defn.Expr/
 
-      assert %Nx.Tensor{} = apply(traced, :calls_doubled, [Nx.iota({2})])
-    end)
+    assert {:returns, %Nx.Tensor{}} =
+             outcome_on_binary_backend(traced, :calls_doubled, [Nx.iota({2})])
   end
 
   # (end of Traced tests)
@@ -3434,7 +3422,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   test "branches broadcast to a shape neither gives without a word", %{rows: rows} do
     findings = defn_flow_findings(rows, :branch_grows, 1)
     assert {"branch_broadcast", "{3} and {3, 1} broadcast to {3, 3}"} in findings
-    assert defn_flow_run(:branch_grows, [Nx.iota({3})]).shape == {3, 3}
+
+    assert {:returns, %Nx.Tensor{shape: {3, 3}}} =
+             outcome_on_binary_backend(@defn_flow, :branch_grows, [Nx.iota({3})])
   end
 
   test "branches of different structures raise", %{rows: rows} do
@@ -3547,10 +3537,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # differ where they meet; `defn` makes them tensors, and Nx raises
   # before any sizes meet.
   test "a public defn's argument is no size variable", %{rows: rows} do
-    function = "#{inspect(@defn_flow)}:__defn:iota_pair__/2"
-    misalignments = Map.get(rows, "tensor_axis_misalignment", [])
+    function = defn_id(@defn_flow, :iota_pair, 2)
 
-    assert for([_id, ^function | _rest] <- misalignments, do: function) == []
+    assert findings_for(rows, "tensor_axis_misalignment", function, :func) == []
     assert {"tensor_as_integer", "the shape"} in defn_flow_findings(rows, :iota_pair, 2)
     assert defn_flow_raises?(:iota_pair, [2, 3])
   end
@@ -3578,37 +3567,32 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
   # The call to `defn_cond/2` carries no line, so a finding about a `cond`
   # is placed at its clause.
-  test "run/2 places a cond finding at its clause", %{beam: beam, source: source} do
-    defn_flow_beam = Path.join(Path.dirname(beam), "Elixir.#{inspect(@defn_flow)}.beam")
-    {:ok, placed} = TensorShapes.run([defn_flow_beam])
+  test "run/2 places a cond finding at its clause", %{placed: placed, source: source} do
     title = "An `if` or `cond` has no clause that always holds"
 
-    assert [line] = for(%{finding: %{title: ^title}, line: line} <- placed, do: line)
+    assert [line] =
+             for(
+               %{finding: %{title: ^title}, line: line} <- placed_in(placed, @defn_flow),
+               do: line
+             )
 
-    assert source |> File.read!() |> String.split("\n") |> Enum.at(line - 1) |> String.trim() ==
-             "Nx.all(x <= 0) -> -1"
+    assert source |> source_line(line) |> String.trim() == "Nx.all(x <= 0) -> -1"
   end
 
   # The call errors and shape mismatches in a `defn`'s body, as `{kind,
   # detail}`.
   defp defn_flow_findings(rows, name, arity) do
-    function = "#{inspect(@defn_flow)}:__defn:#{name}__/#{arity}"
-
-    for relation <- ["tensor_call_error", "tensor_shape_mismatch"],
-        [_id, ^function, _operation, kind, detail | _rest] <- Map.get(rows, relation, []),
-        uniq: true,
-        do: {kind, detail}
+    rows
+    |> findings_for(
+      ["tensor_call_error", "tensor_shape_mismatch"],
+      defn_id(@defn_flow, name, arity),
+      [:kind, :detail]
+    )
+    |> Enum.uniq()
   end
 
-  defp defn_flow_run(name, arguments),
-    do: Nx.with_default_backend(Nx.BinaryBackend, fn -> apply(@defn_flow, name, arguments) end)
-
-  defp defn_flow_raises?(name, arguments) do
-    defn_flow_run(name, arguments)
-    false
-  rescue
-    _error -> true
-  end
+  defp defn_flow_raises?(name, arguments),
+    do: match?({:raises, _error}, outcome_on_binary_backend(@defn_flow, name, arguments))
 
   # (end of DefnFlow tests)
 
@@ -3622,8 +3606,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # structs, so these tests consolidate it again with them before running
   # Nx.
   describe "containers" do
-    setup %{beam: beam} do
-      containers_consolidate(Path.dirname(beam))
+    setup %{source: source} do
+      containers_consolidate(Path.dirname(source))
     end
 
     # `causal` and `heads` are in neither `containers:` nor `keep:` of
@@ -3635,8 +3619,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       assert findings == ["#{@containers_prefix}.DroppingLayer.causal=false"]
 
       tensor = Nx.tensor([1])
-      assert containers_run(:dropping_branch, [tensor]) == Nx.tensor([1])
-      assert containers_run(:keeping_branch, [tensor]) == Nx.tensor([100])
+      assert containers_run(:dropping_branch, [tensor]) == {:returns, Nx.tensor([1])}
+      assert containers_run(:keeping_branch, [tensor]) == {:returns, Nx.tensor([100])}
 
       findings =
         containers_findings(
@@ -3646,8 +3630,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
         )
 
       assert findings == ["#{@containers_prefix}.DroppingLayer.heads=nil"]
-      assert_raise ArithmeticError, fn -> containers_run(:dropping_heads, [tensor]) end
-      assert Nx.shape(containers_run(:keeping_heads, [tensor])) == {2, 2}
+      assert {:raises, %ArithmeticError{}} = containers_run(:dropping_heads, [tensor])
+      assert {:returns, %Nx.Tensor{shape: {2, 2}}} = containers_run(:keeping_heads, [tensor])
     end
 
     # A struct a defn builds and hands another is not traversed.
@@ -3659,7 +3643,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
              ) ==
                []
 
-      assert containers_run(:built_inside, [Nx.tensor([1])]) == Nx.tensor([100])
+      assert containers_run(:built_inside, [Nx.tensor([1])]) == {:returns, Nx.tensor([100])}
     end
 
     # A wrapper called while a defn is traced runs its body directly, over
@@ -3672,7 +3656,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
              ) ==
                []
 
-      assert containers_run(:traced_caller, [Nx.tensor([1])]) == Nx.tensor([1])
+      assert containers_run(:traced_caller, [Nx.tensor([1])]) == {:returns, Nx.tensor([1])}
     end
 
     test "a function jit runs reads a field its struct's container drops", %{rows: rows} do
@@ -3686,8 +3670,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       assert findings == ["#{@containers_prefix}.DroppingLayer.heads=nil"]
 
       tensor = Nx.tensor([1])
-      assert_raise ArithmeticError, fn -> containers_run(:dropping_jitted, [tensor]) end
-      assert Nx.shape(containers_run(:keeping_jitted, [tensor])) == {2, 2}
+      assert {:raises, %ArithmeticError{}} = containers_run(:dropping_jitted, [tensor])
+      assert {:returns, %Nx.Tensor{shape: {2, 2}}} = containers_run(:keeping_jitted, [tensor])
     end
 
     test "code reads a field its struct's container drops of what a defn or jit returns", %{
@@ -3721,10 +3705,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
                []
 
       tensor = Nx.tensor([1])
-      assert containers_run(:dropping_returned, [tensor]) == false
-      assert containers_run(:keeping_returned, [tensor]) == true
-      assert containers_run(:dropping_jit_returned, [tensor]) == nil
-      assert containers_run(:keeping_jit_returned, [tensor]) == 2
+      assert containers_run(:dropping_returned, [tensor]) == {:returns, false}
+      assert containers_run(:keeping_returned, [tensor]) == {:returns, true}
+      assert containers_run(:dropping_jit_returned, [tensor]) == {:returns, nil}
+      assert containers_run(:keeping_jit_returned, [tensor]) == {:returns, 2}
     end
 
     test "a struct's container field left at a nil default is handed to defn", %{rows: rows} do
@@ -3734,17 +3718,16 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       assert containers_findings(rows, "#{@containers_use}:set_bias/1", "container_leaf") == []
 
       tensor = Nx.tensor([1])
-      assert_raise Protocol.UndefinedError, fn -> containers_run(:unset_bias, [tensor]) end
-      assert %{bias: %Nx.Tensor{}} = containers_run(:set_bias, [tensor])
+      assert {:raises, %Protocol.UndefinedError{}} = containers_run(:unset_bias, [tensor])
+      assert {:returns, %{bias: %Nx.Tensor{}}} = containers_run(:set_bias, [tensor])
     end
 
     test "a struct with no container implementation is handed to defn", %{rows: rows} do
       assert containers_findings(rows, "#{@containers_use}:plain_settings/1", "container_leaf") ==
                ["a #{@containers_prefix}.PlainSettings struct at argument 1{1}"]
 
-      assert_raise Protocol.UndefinedError, fn ->
-        containers_run(:plain_settings, [Nx.tensor([1])])
-      end
+      assert {:raises, %Protocol.UndefinedError{}} =
+               containers_run(:plain_settings, [Nx.tensor([1])])
     end
 
     test "an implementation's traverse/3 and reduce/3 visit fields in two orders", %{rows: rows} do
@@ -3764,25 +3747,23 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
              ) == []
 
       tensor = Nx.tensor([1.0, 2.0, 3.0])
-      misordered = containers_run(:misordered_loop, [tensor])
+      assert {:returns, misordered} = containers_run(:misordered_loop, [tensor])
       refute Nx.shape(misordered.first) == {3}
-      assert containers_run(:ordered_loop, [tensor]).first == tensor
+      assert {:returns, ordered} = containers_run(:ordered_loop, [tensor])
+      assert ordered.first == tensor
     end
   end
 
   # The details of the call errors of a kind in a function.
   defp containers_findings(rows, function, kind) do
-    for [_id, ^function, _operation, ^kind, detail | _origin] <-
-          Map.get(rows, "tensor_call_error", []),
+    for {^kind, detail} <- findings_for(rows, "tensor_call_error", function, [:kind, :detail]),
         uniq: true,
         do: detail
   end
 
-  defp containers_run(name, arguments) do
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      apply(Module.concat(@containers_prefix, ContainerUse), name, arguments)
-    end)
-  end
+  defp containers_run(name, arguments),
+    do:
+      outcome_on_binary_backend(Module.concat(@containers_prefix, ContainerUse), name, arguments)
 
   # Consolidates `Nx.Container` again with the implementations compiled into
   # `directory`, once.
@@ -3807,20 +3788,22 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # The kinds of the results that can be infinite or NaN in a function of
   # the gradients' fixtures.
   defp gradient_kinds(rows, function) do
-    function = "#{inspect(@gradients_fixtures)}:#{function}"
-
-    for [_id, ^function, _operation, kind | _rest] <-
-          Map.get(rows, "tensor_nonfinite_result", []),
-        uniq: true,
-        do: kind
+    rows
+    |> findings_for(
+      "tensor_nonfinite_result",
+      "#{inspect(@gradients_fixtures)}:#{function}",
+      :kind
+    )
+    |> Enum.uniq()
   end
 
   # Whether the gradient a fixture computes at zero holds an infinity or a
   # NaN.
   defp gradient_nonfinite?(name) do
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      @gradients_fixtures |> apply(name, [Nx.tensor([0.0])]) |> nonfinite?()
-    end)
+    {:returns, gradient} =
+      outcome_on_binary_backend(@gradients_fixtures, name, [Nx.tensor([0.0])])
+
+    nonfinite?(gradient)
   end
 
   # `safe_norm/1` wraps its norm in a custom_grad, as the usual fix does.
@@ -3894,17 +3877,18 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # Inside a `defn` the same math compiles to `Nx.Defn.Kernel`'s operators.
   test "a softplus or logistic written out in a defn can overflow", %{rows: rows} do
     kinds = fn name ->
-      function = "ArgusNxTensorAnalyses.TensorShapesTest.MathDefn:__defn:#{name}__/1"
-
-      for [_id, ^function, _operation, kind, cause | _rest] <-
-            Map.get(rows, "tensor_nonfinite_result", []),
-          uniq: true,
-          do: {kind, cause}
+      rows
+      |> findings_for(
+        "tensor_nonfinite_result",
+        defn_id(ArgusNxTensorAnalyses.TensorShapesTest.MathDefn, name, 1),
+        [:kind, :cause]
+      )
+      |> Enum.uniq()
     end
 
-    assert kinds.("softplus") == [{"exp_overflow", "softplus"}]
-    assert kinds.("logistic") == [{"exp_overflow", "logistic"}]
-    assert kinds.("stable_softplus") == []
+    assert kinds.(:softplus) == [{"exp_overflow", "softplus"}]
+    assert kinds.(:logistic) == [{"exp_overflow", "logistic"}]
+    assert kinds.(:stable_softplus) == []
   end
 
   # (end of Math tests)
@@ -3912,14 +3896,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # ── Indices: tests of their own ──
   # A negative index names the call whose math makes it so: the select that
   # writes an ignored label, and the remainder in another module's `defn`.
-  test "a negative index names the call that takes it below zero", %{beam: beam} do
-    {:ok, placed} =
-      beam
-      |> Path.dirname()
-      |> Path.join("*.beam")
-      |> Path.wildcard()
-      |> TensorShapes.run()
-
+  test "a negative index names the call that takes it below zero", %{placed: placed} do
     labels = fn title, cause ->
       for %{finding: finding} <- placed,
           finding.title == title,
@@ -3951,10 +3928,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     prefix = "#{inspect(@literal_type_fixtures)}:"
 
     found =
-      for [_id, function, _operation, kind | _rest] <- Map.get(rows, "tensor_type_error", []),
-          String.starts_with?(function, prefix),
-          into: %{},
-          do: {function, kind}
+      rows
+      |> findings_for("tensor_type_error", &String.starts_with?(&1, prefix), [:func, :kind])
+      |> Map.new()
 
     disagreements =
       for {{function, arguments}, index} <- @literal_type_calls,
@@ -3974,9 +3950,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     prefix = "#{inspect(@literal_fixtures)}:"
 
     found =
-      for [_id, function, operation, kind, subject | _rest] <-
-            Map.get(rows, "tensor_type_error", []),
-          String.starts_with?(function, prefix),
+      for {function, operation, kind, subject} <-
+            findings_for(rows, "tensor_type_error", &String.starts_with?(&1, prefix), [
+              :func,
+              :operation,
+              :kind,
+              :subject
+            ]),
           do: {String.replace_prefix(function, prefix, ""), operation, kind, subject}
 
     assert {"floating?/1", "Nx.Type.float?/1", "atom_type_rejected", ":f32"} in found
@@ -4064,13 +4044,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   for {{body, expected}, index} <- Enum.with_index(@access_shapes, 1) do
     test "access shape #{index}: #{String.replace(body, "\n", "; ")}", %{rows: rows} do
       index = unquote(index)
-      function = "#{inspect(@access_fixtures)}:shape_#{index}/0"
-      derived = for [^function, shape] <- Map.get(rows, "returned_shape", []), do: shape
+      derived = returned_shapes(rows, function_id(@access_fixtures, "shape_#{index}", 0))
 
-      computed =
-        Nx.with_default_backend(Nx.BinaryBackend, fn ->
-          @access_fixtures |> apply(:"shape_#{index}", []) |> spell()
-        end)
+      {:returns, value} = outcome_on_binary_backend(@access_fixtures, :"shape_#{index}", [])
+      computed = spell(value)
 
       case unquote(expected) do
         :nx ->
@@ -4086,10 +4063,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
   # The slices Nx takes draw no finding.
   test "an access Nx accepts is not reported", %{rows: rows} do
+    shape = "#{inspect(@access_fixtures)}:shape_"
+
     reported =
-      for [_id, func, _operation, kind | _rest] <- Map.get(rows, "tensor_call_error", []),
-          String.starts_with?(func, "#{inspect(@access_fixtures)}:shape_"),
-          do: {func, kind}
+      findings_for(rows, "tensor_call_error", &String.starts_with?(&1, shape), [:func, :kind])
 
     assert reported == []
   end
@@ -4097,27 +4074,25 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   for {{body, kind, detail, outcome}, index} <- Enum.with_index(@access_findings, 1) do
     test "access finding #{index}: #{String.replace(body, "\n", "; ")}", %{rows: rows} do
       index = unquote(index)
-      function = "#{inspect(@access_fixtures)}:finding_#{index}/0"
-
-      found =
-        for [_id, ^function, _operation, found_kind, found_detail | _rest] <-
-              Map.get(rows, "tensor_call_error", []),
-            do: {found_kind, found_detail}
+      function = function_id(@access_fixtures, "finding_#{index}", 0)
+      found = findings_for(rows, "tensor_call_error", function, [:kind, :detail])
 
       assert found == [{unquote(kind), unquote(detail)}]
-      assert_access_outcome(unquote(outcome), unquote(detail), access_outcome(index))
+
+      assert_access_outcome(
+        unquote(outcome),
+        unquote(detail),
+        outcome_on_binary_backend(@access_fixtures, :"finding_#{index}", [])
+      )
     end
   end
 
-  test "run/2 words and places an access's findings", %{beam: beam, source: source} do
-    access_beam = Path.join(Path.dirname(beam), "Elixir.#{inspect(@access_fixtures)}.beam")
-    {:ok, placed} = TensorShapes.run([access_beam])
-    lines = source |> File.read!() |> String.split("\n")
-    by_title = Enum.group_by(placed, & &1.finding.title)
+  test "run/2 words and places an access's findings", %{placed: placed, source: source} do
+    by_title = placed |> placed_in(@access_fixtures) |> Enum.group_by(& &1.finding.title)
 
     [bounds | _] = by_title["Access.get/2 indexes past the end of an axis"]
     assert bounds.finding.severity == :error
-    assert Enum.at(lines, bounds.line - 1) == "Nx.iota({4, 5})[4]"
+    assert source_line(source, bounds.line) == "Nx.iota({4, 5})[4]"
 
     [clamped | _] = by_title["Access.get/2 clamps a scalar tensor index into its axis"]
     assert clamped.finding.severity == :warning
@@ -4127,18 +4102,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert [%{label: "returns the tuple: Nx.split/2"}] = tuple.finding.related
   end
 
-  defp access_outcome(index) do
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      apply(@access_fixtures, :"finding_#{index}", [])
-      :accepted
-    end)
-  rescue
-    error -> {:raises, Exception.message(error)}
+  defp assert_access_outcome(:message, detail, outcome) do
+    assert {:raises, error} = outcome
+    assert Exception.message(error) == detail
   end
 
-  defp assert_access_outcome(:message, detail, outcome), do: assert(outcome == {:raises, detail})
-  defp assert_access_outcome(:raises, _detail, outcome), do: assert({:raises, _message} = outcome)
-  defp assert_access_outcome(:accepted, _detail, outcome), do: assert(outcome == :accepted)
+  defp assert_access_outcome(:raises, _detail, outcome), do: assert({:raises, _error} = outcome)
+
+  defp assert_access_outcome(:accepted, _detail, outcome),
+    do: assert({:returns, _value} = outcome)
 
   defp rank(spelled) do
     case spelled |> String.split(["{", "}"]) |> Enum.at(1) do
@@ -4154,8 +4126,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # raises, or what a sampler or norm computes instead of what was meant.
   test "the tuples rules say what Nx raises or computes", %{rows: rows} do
     details =
-      for [_id, _func, _operation, kind, detail | _rest] <-
-            Map.get(rows, "tensor_shape_mismatch", []) ++ Map.get(rows, "tensor_call_error", []),
+      for {kind, detail} <-
+            findings_for(
+              rows,
+              ["tensor_shape_mismatch", "tensor_call_error"],
+              fn _function -> true end,
+              [:kind, :detail]
+            ),
           kind in ["key", "sampler_parameters", "shared_draw", "norm_axes"],
           uniq: true,
           do: {kind, detail}
@@ -4169,14 +4146,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
           {"shared_draw", "draws {} and returns {2, 3}"},
           {"norm_axes", "1"}
         ] do
-      assert expected in details, "expected #{inspect(expected)} among #{inspect(details)}"
+      assert_finding(details, expected)
     end
   end
 
-  test "run/2 warns of a normal sampler that repeats its draw", %{beam: beam} do
-    lint_beam = Path.join(Path.dirname(beam), "Elixir.#{inspect(@lint_fixtures)}.beam")
-    {:ok, placed} = TensorShapes.run([lint_beam])
-    shared = Enum.find(placed, &(&1.finding.title =~ "repeats one draw"))
+  test "run/2 warns of a normal sampler that repeats its draw", %{placed: placed} do
+    shared =
+      placed
+      |> placed_in(@lint_fixtures)
+      |> Enum.find(&(&1.finding.title =~ "repeats one draw"))
 
     assert shared.finding.severity == :warning
     assert shared.finding.title =~ "Nx.Random.normal/3"
@@ -4193,12 +4171,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # rules derive, for a call the core leaves without one or gives another.
   test "shape gaps: a newly modeled call gets the shape Nx gives it", %{rows: rows} do
     for {name, 0} <- apply(@shape_gaps, :__info__, [:functions]) do
-      function = "#{inspect(@shape_gaps)}:#{name}/0"
-
-      expected =
-        Nx.with_default_backend(Nx.BinaryBackend, fn -> spell(apply(@shape_gaps, name, [])) end)
-
-      derived = for [^function, shape] <- Map.get(rows, "returned_shape", []), do: shape
+      {:returns, value} = outcome_on_binary_backend(@shape_gaps, name, [])
+      expected = spell(value)
+      derived = returned_shapes(rows, function_id(@shape_gaps, name, 0))
 
       assert derived == [expected],
              "#{name}: Nx gives #{expected}, the analysis derives #{inspect(derived)}"
@@ -4208,6 +4183,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # (end of ShapeGaps tests)
 
   # ── ReshapeOrder: tests of their own ──
+  @reshape_order ArgusNxTensorAnalyses.TensorShapesTest.ReshapeOrder
 
   # Real sizes, batch 1, seq 2 and heads and head_dim 2 each: a reshape
   # alone gives the shape the transposing version does and other data.
@@ -4215,9 +4191,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     sizes = %{batch: 1, seq: 2, heads: 2, head_dim: 2}
 
     run = fn name ->
-      Nx.with_default_backend(Nx.BinaryBackend, fn ->
-        apply(ArgusNxTensorAnalyses.TensorShapesTest.ReshapeOrder, name, [sizes])
-      end)
+      {:returns, value} = outcome_on_binary_backend(@reshape_order, name, [sizes])
+      value
     end
 
     split = run.(:split_heads)
@@ -4236,7 +4211,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   end
 
   test "a reshape that moves a size says which sizes it moves", %{rows: rows} do
-    function = "ArgusNxTensorAnalyses.TensorShapesTest.ReshapeOrder:split_heads/1"
+    function = function_id(@reshape_order, :split_heads, 1)
 
     [finding] =
       for [_id, ^function, _operation, "reshape_order" | _rest] = row <-
@@ -4253,12 +4228,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   end
 
   defp reshape_order_functions(rows) do
-    prefix = "ArgusNxTensorAnalyses.TensorShapesTest.ReshapeOrder:"
+    prefix = "#{inspect(@reshape_order)}:"
 
     functions =
-      for [_id, function, _operation, "reshape_order" | _rest] <-
-            Map.get(rows, "tensor_axis_misalignment", []),
-          String.starts_with?(function, prefix),
+      for {function, "reshape_order"} <-
+            findings_for(rows, "tensor_axis_misalignment", &String.starts_with?(&1, prefix), [
+              :func,
+              :kind
+            ]),
           uniq: true,
           do: String.replace_prefix(function, prefix, "")
 
@@ -4309,9 +4286,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       finding = unquote(Macro.escape(finding))
 
       assert dtypes_value(function) == wrong
-
-      assert finding in dtypes_findings(rows, @dtypes, function),
-             inspect(dtypes_findings(rows, @dtypes, function))
+      assert_finding(dtypes_findings(rows, @dtypes, function), finding)
     end
   end
 
@@ -4319,38 +4294,34 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   test "dtypes: counts and positions past a type's limit", %{rows: rows} do
     assert dtypes_value(:running_count) |> Enum.slice(254, 4) == [255, 0, 1, 2]
 
-    assert {"tensor_call_error", "count_wraparound", "u8 300"} in dtypes_findings(
-             rows,
-             @dtypes,
-             :running_count
-           )
+    assert_finding(
+      dtypes_findings(rows, @dtypes, :running_count),
+      {"tensor_call_error", "count_wraparound", "u8 300"}
+    )
 
     assert dtypes_value(:bf16_positions) |> Enum.slice(255, 4) == [255.0, 256.0, 256.0, 258.0]
 
-    assert {"tensor_call_error", "sequence_precision", "bf16 1000"} in dtypes_findings(
-             rows,
-             @dtypes,
-             :bf16_positions
-           )
+    assert_finding(
+      dtypes_findings(rows, @dtypes, :bf16_positions),
+      {"tensor_call_error", "sequence_precision", "bf16 1000"}
+    )
 
     assert dtypes_value(:byte_positions) |> Enum.slice(254, 4) == [254, 255, 0, 1]
 
-    assert {"tensor_call_error", "sequence_precision", "u8 300"} in dtypes_findings(
-             rows,
-             @dtypes,
-             :byte_positions
-           )
+    assert_finding(
+      dtypes_findings(rows, @dtypes, :byte_positions),
+      {"tensor_call_error", "sequence_precision", "u8 300"}
+    )
   end
 
   # A logarithm to a base of an f64 tensor, and the same computed in f64.
   test "dtypes: an f64 logarithm to a base is only as accurate as an f32", %{rows: rows} do
     assert dtypes_value(:log2_of_f64) == [0.9999999972521647]
 
-    assert {"tensor_call_error", "f32_precision", "f64"} in dtypes_findings(
-             rows,
-             @dtypes,
-             :log2_of_f64
-           )
+    assert_finding(
+      dtypes_findings(rows, @dtypes, :log2_of_f64),
+      {"tensor_call_error", "f32_precision", "f64"}
+    )
 
     assert dtypes_value(:log2_of_f64_in_f64) == [1.0]
 
@@ -4362,23 +4333,29 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
   # With the float types the code may run at, a type read from
   # configuration is each of them in turn.
-  test "dtypes: a configured type is checked as each float type", %{beam: beam, rows: rows} do
-    configured = Path.join(Path.dirname(beam), "Elixir.#{inspect(@dtypes_configured)}.beam")
-
-    {:ok, float_rows} =
-      TensorShapes.solve([configured], TensorShapes.rules_file(),
-        float_types: [:f16, :bf16, :f32]
-      )
-
+  test "dtypes: a configured type is checked as each float type", %{
+    rows: rows,
+    float_rows: float_rows
+  } do
     findings = &dtypes_findings(float_rows, @dtypes_configured, &1)
 
-    assert {"tensor_nonfinite_result", "literal_overflow", "f16"} in findings.(:masked)
-    assert {"tensor_type_error", "upcast", "bf16 f32"} in findings.(:scaled)
-    assert {"tensor_type_error", "upcast", "f16 f32"} in findings.(:scaled)
+    assert_finding(findings.(:masked), {"tensor_nonfinite_result", "literal_overflow", "f16"})
+    assert_finding(findings.(:scaled), {"tensor_type_error", "upcast", "bf16 f32"})
+    assert_finding(findings.(:scaled), {"tensor_type_error", "upcast", "f16 f32"})
     assert findings.(:same_type) == []
-    assert {"tensor_call_error", "sequence_precision", "bf16 arg0"} in findings.(:positions)
-    assert {"tensor_type_error", "narrowing_merge", "bf16 f16"} in findings.(:against_f16)
-    assert {"tensor_call_error", "literal_underflow", "1.0e-12 f16"} in findings.(:normalized)
+
+    assert_finding(
+      findings.(:positions),
+      {"tensor_call_error", "sequence_precision", "bf16 arg0"}
+    )
+
+    assert_finding(findings.(:against_f16), {"tensor_type_error", "narrowing_merge", "bf16 f16"})
+
+    assert_finding(
+      findings.(:normalized),
+      {"tensor_call_error", "literal_underflow", "1.0e-12 f16"}
+    )
+
     assert findings.(:written_bf16) == []
 
     # without them, a type read from configuration is not known
@@ -4409,11 +4386,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   end
 
   defp dtypes_value(function) do
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      @dtypes
-      |> apply(function, [])
-      |> Nx.to_flat_list()
-    end)
+    {:returns, value} = outcome_on_binary_backend(@dtypes, function, [])
+    Nx.to_flat_list(value)
   end
 
   # A function's findings as `{relation, kind, detail}`, in it and in the
@@ -4422,12 +4396,16 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     prefix = "#{inspect(module)}:"
     name = Atom.to_string(function)
 
-    for relation <- ["tensor_call_error", "tensor_nonfinite_result", "tensor_type_error"],
-        [_id, found_in, _operation, kind, detail | _rest] <- Map.get(rows, relation, []),
-        String.starts_with?(found_in, prefix <> name <> "/") or
-          String.starts_with?(found_in, prefix <> "__defn:" <> name),
-        uniq: true,
-        do: {relation, kind, detail}
+    owns? = fn found_in ->
+      String.starts_with?(found_in, prefix <> name <> "/") or
+        String.starts_with?(found_in, prefix <> "__defn:" <> name)
+    end
+
+    [tensor_call_error: :detail, tensor_nonfinite_result: :cause, tensor_type_error: :subject]
+    |> Enum.flat_map(fn {relation, detail} ->
+      findings_for(rows, Atom.to_string(relation), owns?, [:relation, :kind, detail])
+    end)
+    |> Enum.uniq()
   end
 
   # (end of Dtypes tests)
@@ -4440,11 +4418,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   defp serving_findings(rows, name) do
     prefix = "#{inspect(@servings)}:#{name}"
 
-    for [_id, function, operation, kind, detail | _rest] <-
-          Map.get(rows, "tensor_call_error", []),
-        String.starts_with?(function, prefix),
-        uniq: true,
-        do: {operation, kind, detail}
+    rows
+    |> findings_for("tensor_call_error", &String.starts_with?(&1, prefix), [
+      :operation,
+      :kind,
+      :detail
+    ])
+    |> Enum.uniq()
   end
 
   defp serving_batch(entries) do
@@ -4572,12 +4552,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     end)
   end
 
-  test "run/2 words a serving finding and places it at the serving's call", %{beam: beam} do
-    servings = Path.join(Path.dirname(beam), "Elixir.#{inspect(@servings)}.beam")
-    {:ok, placed} = TensorShapes.run([servings])
-
+  test "run/2 words a serving finding and places it at the serving's call", %{placed: placed} do
     titles =
-      for %{finding: finding} <- placed,
+      for %{finding: finding} <- placed_in(placed, @servings),
           do: {finding.severity, finding.title}
 
     assert {:error, "Nx.Serving.jit/1 compiles a serving computation whose output is a scalar"} in titles
@@ -4788,11 +4765,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert returned.title == "returns a random key it has already drawn from"
   end
 
-  defp consume(name, arguments),
-    do:
-      Nx.with_default_backend(Nx.BinaryBackend, fn ->
-        apply(@consumption_fixtures, name, arguments)
-      end)
+  defp consume(name, arguments) do
+    {:returns, value} = outcome_on_binary_backend(@consumption_fixtures, name, arguments)
+    value
+  end
 
   # The findings of priv/tensor_shapes/consumption.dl in a function of the
   # Consumption fixtures, its closures and `defn` body among them, as
@@ -4801,11 +4777,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     module = "#{inspect(@consumption_fixtures)}:"
     owned = ["#{name}/", "-#{name}/", "__defn:#{name}__/", "-__defn:#{name}__/"]
 
-    for [_id, function, _operation, kind, detail | _rest] <-
-          Map.get(rows, "tensor_call_error", []),
+    owns? = fn function ->
+      String.starts_with?(function, module) and
+        String.starts_with?(String.replace_prefix(function, module, ""), owned)
+    end
+
+    for {kind, detail} <- findings_for(rows, "tensor_call_error", owns?, [:kind, :detail]),
         kind in @consumption_kinds,
-        String.starts_with?(function, module),
-        String.starts_with?(String.replace_prefix(function, module, ""), owned),
         uniq: true,
         do: {kind, detail}
   end
@@ -4815,44 +4793,33 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # ── LinAlg: tests of their own ──
   # (end of LinAlg tests)
 
-  test "run/2 places a finding at its call", %{beam: beam, source: source} do
-    {:ok, placed} = TensorShapes.run([beam])
-
+  test "run/2 places a finding at its call", %{placed: placed, source: source} do
     reshape =
-      Enum.find(
-        placed,
-        &(&1.finding.detail =~ "shape {2, 3} is not compatible with new shape {4, 2}")
-      )
+      placed
+      |> placed_in(@fixtures)
+      |> Enum.find(&(&1.finding.detail =~ "shape {2, 3} is not compatible with new shape {4, 2}"))
 
     assert reshape.file == source
-
-    assert source |> File.read!() |> String.split("\n") |> Enum.at(reshape.line - 1) ==
-             "Nx.reshape(Nx.iota({2, 3}), {4, 2})"
+    assert source_line(source, reshape.line) == "Nx.reshape(Nx.iota({2, 3}), {4, 2})"
   end
 
-  test "run/2 places the calls that bring a helper its shapes", %{beam: beam, source: source} do
-    {:ok, placed} = TensorShapes.run([beam])
-    lines = source |> File.read!() |> String.split("\n")
-
+  test "run/2 places the calls that bring a helper its shapes", %{placed: placed, source: source} do
     callers =
-      for %{finding: finding, related: frames} <- placed,
+      for %{finding: finding, related: frames} <- placed_in(placed, @fixtures),
           finding.detail =~ "cannot broadcast tensor of dimensions {2, 3} to {4}",
           frame <- frames,
-          do: Enum.at(lines, frame.line - 1)
+          do: source_line(source, frame.line)
 
     assert "local_helper(Nx.iota({2, 3}))" in callers
   end
 
   test "run/2 labels a call with the shapes it gets and the call that makes each", %{
-    beam: beam
+    placed: placed
   } do
-    {:ok, placed} = TensorShapes.run([beam])
-
     reshape =
-      Enum.find(
-        placed,
-        &(&1.finding.detail =~ "shape {2, 3} is not compatible with new shape {4, 2}")
-      )
+      placed
+      |> placed_in(@fixtures)
+      |> Enum.find(&(&1.finding.detail =~ "shape {2, 3} is not compatible with new shape {4, 2}"))
 
     assert reshape.finding.title == "Nx.reshape/2 gets a shape it cannot reshape to"
     assert reshape.finding.at_label == "gets {2, 3}"
@@ -4878,7 +4845,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
   defp assert_agrees(:some_path, {:returns, _shape}, _derived, found) do
     assert found != []
-    assert Enum.all?(found, &(&1.certainty == "on_some_path")), inspect(found)
+
+    assert Enum.all?(found, &match?({_operation, _kind, _detail, "on_some_path"}, &1)),
+           inspect(found)
   end
 
   defp assert_agrees(:unknown, {:returns, _shape}, derived, found) do
@@ -4889,15 +4858,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert found == []
   end
 
+  # What Nx does with the case: the shape of the tensor it returns, as
+  # the probe program spells it (nil for anything else), or the message it
+  # raises.
   defp run_case(index) do
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      case apply(@fixtures, :"case_#{index}", []) do
-        %Nx.Tensor{} = tensor -> {:returns, spell(tensor)}
-        _other -> {:returns, nil}
-      end
-    end)
-  rescue
-    error -> {:raises, Exception.message(error)}
+    case outcome_on_binary_backend(@fixtures, :"case_#{index}", []) do
+      {:returns, %Nx.Tensor{} = tensor} -> {:returns, spell(tensor)}
+      {:returns, _other} -> {:returns, nil}
+      {:raises, error} -> {:raises, Exception.message(error)}
+    end
   end
 
   # A tensor's shape as the probe program spells it: `{2, 3}[:a, nil]`,
@@ -4909,103 +4878,48 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     "{#{sizes}}[#{Enum.map_join(names, ", ", &inspect/1)}]" <> vectorized
   end
 
-  defp derived_shapes(rows, index) do
-    function = function_id(index)
-    for [^function, shape] <- Map.get(rows, "returned_shape", []), do: shape
-  end
-
-  # The findings in the case's function, and those in the functions it
-  # calls, reached with the shapes it gives them.
-  defp findings(rows, index) do
-    function = function_id(index)
-
-    reached =
-      for [id, kind, _order, _call, ^function, "call" | _frame] <-
-            Map.get(rows, "tensor_shape_mismatch_via", []),
-          do: {id, kind}
-
-    for [id, func, operation, kind, detail, certainty, _operands] <-
-          Map.get(rows, "tensor_shape_mismatch", []),
-        func == function or {id, kind} in reached,
-        uniq: true,
-        do: %{operation: operation, kind: kind, detail: detail, certainty: certainty}
-  end
-
-  defp function_id(index), do: "#{inspect(@fixtures)}:case_#{index}/0"
+  # The shapes the probe program derives for what a function returns.
+  defp returned_shapes(rows, function),
+    do: for([^function, shape] <- Map.get(rows, "returned_shape", []), do: shape)
 
   # The findings of the shape relations in the lint case's function and in
   # the functions it reaches, as `{relation, kind, detail}`, and of results
   # that can be infinite or NaN in it, as `{relation, kind, cause}`.
   defp lint_findings(rows, index) do
-    function = "#{inspect(@lint_fixtures)}:lint_#{index}/4"
+    function = function_id(@lint_fixtures, "lint_#{index}", 4)
 
     # its closures' too, which a grad differentiates
     closure = "#{inspect(@lint_fixtures)}:-lint_#{index}/4-fun-"
+    in_case? = &(&1 == function or String.starts_with?(&1, closure))
 
-    nonfinite =
-      for [_id, found_in, _operation, kind, cause | _origin] <-
-            Map.get(rows, "tensor_nonfinite_result", []),
-          found_in == function or String.starts_with?(found_in, closure),
+    shapes =
+      for relation <- ["tensor_shape_mismatch", "tensor_axis_misalignment"],
+          found <- reached_findings(rows, relation, function, [:relation, :kind, :detail]),
           uniq: true,
-          do: {"tensor_nonfinite_result", kind, cause}
+          do: found
 
-    types =
-      for [_id, ^function, _operation, kind, subject | _rest] <-
-            Map.get(rows, "tensor_type_error", []),
-          uniq: true,
-          do: {"tensor_type_error", kind, subject}
-
-    calls =
-      for [_id, found_in, _operation, kind, detail | _rest] <-
-            Map.get(rows, "tensor_call_error", []),
-          found_in == function or String.starts_with?(found_in, closure),
-          uniq: true,
-          do: {"tensor_call_error", kind, detail}
-
-    shape_findings(rows, function) ++ nonfinite ++ types ++ calls
+    [
+      shapes,
+      findings_for(rows, "tensor_nonfinite_result", in_case?, [:relation, :kind, :cause]),
+      findings_for(rows, "tensor_type_error", function, [:relation, :kind, :subject]),
+      findings_for(rows, "tensor_call_error", in_case?, [:relation, :kind, :detail])
+    ]
+    |> Enum.map(&Enum.uniq/1)
+    |> Enum.concat()
   end
 
-  defp shape_findings(rows, function) do
-    for relation <- ["tensor_shape_mismatch", "tensor_axis_misalignment"],
-        reached =
-          for(
-            [id, kind, _order, _call, ^function, "call" | _frame] <-
-              Map.get(rows, relation <> "_via", []),
-            do: {id, kind}
-          ),
-        [id, func, _operation, kind, detail, _certainty, _operands] <- Map.get(rows, relation, []),
-        func == function or {id, kind} in reached,
-        uniq: true,
-        do: {relation, kind, detail}
-  end
-
-  # Nx accepts the lint case when every size variable is 1, the shapers
-  # one implementation's.
-  defp run_lint(index) do
-    config = Map.new(~w(heads kv_heads dim head_dim hidden rows cols a b)a, &{&1, 1})
-
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      shaper = struct(ArgusNxTensorAnalyses.TensorShapesTest.Wide)
-      apply(@lint_fixtures, :"lint_#{index}", [config, Nx.iota({1}), shaper, shaper])
-      :accepted
-    end)
-  end
-
-  # What the lint case gives where `t` is zero and every size variable is
-  # 1: `:nonfinite` where its result holds an infinity or a NaN, or it
-  # raises dividing integers by zero, and `:finite` otherwise.
+  # What running the lint case does where `t` is zero, every size variable
+  # is 1 and the shapers are one implementation's.
   defp lint_outcome(index) do
     config = Map.new(~w(heads kv_heads dim head_dim hidden rows cols a b)a, &{&1, 1})
+    shaper = struct(ArgusNxTensorAnalyses.TensorShapesTest.Wide)
 
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      shaper = struct(ArgusNxTensorAnalyses.TensorShapesTest.Wide)
-      result = apply(@lint_fixtures, :"lint_#{index}", [config, Nx.iota({1}), shaper, shaper])
-      nonfinite = Nx.logical_or(Nx.is_nan(result), Nx.is_infinity(result))
-
-      if nonfinite |> Nx.any() |> Nx.to_number() == 1, do: :nonfinite, else: :finite
-    end)
-  rescue
-    ArithmeticError -> :nonfinite
+    outcome_on_binary_backend(@lint_fixtures, :"lint_#{index}", [
+      config,
+      Nx.iota({1}),
+      shaper,
+      shaper
+    ])
   end
 
   # A `{:finds, ...}` subject: `:any`, or the finding's own.
@@ -5019,37 +4933,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   defp assert_outcome(:any, _index), do: :ok
 
   defp assert_outcome(:accepted, index),
-    do: refute(lint_result(index) == :raises, "expected Nx to accept lint #{index}")
+    do:
+      refute(
+        classify_outcome(lint_outcome(index), :raises) == :raises,
+        "expected Nx to accept lint #{index}"
+      )
 
-  defp assert_outcome(outcome, index), do: assert(lint_result(index) == outcome)
-
-  defp lint_result(index) do
-    config = Map.new(~w(heads kv_heads dim head_dim hidden rows cols a b)a, &{&1, 1})
-
-    Nx.with_default_backend(Nx.BinaryBackend, fn ->
-      shaper = struct(ArgusNxTensorAnalyses.TensorShapesTest.Wide)
-      result = apply(@lint_fixtures, :"lint_#{index}", [config, Nx.iota({1}), shaper, shaper])
-      if nonfinite?(result), do: :nonfinite, else: :finite
-    end)
-  rescue
-    _error -> :raises
-  end
-
-  defp nonfinite?(%Nx.Tensor{} = tensor) do
-    tensor
-    |> Nx.is_nan()
-    |> Nx.logical_or(Nx.is_infinity(tensor))
-    |> Nx.any()
-    |> Nx.to_number() == 1
-  end
-
-  defp nonfinite?(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> nonfinite?()
-  defp nonfinite?(list) when is_list(list), do: Enum.any?(list, &nonfinite?/1)
-
-  defp nonfinite?(map) when is_map(map) and not is_struct(map),
-    do: map |> Map.values() |> nonfinite?()
-
-  defp nonfinite?(_other), do: false
+  defp assert_outcome(outcome, index),
+    do: assert(classify_outcome(lint_outcome(index), :raises) == outcome)
 
   defp fixture_source do
     cases =

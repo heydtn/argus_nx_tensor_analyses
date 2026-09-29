@@ -4,19 +4,9 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
   # This package does not depend on EMLX or EXLA, so the cases are not
   # run: what EMLX does with each is recorded in the analysis's findings'
   # wording, confirmed against EMLX 0.4.2.
-  #
-  # Not async: `setup_all` loads the compiled fixtures into the VM, and
-  # silences the compiler by capturing `:stderr`, which every process
-  # shares.
-  use ExUnit.Case, async: false
-
-  import ExUnit.CaptureIO
+  use ArgusNxTensorAnalyses.TensorAnalysisCase
 
   alias ArgusNxTensorAnalyses.EMLX
-
-  unless Argus.Souffle.available?() do
-    @moduletag skip: "souffle is not on PATH"
-  end
 
   @fixtures ArgusNxTensorAnalyses.EMLXTest.Fixtures
   @on_exla ArgusNxTensorAnalyses.EMLXTest.OnExla
@@ -132,40 +122,20 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
   """
 
   setup_all do
-    directory =
-      Path.join(System.tmp_dir!(), "emlx_test_#{System.pid()}_#{System.unique_integer()}")
+    %{beams: beams} = compile_fixtures("emlx", fixture_source())
 
-    File.mkdir_p!(directory)
-    on_exit(fn -> File.rm_rf!(directory) end)
-
-    source = Path.join(directory, "fixtures.ex")
-    File.write!(source, fixture_source())
-    on_exla_directory = Path.join(directory, "on_exla")
-    File.mkdir_p!(on_exla_directory)
-    on_exla_source = Path.join(on_exla_directory, "on_exla.ex")
-    File.write!(on_exla_source, @on_exla_source)
-
-    capture_io(:stderr, fn ->
-      {:ok, _modules, _diagnostics} =
-        Kernel.ParallelCompiler.compile_to_path([source], directory, return_diagnostics: true)
-
-      {:ok, _modules, _diagnostics} =
-        Kernel.ParallelCompiler.compile_to_path([on_exla_source], on_exla_directory,
-          return_diagnostics: true
-        )
-    end)
-
-    ArgusNxTensorAnalyses.FixtureBeams.keep(directory, "emlx")
-    ArgusNxTensorAnalyses.FixtureBeams.keep(on_exla_directory, "emlx_on_exla")
+    %{source: on_exla_source, beams: on_exla_beams} =
+      compile_fixtures("emlx_on_exla", @on_exla_source)
 
     # c128 listed as unsupported: the tensor shapes analysis reports its
     # tensors, and this analysis leaves them to it.
-    {:ok, rows} =
-      EMLX.solve(Path.wildcard(Path.join(directory, "*.beam")), unsupported_types: [:c128])
+    solved =
+      solve_concurrently(
+        rows: fn -> EMLX.solve(beams, unsupported_types: [:c128]) end,
+        on_exla: fn -> EMLX.run(on_exla_beams) end
+      )
 
-    {:ok, on_exla} = EMLX.run(Path.wildcard(Path.join(on_exla_directory, "*.beam")))
-
-    %{rows: rows, on_exla: on_exla, on_exla_source: on_exla_source}
+    Map.put(solved, :on_exla_source, on_exla_source)
   end
 
   for {{expectation, body}, index} <- Enum.with_index(@cases, 1) do
@@ -177,54 +147,49 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
           assert found == [], "expected nothing, found #{inspect(found)}"
 
         {:finds, kind, detail, certain} ->
-          assert {:divergence, kind, detail, certain} in found,
-                 "expected #{kind} #{detail} (certain #{certain}), found #{inspect(found)}"
+          assert_finding(found, {:divergence, kind, detail, certain})
 
         {:mixed, backend, other, origin} ->
-          assert {:mixed, backend, other, origin} in found,
-                 "expected #{backend} meeting #{other} from #{origin}, found #{inspect(found)}"
+          assert_finding(found, {:mixed, backend, other, origin})
       end
     end
   end
 
   test "a type listed as unsupported is the tensor shapes analysis's finding", %{rows: rows} do
-    function = function_id(Enum.find_index(@cases, &(elem(&1, 1) =~ ":c128")) + 1)
+    function = case_id(Enum.find_index(@cases, &(elem(&1, 1) =~ ":c128")) + 1)
 
-    assert [[_id, ^function, "Nx.tensor/2", "unsupported_type", "c128" | _rest]] =
-             for(
-               row <- Map.get(rows, "tensor_type_error", []),
-               Enum.at(row, 1) == function,
-               do: row
-             )
+    assert [{"Nx.tensor/2", "unsupported_type", "c128"}] =
+             findings_for(rows, "tensor_type_error", function, [:operation, :kind, :subject])
   end
 
   test "a remainder in a defn whose dividend its math makes negative", %{rows: rows} do
     assert {"negative_remainder", "dividend", "1", "Nx.Defn.Kernel.-/2"} in divergences_in(
              rows,
-             "#{inspect(@fixtures)}:__defn:wrap__/1"
+             defn_id(@fixtures, :wrap, 1)
            )
   end
 
   test "a power in a defn whose exponent is written negative", %{rows: rows} do
     assert {"negative_integer_power", "exponent", "1", ""} in divergences_in(
              rows,
-             "#{inspect(@fixtures)}:__defn:inverse__/1"
+             defn_id(@fixtures, :inverse, 1)
            )
   end
 
   test "an f64 tensor a function jitted with EXLA makes is not EMLX's", %{rows: rows} do
-    assert divergences_in(rows, "#{inspect(@fixtures)}:__defn:f64_table__/1") == []
+    assert divergences_in(rows, defn_id(@fixtures, :f64_table, 1)) == []
   end
 
   test "a helper that adds tensors of two backends its caller hands it", %{rows: rows} do
-    function = "#{inspect(@fixtures)}:combine/2"
+    function = function_id(@fixtures, :combine, 2)
 
-    assert [[_id, ^function, "Nx.add/2", "EXLA.Backend", origin, "Nx.tensor/2" | _rest]] =
-             for(
-               row <- Map.get(rows, "tensor_emlx_mixed_backends", []),
-               Enum.at(row, 1) == function,
-               do: row
-             )
+    assert [{"Nx.add/2", "EXLA.Backend", origin, "Nx.tensor/2"}] =
+             findings_for(rows, "tensor_emlx_mixed_backends", function, [
+               :operation,
+               :backend,
+               :origin,
+               :origin_operation
+             ])
 
     assert origin =~ "#{inspect(@fixtures)}:calls_combine/0#"
   end
@@ -233,13 +198,9 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
   # defn's calls build an expression, and whether they mix backends is up
   # to the compiler that runs it, which the code does not name.
   test "a defn's body is traced, and mixes no backends", %{rows: rows} do
-    function = "#{inspect(@fixtures)}:__defn:add_iota__/1"
+    function = defn_id(@fixtures, :add_iota, 1)
 
-    assert for(
-             row <- Map.get(rows, "tensor_emlx_mixed_backends", []),
-             Enum.at(row, 1) == function,
-             do: row
-           ) == []
+    assert findings_for(rows, "tensor_emlx_mixed_backends", function, :id) == []
   end
 
   test "a mix is reported where it happens, not where its result goes", %{rows: rows} do
@@ -260,8 +221,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     on_exla: [located],
     on_exla_source: source
   } do
-    lines = source |> File.read!() |> String.split("\n")
-    at = fn place -> lines |> Enum.at(place.line - 1) |> String.trim() end
+    at = &(source |> source_line(&1.line) |> String.trim())
 
     assert located.file == source
     assert at.(located) == "Nx.add(moved, Nx.iota({2}))"
@@ -277,27 +237,29 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
            ]
   end
 
-  defp function_id(index), do: "#{inspect(@fixtures)}:case_#{index}/1"
+  defp case_id(index), do: function_id(@fixtures, "case_#{index}", 1)
 
   # The findings in the case's function and its closures: divergences as
   # `{:divergence, kind, detail, certain}`, mixes as `{:mixed, backend,
   # other, origin_operation}`.
   defp findings(rows, index) do
-    function = function_id(index)
+    function = case_id(index)
     closure = "#{inspect(@fixtures)}:-case_#{index}/1-fun-"
     in_case? = &(&1 == function or String.starts_with?(&1, closure))
 
     divergences =
-      for [_id, found_in, _operation, kind, detail, certain | _origin] <-
-            Map.get(rows, "tensor_emlx_divergence", []),
-          in_case?.(found_in),
+      for {kind, detail, certain} <-
+            findings_for(rows, "tensor_emlx_divergence", in_case?, [:kind, :detail, :certain]),
           uniq: true,
           do: {:divergence, kind, detail, certain}
 
     mixes =
-      for [_id, found_in, _operation, backend, _origin, shown, other | _other] <-
-            Map.get(rows, "tensor_emlx_mixed_backends", []),
-          in_case?.(found_in),
+      for {backend, other, shown} <-
+            findings_for(rows, "tensor_emlx_mixed_backends", in_case?, [
+              :backend,
+              :other,
+              :origin_operation
+            ]),
           uniq: true,
           do: {:mixed, backend, other, shown}
 
@@ -305,18 +267,20 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
   end
 
   defp mixed_operations(rows, index) do
-    function = function_id(index)
-
-    for [_id, ^function, operation | _rest] <- Map.get(rows, "tensor_emlx_mixed_backends", []),
+    for operation <- findings_for(rows, "tensor_emlx_mixed_backends", case_id(index), :operation),
         uniq: true,
         do: [operation]
   end
 
   defp divergences_in(rows, function) do
-    for [_id, ^function, _operation, kind, detail, certain, _origin, shown] <-
-          Map.get(rows, "tensor_emlx_divergence", []),
-        uniq: true,
-        do: {kind, detail, certain, shown}
+    rows
+    |> findings_for("tensor_emlx_divergence", function, [
+      :kind,
+      :detail,
+      :certain,
+      :origin_operation
+    ])
+    |> Enum.uniq()
   end
 
   defp fixture_source do
