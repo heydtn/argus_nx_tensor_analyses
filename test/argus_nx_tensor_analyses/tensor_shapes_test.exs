@@ -1043,6 +1043,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "ArgusNxTensorAnalyses.TensorShapesTest.ContainerDefns.pass(%{weight: t, causal: true})"},
     {{:finds_none, :accepted},
      "ArgusNxTensorAnalyses.TensorShapesTest.ContainerDefns.pass(%{weight: t, causal: Nx.tensor(1)})"},
+    {{:finds_none, :accepted},
+     "Nx.Defn.jit(fn x -> ArgusNxTensorAnalyses.TensorShapesTest.ContainerDefns.pass(%{weight: x, causal: true}).weight end).(t)"},
     {{:finds, {"tensor_call_error", "container_leaf", "nil at argument 1.inner.b"}, :raises},
      "ArgusNxTensorAnalyses.TensorShapesTest.ContainerDefns.pass(%{inner: %{w: t, b: nil}})"},
     {{:finds, {"tensor_call_error", "container_leaf", "a list at argument 1.layers"}, :raises},

@@ -38,9 +38,9 @@
 
 // A call from outside `defn` that runs code as `defn` compiles it,
 // handing it its arguments: a `defn` called through its wrapper, or the
-// function `Nx.Defn.jit/1,2` returns. A wrapper called while a `defn` is
-// traced calls its body directly, over values already traced, so only a
-// call from a function that runs outside one counts.
+// function `Nx.Defn.jit/1,2` returns. A wrapper called while Nx traces
+// calls its body directly, over values already traced, so only a call
+// from a function that runs outside a trace counts.
 .decl defn_call(site: symbol, caller: symbol)
 defn_call(site, caller) :-
   entering_call(site, caller),
@@ -56,13 +56,14 @@ entering_call(site, caller) :-
   jitted_call(site, caller, _),
   !in_defn(caller).
 
-// A function called while a `defn` is traced: a `defn`'s body calls it, or
-// calls what calls it, as Argus's call graph has it or as the rules follow
-// the calls (a protocol's implementation, a fun a transform captures).
-// Asked of the functions that make the calls above, and of those that
-// build a struct whose container drops a field.
+// A function called while Nx traces: code Nx runs while it traces (the
+// core's `runs_in_trace`) calls it, or calls what calls it, as Argus's
+// call graph has it or as the rules follow the calls (a protocol's
+// implementation, a fun a transform captures, which the core's reach does
+// not follow). Asked of the functions that make the calls above, and of
+// those that build a struct whose container drops a field.
 .decl runs_while_traced(function: symbol)
-runs_while_traced(function) :- traced_caller_reach.reaches(traced, function), in_defn(traced).
+runs_while_traced(function) :- traced_caller_reach.reaches(traced, function), runs_in_trace(traced).
 
 .init traced_caller_reach = CallReach
 traced_caller_reach.seed(caller, caller) :- entering_call(_, caller).
