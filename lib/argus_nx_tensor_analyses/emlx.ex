@@ -44,7 +44,7 @@ defmodule ArgusNxTensorAnalyses.EMLX do
 
   @behaviour Argus.Analysis
 
-  alias Argus.Findings
+  alias ArgusNxTensorAnalyses.Finding
   alias ArgusNxTensorAnalyses.TensorShapes
 
   import ArgusNxTensorAnalyses.Text
@@ -105,42 +105,40 @@ defmodule ArgusNxTensorAnalyses.EMLX do
   end
 
   @impl true
-  def finding(:tensor_emlx_divergence, [id, _func, operation, kind, detail, certain | rest]) do
-    [origin, shown] = rest
-    wording = divergence(kind, detail)
-
-    Findings.new(severity(kind, certain), "#{operation} #{wording.title}", wording.detail,
-      at: Findings.at_instr(id),
-      at_label: wording.label,
-      help: [wording.help],
-      related: origin_frame(wording.frame, origin, shown)
-    )
+  def finding(
+        :tensor_emlx_divergence = relation,
+        [_id, _func, _operation, kind, detail | _rest] = row
+      ) do
+    Finding.build(relation, row, divergence(kind, detail))
   end
 
-  def finding(:tensor_emlx_mixed_backends, [id, _func, operation, backend | rest]) do
+  def finding(
+        :tensor_emlx_mixed_backends = relation,
+        [id, _func, operation, backend | rest] = row
+      ) do
     [origin, shown, other, other_origin, other_shown] = rest
+    wording = mixed(backend, other, shown)
 
-    Findings.new(
-      :warning,
-      "#{operation} gets tensors of #{backend} and #{other}, which cannot meet",
-      "Nx raises Nx.Defn.IncompatibleBackendsError for a call over tensors of two backends, " <>
-        "unless one of them is Nx.BinaryBackend.#{compiled(shown, backend)}",
-      at: Findings.at_instr(id),
-      at_label: "gets #{backend} and #{other} here",
-      help: [
-        "move one tensor to the other's backend first, such as Nx.backend_transfer(tensor, EMLX.Backend)"
-      ],
-      related:
-        origin_frame(placed_by(shown, backend), origin, shown) ++
-          origin_frame(placed_by(other_shown, other), other_origin, other_shown)
-    )
+    related =
+      Finding.origin_frame(placed_by(shown, backend), origin, shown) ++
+        Finding.origin_frame(placed_by(other_shown, other), other_origin, other_shown)
+
+    Finding.build(wording, id, operation, Finding.severity(relation, row, wording), related)
   end
 
-  # An input the analysis cannot follow may never be negative, and a half
-  # is where rounding differs, not an error, so those report as info.
-  defp severity("round_half", _certain), do: :info
-  defp severity(_kind, certain) when certain in [0, "0"], do: :info
-  defp severity(_kind, _certain), do: :warning
+  # What a call over tensors of two backends says, the tensor of `backend`
+  # put there by the call `shown`.
+  defp mixed(backend, other, shown) do
+    %{
+      title: "gets tensors of #{backend} and #{other}, which cannot meet",
+      detail:
+        "Nx raises Nx.Defn.IncompatibleBackendsError for a call over tensors of two backends, " <>
+          "unless one of them is Nx.BinaryBackend.#{compiled(shown, backend)}",
+      label: "gets #{backend} and #{other} here",
+      help:
+        "move one tensor to the other's backend first, such as Nx.backend_transfer(tensor, EMLX.Backend)"
+    }
+  end
 
   # What a compiled function's results are on, where one puts the tensor
   # on its backend.
@@ -156,12 +154,6 @@ defmodule ArgusNxTensorAnalyses.EMLX do
       do: "puts a tensor on #{backend}:",
       else: "makes a tensor on #{backend}:"
   end
-
-  # The frame at the call a finding comes from, none for a written value.
-  defp origin_frame(_frame, "", _shown), do: []
-
-  defp origin_frame(frame, origin, shown),
-    do: [Findings.related(String.trim("#{frame} #{shown}"), Findings.at_instr(origin))]
 
   # What each kind of finding says: its title, why, the label at the call,
   # what to change, and the frame at its origin.

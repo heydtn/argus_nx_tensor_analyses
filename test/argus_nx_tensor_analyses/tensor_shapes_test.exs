@@ -4013,7 +4013,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
           {"literal_flushes", "1.0e-8 as f16", "Nx.tensor/2",
            fn -> Nx.tensor(1.0e-8, type: :f16) end}
         ] do
-      %{label: label} = TensorShapes.Wording.Literals.type_error(kind, subject, operation)
+      %{label: label} =
+        TensorShapes.Wording.Literals.type_error(kind, subject, operation, "0", "1")
 
       made =
         Nx.with_default_backend(Nx.BinaryBackend, fn ->

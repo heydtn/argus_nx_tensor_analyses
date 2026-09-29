@@ -286,7 +286,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   def hazard(_kind, _cause, _operation), do: nil
 
   @impl true
-  def type_error("upcast", subject, operation) do
+  def type_error("upcast", subject, operation, _position, _certain) do
     [from, to] = String.split(subject, " ")
 
     %{
@@ -299,7 +299,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     }
   end
 
-  def type_error("narrowing_merge", subject, _operation) do
+  def type_error("narrowing_merge", subject, _operation, _position, _certain) do
     [from, to] = String.split(subject, " ")
 
     %{
@@ -316,7 +316,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     }
   end
 
-  def type_error(_kind, _subject, _operation), do: nil
+  def type_error(_kind, _subject, _operation, _position, _certain), do: nil
 
   defp wraparound_detail("Nx.diff", type),
     do:

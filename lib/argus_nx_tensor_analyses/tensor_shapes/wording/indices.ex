@@ -195,7 +195,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
   def hazard(_kind, _cause, _operation), do: nil
 
   @impl true
-  def type_error("non_integer_start", class, operation) do
+  def type_error("non_integer_start", class, operation, _position, _certain) do
     %{
       title: "starts a slice at a #{class}",
       detail:
@@ -207,7 +207,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     }
   end
 
-  def type_error("complex_operand", _subject, operation) do
+  def type_error("complex_operand", _subject, operation, _position, _certain) do
     %{
       title: "gets a complex tensor, which it rejects",
       detail:
@@ -220,7 +220,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     }
   end
 
-  def type_error("complex_spread", _subject, operation) do
+  def type_error("complex_spread", _subject, operation, _position, _certain) do
     %{
       title: "squares complex values rather than their magnitudes",
       detail:
@@ -235,7 +235,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     }
   end
 
-  def type_error(_kind, _subject, _operation), do: nil
+  def type_error(_kind, _subject, _operation, _position, _certain), do: nil
 
   # A spread's result where its ddof leaves the count zero or negative.
   defp ddof_consequence("equal"),

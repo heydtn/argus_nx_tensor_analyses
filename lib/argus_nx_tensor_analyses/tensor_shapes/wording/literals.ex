@@ -9,7 +9,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
   import ArgusNxTensorAnalyses.Text
 
   @impl true
-  def type_error("integer_past_s32", subject, operation) do
+  def type_error("integer_past_s32", subject, operation, _position, _certain) do
     {spelled, _type} = literal(subject)
     value = String.to_integer(spelled)
     wrapped = wrap(value, "s", 32)
@@ -34,7 +34,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error("atom_type_rejected", subject, operation) do
+  def type_error("atom_type_rejected", subject, operation, _position, _certain) do
     tuple = tuple_form(subject)
 
     detail =
@@ -59,7 +59,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error("atom_type_misread", subject, operation) do
+  def type_error("atom_type_misread", subject, operation, _position, _certain) do
     tuple = tuple_form(subject)
     {given, expected} = misread(without_arity(operation), subject, tuple)
 
@@ -76,7 +76,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error("invalid_type", subject, operation) do
+  def type_error("invalid_type", subject, operation, _position, _certain) do
     raised =
       if String.starts_with?(operation, "Nx.Random.gumbel"),
         do:
@@ -96,7 +96,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error("literal_wraps", subject, _operation) do
+  def type_error("literal_wraps", subject, _operation, _position, _certain) do
     {spelled, type} = literal(subject)
     value = String.to_integer(spelled)
     {family, size} = family_size(type)
@@ -116,7 +116,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error("literal_overflows", subject, _operation) do
+  def type_error("literal_overflows", subject, _operation, _position, _certain) do
     {spelled, type} = literal(subject)
     {largest, wider} = float_limits(type)
 
@@ -132,7 +132,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error("literal_flushes", subject, _operation) do
+  def type_error("literal_flushes", subject, _operation, _position, _certain) do
     {spelled, type} = literal(subject)
     smallest = smallest_subnormal(type)
 
@@ -151,7 +151,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error("float_as_integer", subject, _operation) do
+  def type_error("float_as_integer", subject, _operation, _position, _certain) do
     {spelled, type} = literal(subject)
 
     %{
@@ -169,7 +169,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     }
   end
 
-  def type_error(_kind, _subject, _operation), do: nil
+  def type_error(_kind, _subject, _operation, _position, _certain), do: nil
 
   # `300 as u8` as `{"300", "u8"}`.
   defp literal(subject) do

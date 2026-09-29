@@ -1,12 +1,12 @@
 defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
   @moduledoc false
-  # What a finding says, for the kinds the rules files under
-  # `priv/tensor_shapes/` report: each file's wording module answers for
-  # its own kinds and returns nil for the rest.
+  # What a finding says, for the kinds `priv/tensor_shapes.dl` and the
+  # rules files under `priv/tensor_shapes/` report: each file's wording
+  # module answers for its own kinds and returns nil for the rest.
   #
-  # A call error or hazard is `%{title, detail, label, help, frame}`, with
-  # an optional `:severity` (`:error`, `:warning`, `:info`); a violation or
-  # type error kind is `%{title, why, help}` as the core's are.
+  # A call error, hazard or type error is `%{title, detail, label, help,
+  # frame}`, with an optional `:severity` (`:error`, `:warning`, `:info`);
+  # a violation is `%{title, why, help}`.
 
   alias __MODULE__, as: Wording
 
@@ -15,8 +15,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
   @callback hazard(kind :: String.t(), cause :: String.t(), operation :: String.t()) ::
               map() | nil
   @callback violation(kind :: String.t()) :: map() | nil
-  @callback type_error(kind :: String.t(), subject :: String.t(), operation :: String.t()) ::
-              map() | nil
+  @callback type_error(
+              kind :: String.t(),
+              subject :: String.t(),
+              operation :: String.t(),
+              position :: String.t(),
+              certain :: String.t()
+            ) :: map() | nil
 
   defmacro __using__(_options) do
     quote do
@@ -29,9 +34,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
       @impl true
       def violation(_kind), do: nil
       @impl true
-      def type_error(_kind, _subject, _operation), do: nil
+      def type_error(_kind, _subject, _operation, _position, _certain), do: nil
 
-      defoverridable call_error: 3, hazard: 3, violation: 1, type_error: 3
+      defoverridable call_error: 3, hazard: 3, violation: 1, type_error: 5
     end
   end
 
@@ -52,6 +57,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
     Wording.Serving,
     Wording.Consumption,
     Wording.LinAlg,
+    Wording.Core,
     Wording.Nonfinite
   ]
 
@@ -63,6 +69,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
 
   def violation(kind), do: Enum.find_value(@modules, & &1.violation(kind))
 
-  def type_error(kind, subject, operation),
-    do: Enum.find_value(@modules, & &1.type_error(kind, subject, operation))
+  def type_error(kind, subject, operation, position, certain),
+    do: Enum.find_value(@modules, & &1.type_error(kind, subject, operation, position, certain))
 end
