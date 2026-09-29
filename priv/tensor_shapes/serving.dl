@@ -240,14 +240,9 @@ comes_from(function, "result", site, origin) :-
   flow_argument(site, function, 0, kind, source),
   remote_call(site, function, module, name, _),
   api_role(module, name, "hands_back").
-comes_from(caller, "result", site, origin) :-
-  comes_from(callee, kind, source, origin),
-  flow_return(callee, _, kind, source),
-  program_call(site, caller, callee).
-comes_from(callee, "param", to_string(position), origin) :-
-  comes_from(caller, kind, source, origin),
-  flow_argument(site, caller, position, kind, source),
-  program_call(site, caller, callee).
+comes_from(function, kind, source, origin) :-
+  comes_from(from_function, from_kind, from_source, origin),
+  source_arrives_from(function, kind, source, from_function, from_kind, from_source).
 
 // The value has on its way, from where it was made, a call of the role
 // at `site`: the call that made the serving, entries added, a key set, a

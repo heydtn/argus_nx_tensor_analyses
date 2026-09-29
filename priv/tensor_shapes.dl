@@ -300,6 +300,19 @@ implementation_call(site, caller, callee) :-
 program_call(site, caller, callee) :- static_call(site, caller, callee).
 program_call(site, caller, callee) :- implementation_call(site, caller, callee).
 
+// A source of a function made, across one of the program's calls, of a
+// source of another, in whatever context: a call's result of what the
+// function it runs returns, and a parameter of what a call hands it. A
+// join over the program's calls, which the walks that follow a source
+// through them without contexts share.
+.decl source_arrives_from(function: symbol, kind: symbol, source: symbol, from_function: symbol, from_kind: symbol, from_source: symbol)
+source_arrives_from(function, "result", site, callee, kind, source) :-
+  program_call(site, function, callee),
+  flow_return(callee, _, kind, source).
+source_arrives_from(callee, "param", to_string(position), caller, kind, source) :-
+  program_call(site, caller, callee),
+  flow_argument(site, caller, position, kind, source).
+
 // A protocol implementation's module, and the type it is for.
 .decl implementation_type(module: symbol, type: symbol)
 implementation_type(module, substr(module, strlen(protocol) + 1, strlen(module) - strlen(protocol) - 1)) :-

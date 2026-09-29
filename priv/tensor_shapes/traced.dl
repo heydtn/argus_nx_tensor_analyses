@@ -94,30 +94,16 @@ traced_parameter(function, position) :-
 .decl held_asked(function: symbol, kind: symbol, source: symbol, what: symbol)
 .decl holds(function: symbol, kind: symbol, source: symbol, what: symbol, maker: symbol)
 
-// A call's result: what the function it runs returns.
-held_asked(callee, kind, source, what) :-
-  held_asked(function, "result", site, what),
-  program_call(site, function, callee),
-  ( what != "expression" ; runs_in_trace(callee) ),
-  flow_return(callee, _, kind, source).
-holds(function, "result", site, what, maker) :-
-  holds(callee, kind, source, what, maker),
-  flow_return(callee, _, kind, source),
-  program_call(site, function, callee),
-  held_asked(function, "result", site, what).
-
-// A parameter: what the program's calls of its function hand it.
-held_asked(caller, kind, source, what) :-
-  held_asked(function, "param", parameter, what),
-  program_call(site, caller, function),
-  ( what != "expression" ; runs_in_trace(caller) ),
-  flow_argument(site, caller, position, kind, source),
-  parameter = to_string(position).
-holds(function, "param", to_string(position), what, maker) :-
-  holds(caller, kind, source, what, maker),
-  flow_argument(site, caller, position, kind, source),
-  program_call(site, caller, function),
-  held_asked(function, "param", to_string(position), what).
+// A call's result: what the function it runs returns; a parameter: what
+// the program's calls of its function hand it.
+held_asked(from_function, from_kind, from_source, what) :-
+  held_asked(function, kind, source, what),
+  source_arrives_from(function, kind, source, from_function, from_kind, from_source),
+  ( what != "expression" ; runs_in_trace(from_function) ).
+holds(function, kind, source, what, maker) :-
+  holds(from_function, from_kind, from_source, what, maker),
+  source_arrives_from(function, kind, source, from_function, from_kind, from_source),
+  held_asked(function, kind, source, what).
 
 // A closure's captured value: what the function that made it captured.
 held_asked(builder, kind, source, what) :-

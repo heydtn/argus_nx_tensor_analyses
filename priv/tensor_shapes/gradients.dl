@@ -216,10 +216,9 @@ carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
   flow_argument(site, function, _, kind, source),
   flow_dynamic(site, function, _).
-carries_gradient(callee, "param", to_string(position)) :-
-  carries_gradient(function, kind, source),
-  flow_argument(site, function, position, kind, source),
-  program_call(site, function, callee).
+carries_gradient(function, kind, source) :-
+  carries_gradient(from_function, from_kind, from_source),
+  source_arrives_from(function, kind, source, from_function, from_kind, from_source).
 carries_gradient(callee, "param", to_string(position)) :-
   carries_gradient(function, kind, source),
   flow_argument(site, function, position, kind, source),
@@ -230,10 +229,6 @@ carries_gradient(callee, "param", to_string(index)) :-
   carries_gradient(function, kind, source),
   remote_argument(site, function, index, kind, source),
   remote_defn(site, function, callee).
-carries_gradient(function, "result", site) :-
-  carries_gradient(callee, kind, source),
-  flow_return(callee, _, kind, source),
-  program_call(site, function, callee).
 carries_gradient(function, "result", site) :-
   carries_gradient(callee, kind, source),
   flow_return(callee, _, kind, source),

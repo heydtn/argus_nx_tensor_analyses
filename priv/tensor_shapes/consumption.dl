@@ -368,8 +368,7 @@ parameter_read_demand(callee) :-
   program_call(use, function, callee).
 parameter_read_demand(callee) :-
   parameter_read_demand(function),
-  program_call(site, function, callee),
-  flow_argument(site, function, _, "param", _).
+  source_arrives_from(callee, "param", _, function, "param", _).
 
 // A function of the program that reads the data of the tensor it is
 // handed at `position`, or hands it on to one that does.
@@ -380,8 +379,7 @@ reads_parameter(function, to_number(position)) :-
   reads_tensor_data(site).
 reads_parameter(function, to_number(position)) :-
   reads_parameter(callee, argument),
-  program_call(site, function, callee),
-  flow_argument(site, function, argument, "param", position),
+  source_arrives_from(callee, "param", to_string(argument), function, "param", position),
   parameter_read_demand(function).
 
 // A use of the tensor named `tensor` at `use`, and how: "read" where the
