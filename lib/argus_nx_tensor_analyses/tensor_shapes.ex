@@ -454,8 +454,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
         findings
         |> Enum.flat_map(&[&1.module | Enum.map(&1.related, fn frame -> frame.module end)])
         |> Enum.uniq()
-        |> Enum.flat_map(&line_table(Map.get(beams, &1)))
-        |> Map.new()
+        |> Enum.flat_map(&line_rows(Map.get(beams, &1)))
+        |> then(&Argus.Lines.from_facts(%{line_info: &1}))
 
       {:ok, Enum.map(findings, &place(&1, beams, lines))}
     end
@@ -556,7 +556,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
         path <- [beam_path(module)],
         {:ok, {name, [compile_info: info]}} <- [:beam_lib.chunks(path, [:compile_info])],
         into: %{},
-        do: {name, %{path: path, source: info |> Keyword.get(:source) |> source_path()}}
+        do:
+          {name,
+           %{path: List.to_string(path), source: info |> Keyword.get(:source) |> source_path()}}
   end
 
   defp beam_path(module) when is_atom(module), do: :code.which(module)
@@ -565,54 +567,78 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   defp source_path(nil), do: nil
   defp source_path(source), do: List.to_string(source)
 
-  # The line in effect at each instruction: a line marker sets it for the
-  # instructions after it, and a marker with no location leaves them
-  # without one.
-  defp line_table(nil), do: []
+  # A module's `line_info` rows, stamped as Argus's emitter stamps them: a
+  # line marker sets the line for the instructions after it, and one with
+  # no location leaves them without one. Argus's own rows are empty under
+  # OTP 29, whose disassembler resolves a marker to its location, where
+  # the emitter reads a reference into the Line chunk, as OTP 28's gives.
+  defp line_rows(nil), do: []
 
-  defp line_table(%{path: path}) do
-    {:beam_file, module, _exports, _attributes, _compile_info, functions} =
-      :beam_disasm.file(path)
+  defp line_rows(%{path: path}) do
+    {:ok, %{module: module, functions: functions, line_table: table}} =
+      Argus.Pipeline.Disassemble.disassemble_path(path)
 
     for {:function, name, arity, _entry, instructions} <- functions,
         function <- [Argus.InstrId.func_id(module, name, arity)],
-        entry <- stamped(function, instructions),
-        do: entry
+        row <- stamped(function, instructions, table),
+        do: row
   end
 
-  defp stamped(function, instructions) do
-    {entries, _line} =
+  defp stamped(function, instructions, table) do
+    {rows, _line} =
       instructions
       |> Enum.with_index()
       |> Enum.flat_map_reduce(nil, fn
-        {{:line, [{:location, _file, line} | _]}, _index}, _current -> {[], line}
-        {{:line, _unknown}, _index}, _current -> {[], nil}
+        {{:line, marker}, _index}, _current -> {[], marker_line(marker, table)}
         {_instruction, _index}, nil -> {[], nil}
-        {_instruction, index}, line -> {[{Argus.InstrId.mint(function, index), line}], line}
+        {_instruction, index}, line -> {[[Argus.InstrId.mint(function, index), "#{line}"]], line}
       end)
 
-    entries
+    rows
   end
+
+  defp marker_line([{:location, _file, line} | _rest], _table), do: line
+  defp marker_line(reference, table) when is_integer(reference), do: Map.get(table, reference)
+  defp marker_line(_none, _table), do: nil
 
   defp place(finding, beams, lines) do
     %Argus.Located{
       finding: finding,
       file: source_file(beams, finding.module),
-      line: line_at(lines, finding.instr),
+      line: line_at(finding, beams, lines),
       end_line: nil,
       related:
         Enum.map(finding.related, fn frame ->
           %{
             file: source_file(beams, frame.module),
-            line: line_at(lines, frame.instr),
+            line: line_at(frame, beams, lines),
             end_line: nil
           }
         end)
     }
   end
 
-  defp line_at(_lines, nil), do: 1
-  defp line_at(lines, instruction), do: Map.get(lines, Argus.InstrId.format(instruction), 1)
+  # Where a finding or frame is, as Argus places its own (`Argus.Located`):
+  # its instruction's line (`Argus.Lines`), else its function's first,
+  # else the line its module is declared on, else 1.
+  defp line_at(anchored, beams, lines) do
+    anchor_line(anchored, lines) || declaration_line(anchored, beams) || 1
+  end
+
+  defp anchor_line(%{instr: %Argus.InstrId{} = instruction}, lines),
+    do: Argus.Lines.resolve(lines, instruction)
+
+  defp anchor_line(%{mfa: {_module, _name, _arity} = mfa}, lines),
+    do: Argus.Lines.resolve(lines, mfa)
+
+  defp anchor_line(_anchored, _lines), do: nil
+
+  defp declaration_line(%{module: module}, beams) do
+    case Map.get(beams, module) do
+      %{path: path} -> Argus.Lines.declaration_line(path)
+      nil -> nil
+    end
+  end
 
   defp source_file(beams, module) do
     case Map.get(beams, module) do
