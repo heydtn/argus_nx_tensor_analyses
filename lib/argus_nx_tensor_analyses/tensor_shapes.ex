@@ -474,19 +474,26 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
     end
   end
 
-  # The program after the Argus declarations it builds on: souffle
-  # resolves an `.include` against the file it is in, and Argus's are
-  # wherever Mix put the dependency.
+  # The program after the Argus rules it builds on: its facts, its call
+  # graph and its shared words (`clientlib/imports.dl`). Souffle resolves
+  # an `.include` against the file it is in, and Argus's are wherever Mix
+  # put the dependency.
+  #
+  # The call graph (Argus's stage 0) is derived here, and the solve told
+  # it is provided: left to itself, `run_rules/3` would also learn
+  # whether the program reads Argus's process points-to, which it never
+  # does, by compiling the program, which takes most of a solve's time.
   defp solve_rules(directory, program) do
     wrapper = directory <> ".dl"
 
     File.write!(wrapper, """
-    .include "#{Application.app_dir(:argus_beam, "priv/dl/base.dl")}"
+    .include "#{Application.app_dir(:argus_beam, "priv/dl/clientlib/imports.dl")}"
     .include "#{Path.expand(program)}"
     """)
 
     try do
-      Argus.Analysis.run_rules(directory, {:custom, wrapper}, stage0: :provided)
+      with :ok <- Argus.Analysis.derive_stage0(directory),
+           do: Argus.Analysis.run_rules(directory, {:custom, wrapper}, stage0: :provided)
     after
       File.rm(wrapper)
     end

@@ -49,9 +49,10 @@
 // lookup matches whole columns: where a rule knows only a value's parts,
 // the parts get columns of their own (`object_read`).
 
-// Argus's fact declarations (its `priv/dl/base.dl`) come first: the
-// runner includes them ahead of this program, from wherever Mix put
-// `argus_beam` (`ArgusNxTensorAnalyses.TensorShapes.solve/3`).
+// Argus's facts, its call graph and its shared words (its
+// `priv/dl/clientlib/imports.dl`) come first: the runner includes them
+// ahead of this program, from wherever Mix put `argus_beam`
+// (`ArgusNxTensorAnalyses.TensorShapes.solve/3`).
 
 // ══ Types ═══════════════════════════════════════════════════════════
 
@@ -206,9 +207,6 @@ site_function(site, function) :- remote_call(site, function, _, _, _).
 site_function(site, function) :- local_call(site, function, _, _).
 site_function(site, function) :- flow_dynamic(site, function, _).
 
-.decl module_defined(module: symbol)
-module_defined(module) :- function_def(_, module, _, _, _).
-
 .decl protocol(module: symbol)
 protocol(module) :- function_def(_, module, "__protocol__", 1, _).
 
@@ -221,17 +219,15 @@ implementation(protocol, module) :-
   prefix = cat(protocol, "."),
   strlen(module) > strlen(prefix),
   substr(module, 0, strlen(prefix)) = prefix,
-  module_defined(substr(module, strlen(prefix), strlen(module) - strlen(prefix))).
+  program_module(substr(module, strlen(prefix), strlen(module) - strlen(prefix))).
 
-// A call from one function of the program to another.
+// A call from one function of the program to another, as Argus's call
+// graph has it, but a call of a protocol's function: what that runs is
+// one of the implementations (`implementation_call`).
 .decl static_call(site: symbol, caller: symbol, callee: symbol)
 static_call(site, caller, callee) :-
-  local_call(site, caller, callee, _),
-  function_def(callee, _, _, _, _).
-static_call(site, caller, callee) :-
-  remote_call(site, caller, module, name, arity),
-  function_def(callee, module, name, arity, _),
-  !protocol(module).
+  call_instr(caller, callee, site),
+  !protocol_site(site, _, _, _).
 
 // A call of a protocol's function, which runs one of its implementations.
 .decl protocol_site(site: symbol, protocol: symbol, name: symbol, arity: number)
@@ -239,15 +235,19 @@ protocol_site(site, protocol, name, arity) :-
   remote_call(site, _, protocol, name, arity),
   protocol(protocol).
 
-// A call that may run a function of the program: a protocol's function any
-// of the program's implementations.
-.decl program_call(site: symbol, caller: symbol, callee: symbol)
-program_call(site, caller, callee) :- static_call(site, caller, callee).
-program_call(site, caller, callee) :-
+// A call of a protocol's function, running the program's implementation
+// of it for one of the program's modules.
+.decl implementation_call(site: symbol, caller: symbol, callee: symbol)
+implementation_call(site, caller, callee) :-
   protocol_site(site, protocol, name, arity),
   remote_call(site, caller, _, _, _),
   implementation(protocol, module),
   function_def(callee, module, name, arity, _).
+
+// A call that may run a function of the program.
+.decl program_call(site: symbol, caller: symbol, callee: symbol)
+program_call(site, caller, callee) :- static_call(site, caller, callee).
+program_call(site, caller, callee) :- implementation_call(site, caller, callee).
 
 // A protocol implementation's module, and the type it is for.
 .decl implementation_type(module: symbol, type: symbol)
@@ -317,17 +317,25 @@ remote_defn(site, caller, callee) :-
 runs_branches(site) :- remote_call(site, _, "Nx.Defn.Expr", "defn_cond", 2).
 
 // A function that calls Nx, or calls one that does, and the body of every
-// `defn`, which the compiler names `__defn:name__`.
+// `defn`, which the compiler names `__defn:name__`: Argus's backward reach
+// over its call graph, and over the calls that graph does not see, which
+// run an implementation of a protocol or another module's `defn`.
 .decl tensor_function(function: symbol)
-tensor_function(function) :-
+tensor_function(function) :- tensor_reach.reaches(function).
+
+.init tensor_reach = CallReachSet
+tensor_reach.seed(function) :-
   remote_call(_, function, module, _, _),
   nx_module(module).
-tensor_function(function) :-
+tensor_reach.seed(function) :-
   function_def(function, _, name, _, _),
   match("__defn:.*", name).
-tensor_function(caller) :- tensor_function(callee), program_call(_, caller, callee).
-tensor_function(caller) :- tensor_function(callee), remote_defn(_, caller, callee).
-tensor_function(parent) :- tensor_function(closure), closure_def(parent, closure).
+tensor_reach.seed(caller) :-
+  implementation_call(_, caller, callee),
+  tensor_reach.reaches(callee).
+tensor_reach.seed(caller) :-
+  remote_defn(_, caller, callee),
+  tensor_reach.reaches(callee).
 
 // A call that may run a function of the program.
 .decl makes_call(site: symbol)
@@ -1204,7 +1212,7 @@ unresolved_callee(context, site) :-
   ( value = $Opaque(_) ; value = $Integer(_) ; value = $Module(_) ).
 unresolved_callee(context, site) :-
   callee_value(context, site, "module", $Module(module)),
-  !module_defined(module),
+  !program_module(module),
   !protocol(module).
 
 // Calls whose result the rules compute from their arguments rather than

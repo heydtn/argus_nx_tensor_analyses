@@ -54,13 +54,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
   Values are solved per function over its reaching definitions
   (`Argus.Extractor.ValueFlow`), as `Argus.Extractors.PidFlow` solves its
-  own. Nothing here knows Nx: which values are tensors, and of what shape,
-  is the Datalog's to say.
+  own, and the tests on its paths over its control-flow graph
+  (`Argus.Cfg`). Nothing here knows Nx: which values are tensors, and of
+  what shape, is the Datalog's to say.
   """
 
   @behaviour Argus.Extractor
 
   alias Argus.Extractor.CallSites
+  alias Argus.Extractor.Facts
   alias Argus.Extractor.Helpers
   alias Argus.Extractor.Terms
   alias Argus.Extractor.ValueFlow
@@ -100,13 +102,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
         sites = sites_by_function(module_data)
 
         module_data.functions
-        |> Enum.reduce(%{}, fn {:function, name, arity, entry, instructions}, facts ->
+        |> Enum.reduce(%{}, fn {:function, name, arity, _entry, instructions}, facts ->
           id = InstrId.func_id(module_data.module, name, arity)
 
           summarize(facts, %{
             id: id,
-            entry: entry,
             code: List.to_tuple(instructions),
+            cfg: Helpers.cfg(module_data, name, arity),
             reads: Map.get(reads, id, %{}),
             sites: Map.get(sites, id, %{})
           })
@@ -144,22 +146,21 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       for destination <- Instr.defs(instruction),
           do: {register(destination), token(:result, id(function, index))}
     else
-      written(function, index, outs, instruction)
+      case copied(function, index, outs, instruction) do
+        [] -> written(function, index, outs, instruction)
+        copies -> copies
+      end
     end
   end
 
-  defp written(function, index, outs, {:move, source, destination}),
-    do: write(destination, value(function, index, outs, source))
-
-  defp written(function, index, outs, {:swap, left, right}),
-    do:
-      write(left, value(function, index, outs, right)) ++
-        write(right, value(function, index, outs, left))
-
-  defp written(function, index, outs, {:trim, _shift, _remaining} = trim) do
-    Enum.flat_map(Instr.defs(trim), fn destination ->
-      write(destination, value(function, index, outs, Instr.copy_source(trim, destination)))
-    end)
+  # What a copy (`move`, `swap`, `trim`) writes: each register it copies
+  # into holds what its source did.
+  defp copied(function, index, outs, instruction) do
+    for destination <- Instr.defs(instruction),
+        source = Instr.copy_source(instruction, destination),
+        source != nil,
+        copy <- write(destination, value(function, index, outs, source)),
+        do: copy
   end
 
   defp written(function, index, _outs, {:put_tuple2, destination, _elements}),
@@ -244,7 +245,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
         callee
         |> Enum.reduce(
           facts
-          |> add(:flow_dynamic, [site, function.id, Integer.to_string(arity)])
+          |> Facts.add_fact(:flow_dynamic, [site, function.id, Integer.to_string(arity)])
           |> emit_call(function, index, outs, instruction, arity),
           fn {role, operand}, acc ->
             sourced(
@@ -277,7 +278,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       |> guarded(function, index, site)
 
     if Instr.tail_call?(instruction),
-      do: add(facts, :flow_return, [function.id, site, "result", site]),
+      do: Facts.add_fact(facts, :flow_return, [function.id, site, "result", site]),
       else: facts
   end
 
@@ -314,7 +315,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
     elements
     |> Enum.with_index()
     |> Enum.reduce(
-      add(facts, :flow_object, [function.id, object, "tuple", Integer.to_string(length(elements))]),
+      Facts.add_fact(facts, :flow_object, [
+        function.id,
+        object,
+        "tuple",
+        Integer.to_string(length(elements))
+      ]),
       fn {element, position}, acc ->
         sourced(
           acc,
@@ -330,7 +336,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
     object = id(function, index)
 
     facts
-    |> add(:flow_object, [function.id, object, "list", "0"])
+    |> Facts.add_fact(:flow_object, [function.id, object, "list", "0"])
     |> sourced(:flow_field, [function.id, object, "head"], value(function, index, outs, head))
     |> sourced(:flow_field, [function.id, object, "tail"], value(function, index, outs, tail))
   end
@@ -347,7 +353,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
     facts =
       facts
-      |> add(:flow_object, [function.id, object, "map", "0"])
+      |> Facts.add_fact(:flow_object, [function.id, object, "map", "0"])
       |> sourced(:flow_base, [function.id, object], value(function, index, outs, source))
 
     pairs
@@ -368,7 +374,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
     facts =
       facts
-      |> add(:flow_object, [function.id, object, "tuple", Integer.to_string(size)])
+      |> Facts.add_fact(:flow_object, [function.id, object, "tuple", Integer.to_string(size)])
       |> sourced(:flow_base, [function.id, object], value(function, index, outs, source))
 
     updates
@@ -395,8 +401,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
     |> Enum.with_index()
     |> Enum.reduce(
       facts
-      |> add(:flow_object, [function.id, object, "closure", Integer.to_string(length(env))])
-      |> add(:flow_closure, [object, InstrId.func_id(module, name, arity)]),
+      |> Facts.add_fact(:flow_object, [
+        function.id,
+        object,
+        "closure",
+        Integer.to_string(length(env))
+      ])
+      |> Facts.add_fact(:flow_closure, [object, InstrId.func_id(module, name, arity)]),
       fn {captured, position}, acc ->
         sourced(
           acc,
@@ -477,13 +488,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
         facts =
           facts
-          |> add(:flow_object, [
+          |> Facts.add_fact(:flow_object, [
             function.id,
             object,
             "operation",
             Integer.to_string(length(arguments))
           ])
-          |> add(:flow_operation, [object, Atom.to_string(name)])
+          |> Facts.add_fact(:flow_operation, [object, Atom.to_string(name)])
 
         arguments
         |> Enum.with_index()
@@ -512,10 +523,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       |> Enum.reduce({facts, ""}, fn {kind, source, literal, polarity} = test, {acc, parent} ->
         node = guard_node(function, parent, test)
         row = [node, function.id, parent, kind, source, literal, polarity]
-        {add(acc, :flow_guard_node, row), node}
+        {Facts.add_fact(acc, :flow_guard_node, row), node}
       end)
 
-    add(facts, :flow_guarded, [at, function.id, node])
+    Facts.add_fact(facts, :flow_guarded, [at, function.id, node])
   end
 
   defp guard_node(function, parent, test) do
@@ -530,7 +541,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
   defp updated(facts, function, object, selector, value) do
     facts = sourced(facts, :flow_field, [function.id, object, selector], value)
-    if selector == "*", do: facts, else: add(facts, :flow_sets, [object, selector])
+    if selector == "*", do: facts, else: Facts.add_fact(facts, :flow_sets, [object, selector])
   end
 
   defp loaded(facts, function, index, selector, term),
@@ -545,11 +556,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
   # One row per source of the value, the columns before it given.
   defp sourced(facts, relation, columns, value) do
     Enum.reduce(value, facts, fn {kind, source}, acc ->
-      add(acc, relation, columns ++ [Atom.to_string(kind), source])
+      Facts.add_fact(acc, relation, columns ++ [Atom.to_string(kind), source])
     end)
   end
-
-  defp add(facts, relation, row), do: Map.update(facts, relation, [row], &[row | &1])
 
   # ── The literal tests a path passes ──────────────────────────────────
 
@@ -557,30 +566,35 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
   # passes, as `{kind, source, literal, polarity}`: the source was (`eq`)
   # or was not (`ne`) the literal. A test of a value that several sources
   # may give proves nothing about any one of them.
-  defp path_guards(function, outs) do
-    labels =
-      for index <- 0..(tuple_size(function.code) - 1)//1,
-          {:label, label} <- [elem(function.code, index)],
-          into: %{},
-          do: {label, index}
+  #
+  # A forward dataflow over the function's control-flow graph
+  # (`Argus.Cfg`), meeting on every edge into a block. A test ends its
+  # block, so what holds on a block's entry holds at each of its
+  # instructions.
+  defp path_guards(%{cfg: nil}, _outs), do: %{}
 
-    case Map.fetch(labels, function.entry) do
-      {:ok, start} -> spread(function, outs, labels, [start], %{start => MapSet.new()})
-      :error -> %{}
-    end
+  defp path_guards(%{cfg: cfg} = function, outs) do
+    for {block, tests} <- held(function, outs, [cfg.entry], %{cfg.entry => MapSet.new()}),
+        %{range: {first, last}} = Map.fetch!(cfg.blocks, block),
+        index <- first..last,
+        into: %{},
+        do: {index, tests}
   end
 
-  # What holds at an instruction is what holds on every edge into it, so a
+  # What holds on a block's entry is what holds on every edge into it, so a
   # revisit only ever drops tests.
-  defp spread(_function, _outs, _labels, [], held), do: held
+  defp held(_function, _outs, [], held), do: held
 
-  defp spread(function, outs, labels, [index | queue], held) do
+  defp held(function, outs, [block | queue], held) do
+    %{range: {_first, last}, succs: succs} = Map.fetch!(function.cfg.blocks, block)
+    tests = Map.fetch!(held, block)
+
     {held, queue} =
-      function
-      |> edges(outs, labels, index, Map.fetch!(held, index))
-      |> Enum.reduce({held, queue}, &meet/2)
+      Enum.reduce(succs, {held, queue}, fn {successor, kind}, acc ->
+        meet({successor, edge_tests(function, outs, last, kind, successor, tests)}, acc)
+      end)
 
-    spread(function, outs, labels, queue, held)
+    held(function, outs, queue, held)
   end
 
   # An edge's tests meet what holds at its target, which is visited again
@@ -599,47 +613,64 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
     end
   end
 
-  defp edges(function, outs, labels, index, tests) do
-    instruction = elem(function.code, index)
+  # What holds on the edge of `kind` to `successor` out of the block the
+  # instruction at `index` ends.
+  defp edge_tests(function, outs, index, kind, successor, tests),
+    do: edge_tests(elem(function.code, index), function, outs, index, kind, successor, tests)
 
-    instruction
-    |> branches(function, outs, labels, index, tests)
-    |> Enum.filter(fn {target, _tests} -> target != nil end)
-  end
-
-  defp branches(
-         {:select_val, operand, {:f, fail}, {:list, pairs}},
+  # A select's default passes none of its choices. An arm passes its
+  # choice where it is the only one into its block, and fails the choices
+  # that go elsewhere.
+  defp edge_tests(
+         {:select_val, operand, _fail, {:list, pairs}},
          function,
          outs,
-         labels,
          index,
+         kind,
+         successor,
          tests
        ) do
-    choices = Enum.chunk_every(pairs, 2)
+    choices = for [choice, {:f, label}] <- Enum.chunk_every(pairs, 2), do: {choice, label}
     tested = tested(function, outs, index, operand)
 
-    otherwise =
-      Enum.reduce(choices, tests, fn [choice, _label], acc ->
-        with_test(acc, tested, choice, "ne")
-      end)
+    case kind do
+      :select_fail ->
+        Enum.reduce(choices, tests, fn {choice, _label}, acc ->
+          with_test(acc, tested, choice, "ne")
+        end)
 
-    # A choice's label is also reached as none of the choices that go
-    # elsewhere, which is what survives where several choices share it.
-    [
-      {Map.get(labels, fail), otherwise}
-      | for [choice, {:f, label}] <- choices do
-          elsewhere =
-            for [other, {:f, target}] <- choices, target != label, reduce: tests do
-              acc -> with_test(acc, tested, other, "ne")
-            end
+      {:select_arm, _spelled} ->
+        {here, elsewhere} =
+          Enum.split_with(choices, fn {_choice, label} ->
+            Map.get(function.cfg.labels, label) == successor
+          end)
 
-          {Map.get(labels, label), with_test(elsewhere, tested, choice, "eq")}
+        failed =
+          Enum.reduce(elsewhere, tests, fn {choice, _label}, acc ->
+            with_test(acc, tested, choice, "ne")
+          end)
+
+        case here do
+          [{choice, _label}] -> with_test(failed, tested, choice, "eq")
+          _several -> failed
         end
-    ]
+
+      _other ->
+        tests
+    end
   end
 
-  defp branches({:test, test, {:f, fail}, [left, right]}, function, outs, labels, index, tests)
-       when test in [:is_eq_exact, :is_eq, :is_ne_exact, :is_ne] do
+  defp edge_tests(
+         {:test, test, _fail, [left, right]},
+         function,
+         outs,
+         index,
+         kind,
+         _successor,
+         tests
+       )
+       when test in [:is_eq_exact, :is_eq, :is_ne_exact, :is_ne] and
+              kind in [:branch_pass, :branch_fail] do
     {passed, failed} = if test in [:is_eq_exact, :is_eq], do: {"eq", "ne"}, else: {"ne", "eq"}
 
     {tested, literal} =
@@ -649,19 +680,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
         {token, _other} -> {token, right}
       end
 
-    [
-      {index + 1, with_test(tests, tested, literal, passed)},
-      {Map.get(labels, fail), with_test(tests, tested, literal, failed)}
-    ]
+    with_test(tests, tested, literal, if(kind == :branch_pass, do: passed, else: failed))
   end
 
-  defp branches(instruction, function, _outs, labels, index, tests) do
-    jumps = for label <- Instr.targets(instruction), do: {Map.get(labels, label), tests}
-
-    if Instr.falls_through?(instruction) and index + 1 < tuple_size(function.code),
-      do: [{index + 1, tests} | jumps],
-      else: jumps
-  end
+  defp edge_tests(_instruction, _function, _outs, _index, _kind, _successor, tests), do: tests
 
   # The one source an operand's value comes from, other than a literal.
   defp tested(function, outs, index, operand) do
@@ -686,26 +708,21 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
   # reach a register's read, a parameter where the function's entry does,
   # or the literal an operand spells.
   defp value(function, index, outs, operand) do
-    case Instr.register(operand) do
-      {file, number} when file in [:x, :y] ->
-        register = "#{file}#{number}"
+    case register(operand) do
+      nil ->
+        literal(operand)
 
+      register ->
         function.reads
-        |> Map.get(index, %{})
-        |> Map.get(register, [])
-        |> Enum.reduce(MapSet.new(), fn
-          {:param, position}, acc ->
-            MapSet.put(acc, {:param, Integer.to_string(position)})
+        |> ValueFlow.inputs(outs, index, &{:param, Integer.to_string(&1)})
+        |> Map.get(register, MapSet.new())
+    end
+  end
 
-          {:def, definition}, acc ->
-            MapSet.union(acc, Map.get(outs, {definition, register}, MapSet.new()))
-        end)
-
-      literal ->
-        case spell(literal) do
-          nil -> MapSet.new()
-          spelled -> token(:literal, spelled)
-        end
+  defp literal(operand) do
+    case operand |> Instr.register() |> spell() do
+      nil -> MapSet.new()
+      spelled -> token(:literal, spelled)
     end
   end
 
