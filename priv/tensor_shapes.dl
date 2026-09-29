@@ -405,13 +405,13 @@ site_active(context, site) :-
 
 // The value may be the literal, or may be another.
 .decl may_equal(value: Value, literal: symbol) inline
-may_equal(value, literal) :- value = $Opaque(_), strlen(literal) >= 0.
+may_equal(value, literal) :- value = $Opaque(_path), strlen(literal) >= 0.
 may_equal(value, literal) :- value = $Term(text, start), term_spelling(text, start, literal).
 may_equal(value, literal) :- value = $Integer([known, nil]), known > 0, to_string(known) = literal.
 may_equal(value, literal) :- value = $Integer([coefficient, [_factor, _factors]]), coefficient > 0, match("[0-9]+", literal).
 may_equal(value, literal) :- value = $Integer([0, nil]), match("[0-9]+", literal).
 may_equal(value, literal) :- value = $Module(literal).
-may_equal(value, literal) :- value = $Object(_, _, _), match("[\\[{%].*", literal).
+may_equal(value, literal) :- value = $Object(_context, _object, _mapping), match("[\\[{%].*", literal).
 
 .decl may_differ(value: Value, literal: symbol) inline
 may_differ(value, literal) :- value = $Opaque(_), strlen(literal) >= 0.
@@ -8617,9 +8617,9 @@ signed_by_value(context, function, "result", site) :-
   !program_call(site, _, _).
 
 .decl value_sign(value: Value, sign: symbol, cause: symbol) inline
-value_sign(value, "negative", "input") :- value = $Opaque(_).
-value_sign(value, "zero", "input") :- value = $Opaque(_).
-value_sign(value, "positive", "input") :- value = $Opaque(_).
+value_sign(value, "negative", "input") :- value = $Opaque(_path).
+value_sign(value, "zero", "input") :- value = $Opaque(_path).
+value_sign(value, "positive", "input") :- value = $Opaque(_path).
 value_sign(value, "positive", "size") :- value = $Integer([coefficient, _factors]), coefficient > 0.
 value_sign(value, "negative", "input") :- value = $Integer([0, nil]).
 value_sign(value, "zero", "input") :- value = $Integer([0, nil]).
