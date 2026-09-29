@@ -7,6 +7,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
   import ArgusNxTensorAnalyses.Text
 
   alias ArgusNxTensorAnalyses.TensorShapes.Wording.Causes
+  alias ArgusNxTensorAnalyses.TensorShapes.Wording.Nonfinite
+
+  # What to change where a value is zero now and then: a sample drawn at
+  # its minimum, a product that underflows.
+  @sampled_help "keep the value away from zero: sample from a positive minimum (such as the type's smallest positive normal number), add a positive epsilon, or sum logarithms rather than take the logarithm of a product"
 
   @impl true
   def hazard("exp_overflow", "softplus", _operation) do
@@ -70,7 +75,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
       do: scaling_hazard(kind, cause)
 
   def hazard(kind, cause, _operation) do
-    if why = Causes.sampled(cause), do: zero_hazard(kind, why)
+    if why = Causes.sampled(cause),
+      do: Nonfinite.zero_hazard(kind, why, help: @sampled_help, sampled: true)
   end
 
   # A log-sum-exp whose scaling factor can be zero or negative.
@@ -112,75 +118,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
       help: "check the factor first, or keep it from zero with a positive epsilon",
       frame: "the factor can be zero because of this"
     }
-  end
-
-  # A division, logarithm or root of a value these rules let be zero.
-  defp zero_hazard("divide_by_zero", why) do
-    %{
-      title: "can divide by zero",
-      detail:
-        "The divisor cannot be negative, but it can be zero: #{why}. Nx gives an infinity or " <>
-          "a NaN there, and an integer quotient or remainder raises.",
-      label: "divides here",
-      help: zero_help(),
-      frame: "the divisor can be zero because of this"
-    }
-  end
-
-  defp zero_hazard("log_of_zero", why) do
-    %{
-      title: "can take the logarithm of zero",
-      detail:
-        "Its operand cannot be negative, but it can be zero: #{why}. The logarithm of zero " <>
-          "is negative infinity.",
-      label: "takes the logarithm here",
-      help: zero_help(),
-      frame: "the operand can be zero because of this"
-    }
-  end
-
-  defp zero_hazard("infinite_gradient", why) do
-    %{
-      title: "has an infinite gradient where its result is zero",
-      detail:
-        "A grad differentiates it, and its result cannot be negative but can be zero: " <>
-          "#{why}. The derivative of a square root or root there is infinite, and of a norm " <>
-          "NaN, and the gradient carries it back into everything before it.",
-      label: "differentiated here",
-      help: zero_help(),
-      frame: "the result can be zero because of this"
-    }
-  end
-
-  defp zero_hazard("unchecked_divisor", why) do
-    %{
-      title: "divides by a value nothing checks is nonzero",
-      detail:
-        "The divisor can be zero as far as the code shows: #{why}, and no test on the way " <>
-          "to the call keeps it from zero. Nx gives an infinity or a NaN there, and an " <>
-          "integer quotient or remainder raises.",
-      label: "divides here",
-      help: zero_help(),
-      frame: "the divisor can be zero because of this"
-    }
-  end
-
-  defp zero_hazard("unchecked_logarithm", why) do
-    %{
-      title: "takes the logarithm of a value nothing checks is positive",
-      detail:
-        "The operand can be zero as far as the code shows: #{why}, and no test on the way " <>
-          "to the call keeps it positive. The logarithm of zero is negative infinity.",
-      label: "takes the logarithm here",
-      help: zero_help(),
-      frame: "the operand can be zero because of this"
-    }
-  end
-
-  defp zero_hazard(_kind, _why), do: nil
-
-  defp zero_help do
-    "keep the value away from zero: sample from a positive minimum (such as the type's smallest positive normal number), add a positive epsilon, or sum logarithms rather than take the logarithm of a product"
   end
 
   @impl true

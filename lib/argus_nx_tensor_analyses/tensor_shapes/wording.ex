@@ -51,7 +51,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
     Wording.Dtypes,
     Wording.Serving,
     Wording.Consumption,
-    Wording.LinAlg
+    Wording.LinAlg,
+    Wording.Nonfinite
   ]
 
   def call_error(kind, detail, operation),

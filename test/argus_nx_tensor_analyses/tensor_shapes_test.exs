@@ -3880,7 +3880,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
                Wording.call_error(kind, detail, operation)
     end
 
-    assert Wording.hazard("infinite_gradient", "spread", "Nx.variance/1") == nil
+    # a variance is left to the core's wording, a standard deviation is not
+    assert Wording.Gradients.hazard("infinite_gradient", "spread", "Nx.variance/1") == nil
+
+    assert %{title: "has an infinite gradient where its result is zero"} =
+             Wording.hazard("infinite_gradient", "spread", "Nx.variance/1")
   end
 
   # (end of Gradients tests)
