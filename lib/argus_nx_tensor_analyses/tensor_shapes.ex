@@ -416,11 +416,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   ## Options
 
     * `:cache` — a directory to keep the rows in, under a digest of what
-      the solve reads (the facts extracted from the modules, the program,
-      Argus's version): a solve that would read the same reads them back
-      instead, so an edit that leaves the compiled code as it was (a
-      comment, a doc) solves nothing. Only the latest rows are kept.
-      Default: nil, no cache.
+      the solve reads (the facts extracted from the modules, the program
+      and rules without their comments, Argus's version, the solver's):
+      a solve that would read the same reads them back instead, so an
+      edit that leaves the compiled code as it was (a comment, a doc, a
+      comment in the rules) solves nothing. Only the latest rows are
+      kept. Default: nil, no cache.
   """
   @spec solve([module() | Path.t()], Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def solve(modules, program \\ rules_file(), options \\ []),
@@ -536,8 +537,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   defp rows?(_entry), do: false
 
   # Every relation's facts but the lines, which no rule reads and which a
-  # comment moves, then the program, this analysis's rules (which a probe
-  # program includes) and the Argus whose declarations they build on.
+  # comment moves; the program and this analysis's rules (which a probe
+  # program includes) without their comments, as Argus keys a program; the
+  # Argus whose declarations they build on; and the solver, named by its
+  # version as Argus names it in its own keys.
   defp digest(directory, program) do
     directory
     |> File.ls!()
@@ -548,9 +551,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       |> :crypto.hash_update(file <> "\n")
       |> :crypto.hash_update(File.read!(Path.join(directory, file)))
     end)
-    |> :crypto.hash_update(File.read!(program))
-    |> :crypto.hash_update(File.read!(rules_file()))
+    |> :crypto.hash_update(program |> File.read!() |> Argus.Souffle.Program.uncommented())
+    |> :crypto.hash_update(rules_file() |> File.read!() |> Argus.Souffle.Program.uncommented())
     |> :crypto.hash_update(to_string(Application.spec(:argus_beam, :vsn)))
+    |> :crypto.hash_update(Argus.Souffle.version(Argus.Souffle.executable() || "souffle"))
     |> :crypto.hash_final()
     |> Base.encode16(case: :lower)
   end
