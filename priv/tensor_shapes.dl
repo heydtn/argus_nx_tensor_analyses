@@ -48,6 +48,12 @@
 // version's own atom, so an iteration's work follows what it derived. A
 // lookup matches whole columns: where a rule knows only a value's parts,
 // the parts get columns of their own (`object_read`).
+//
+// Souffle tests a rule's conditions in whatever order it chooses, so a
+// division can run before the condition that rules its divisor 0 out, and
+// an integer division by 0 traps on x86. A divisor a rule requires to be
+// at least 1 is written `max(divisor, 1)`: the same where it holds, never
+// 0 where it does not.
 
 // Argus's facts, its call graph and its shared words (its
 // `priv/dl/clientlib/imports.dl`) come first: the runner includes them
@@ -1779,7 +1785,7 @@ operation_value(context, function, object, [0, nil]) :-
 operation_value(context, function, object, difference) :-
   binary_sizes(context, function, object, "-", left, right),
   size_difference(left, right, difference).
-operation_value(context, function, object, [left % right, nil]) :-
+operation_value(context, function, object, [left % max(right, 1), nil]) :-
   binary_sizes(context, function, object, "rem", [left, nil], [right, nil]),
   left > 0,
   right > 0.
@@ -1952,7 +1958,7 @@ size_product([one, left], [other, right], [one * other, merged]) :-
   product_demand([one, left], [other, right]),
   one > 0,
   other > 0,
-  one <= 16777216 / other,
+  one <= 16777216 / max(other, 1),
   factors_merged(left, right, merged, _).
 .plan 1:(2,1)
 
@@ -1977,11 +1983,11 @@ factors_removed([one, rest], [one, others], remaining) :-
 
 .decl quotient_demand(dividend: Size, divisor: Size)
 .decl size_quotient(dividend: Size, divisor: Size, quotient: Size)
-size_quotient([one, from], [other, removed], [one / other, rest]) :-
+size_quotient([one, from], [other, removed], [one / max(other, 1), rest]) :-
   quotient_demand([one, from], [other, removed]),
   one > 0,
   other > 0,
-  one % other = 0,
+  one % max(other, 1) = 0,
   factors_removed(from, removed, rest).
 .plan 1:(2,1)
 
@@ -1996,7 +2002,7 @@ quotient_unknown([one, from], [other, removed]) :-
   one > 0,
   other > 0,
   ( from != nil ; removed != nil ),
-  ( one % other != 0 ; factors_uncancelled(from, removed) ).
+  ( one % max(other, 1) != 0 ; factors_uncancelled(from, removed) ).
 
 // A variable of the divisor the dividend lacks.
 .decl factors_uncancelled(from: Factors, removed: Factors)
@@ -4129,7 +4135,7 @@ violation(context, site, "reshape", cat("cannot reshape, current shape ", curren
   axes_product(first, [elements, nil]),
   axes_product(second, [held, nil]),
   held > 0,
-  ( autos = 0, elements != held ; autos = 1, elements % held != 0 ),
+  ( autos = 0, elements != held ; autos = 1, elements % max(held, 1) != 0 ),
   sizes_spelled(first, current),
   sizes_spelled(second, target).
 
@@ -4699,7 +4705,7 @@ build_rank(site, [first, second, third], rank) :-
   axes_rank(first, rank),
   slice_lengths(site, _, rank).
 .plan 1:(2,1,3)
-build_axis(site, [first, second, third], axis, [(length + stride - 1) / stride, nil], name) :-
+build_axis(site, [first, second, third], axis, [(length + stride - 1) / max(stride, 1), nil], name) :-
   site_instance(site, "Nx.slice", _, [first, second, third]),
   slice_lengths(site, text, rank),
   axes_rank(first, rank),
@@ -4769,7 +4775,7 @@ build_axis(site, [first, second, third], axis, size, name) :-
   axes_axis(first, axis, size, name),
   axis != sliced.
 .plan 1:(2,1,3), 2:(3,2,1)
-build_axis(site, [first, second, third], sliced, [(length + stride - 1) / stride, nil], name) :-
+build_axis(site, [first, second, third], sliced, [(length + stride - 1) / max(stride, 1), nil], name) :-
   site_instance(site, "Nx.slice_along_axis", _, [first, second, third]),
   axis_option(site, "axis", first, sliced),
   axes_axis(first, sliced, size, name),
@@ -5802,9 +5808,9 @@ conv_groups(site, [first, second, third], batch_groups) :-
   axes_axis(first, 1, [channels, nil], _),
   axes_axis(second, 0, [filters, nil], _),
   axes_axis(second, 1, [kernel_channels, nil], _),
-  batch % batch_groups = 0,
-  filters % feature_groups = 0,
-  filters % batch_groups = 0,
+  batch % max(batch_groups, 1) = 0,
+  filters % max(feature_groups, 1) = 0,
+  filters % max(batch_groups, 1) = 0,
   channels = kernel_channels * feature_groups.
 .plan 1:(4,2,3,5,6,7,1), 2:(5,2,3,4,6,7,1), 3:(6,2,3,4,5,7,1), 4:(7,2,3,6,4,5,1)
 
@@ -5812,7 +5818,7 @@ build_rank(site, operands, spatial + 2) :-
   conv_instance(site, operands, spatial),
   conv_groups(site, operands, _).
 .plan 1:(2,1)
-build_axis(site, [first, second, third], 0, [batch / batch_groups, nil], name) :-
+build_axis(site, [first, second, third], 0, [batch / max(batch_groups, 1), nil], name) :-
   conv_groups(site, [first, second, third], batch_groups),
   axes_axis(first, 0, [batch, nil], name).
 .plan 1:(2,1)
@@ -5821,7 +5827,7 @@ build_axis(site, [first, second, third], 1, filters, name) :-
   axes_axis(second, 0, filters, _),
   axes_axis(first, 1, _, name).
 .plan 1:(2,3,1), 2:(3,2,1)
-build_axis(site, [first, second, third], axis + 2, [span / stride + 1, nil], name) :-
+build_axis(site, [first, second, third], axis + 2, [span / max(stride, 1) + 1, nil], name) :-
   conv_groups(site, [first, second, third], _),
   conv_instance(site, [first, second, third], spatial),
   conv_window(site, [first, second, third], axis, span),
@@ -5949,7 +5955,7 @@ window_padding(site, rank, axis, low + high) :-
 
 // The number of window positions along an axis.
 .decl window_positions(site: symbol, operands: Operands, axis: number, positions: number)
-window_positions(site, [first, second, third], axis, (size + padding - span) / stride + 1) :-
+window_positions(site, [first, second, third], axis, (size + padding - span) / max(stride, 1) + 1) :-
   window_instance(site, [first, second, third], rank),
   axes_axis(first, axis, [size, nil], _),
   window_span(site, rank, axis, span),
@@ -7299,7 +7305,7 @@ revectorize_inferred(site, first, existing, inferred) :-
   elements > 0,
   axes_product(combined, [known, nil]),
   known > 0,
-  inferred = outer * elements / known,
+  inferred = outer * elements / max(known, 1),
   inferred > 0,
   inferred * known = outer * elements.
 .plan 1:(2,1,3,4,5,6), 2:(3,2,1,4,5,6), 3:(4,1,2,3,5,6), 4:(5,1,2,3,4,6), 5:(6,3,2,1,4,5)
