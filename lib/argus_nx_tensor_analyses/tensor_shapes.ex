@@ -836,6 +836,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   defp ordinal("1"), do: "second"
   defp ordinal("2"), do: "third"
   defp ordinal("3"), do: "fourth"
+  defp ordinal(position), do: "#{String.to_integer(position) + 1}th"
 
   # A function as its reader writes it: a `defn`'s body, which the compiler
   # names `__defn:name__`, by its name in the source.
@@ -862,8 +863,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       kept. Default: nil, no cache.
     * `:unsupported_types` — the tensor types the backend the code runs
       on does not support, as Nx names them (`:f64`, `{:f, 64}`): a call
-      that makes a tensor of one is reported. EMLX on Metal, for one, has
-      no f64. Default: none.
+      that makes a tensor of one is reported. EMLX, for one, computes f64
+      as f32. Default: none.
+    * `:float_types` — the float types the code may run at, as Nx names
+      them (`[:f16, :bf16, :f32]`): a tensor whose type the code reads from
+      configuration (a `type:` or a type argument it does not write) is
+      checked as each of them, so an f16 run's overflows and a bf16 run's
+      lost precision are reported. Default: none, and such a type is not
+      known.
   """
   @spec solve([module() | Path.t()], Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def solve(modules, program \\ rules_file(), options \\ []),
@@ -872,19 +879,26 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   @doc """
   Solves the program over the modules (atoms or `.beam` paths) and returns
   each finding placed at its call in the module's source. Takes `solve/3`'s
-  options.
+  options, and:
+
+    * `:analysis` — the `Argus.Analysis` whose program (its
+      `c:Argus.Analysis.rules_file/0`) is solved and whose output
+      relations the findings are built from, for an analysis whose program
+      includes this one's. Default: this analysis.
   """
   @spec run([module() | Path.t()], keyword()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
   def run(modules, options \\ []) do
+    analysis = Keyword.get(options, :analysis, __MODULE__)
+
     solved =
       with_facts(modules, fn directory ->
-        with {:ok, rows} <- solve_facts(directory, rules_file(), options),
+        with {:ok, rows} <- solve_facts(directory, analysis.rules_file(), options),
              do: {:ok, rows, Argus.Lines.from_facts_dir(directory)}
       end)
 
     with {:ok, rows, lines} <- solved do
       beams = beams(modules)
-      findings = Findings.build(__MODULE__, rows)
+      findings = Findings.build(analysis, rows)
       {:ok, Enum.map(findings, &place(&1, beams, lines))}
     end
   end
@@ -893,7 +907,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   # and removes it.
   defp with_facts(modules, solve) do
     directory =
-      Path.join(System.tmp_dir!(), "tensor_shapes_#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "tensor_shapes_#{Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)}"
+      )
 
     try do
       with {:ok, directory} <- extract(modules, directory), do: solve.(directory)
@@ -907,6 +924,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       Path.join(directory, "unsupported_type.facts"),
       options
       |> Keyword.get(:unsupported_types, [])
+      |> Enum.map(&[type_name(&1), "\n"])
+    )
+
+    File.write!(
+      Path.join(directory, "float_type.facts"),
+      options
+      |> Keyword.get(:float_types, [])
       |> Enum.map(&[type_name(&1), "\n"])
     )
 

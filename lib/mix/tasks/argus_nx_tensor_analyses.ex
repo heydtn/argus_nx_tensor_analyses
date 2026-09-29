@@ -24,9 +24,10 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   The project configures these analyses in its `mix.exs`, under
   `argus_nx_tensor_analyses:` in `project/0`. `unsupported_types` lists
   the tensor types its backend lacks, and a call that makes one is
-  reported:
+  reported. `float_types` lists the float types the code may run at, and a
+  type the code reads from configuration is checked as each of them:
 
-      argus_nx_tensor_analyses: [unsupported_types: [:f64]]
+      argus_nx_tensor_analyses: [unsupported_types: [:f64], float_types: [:f16, :bf16, :f32]]
   """
 
   use Mix.Task
@@ -103,11 +104,12 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   end
 
   # The options the project gives these analyses in its `mix.exs`, under
-  # `argus_nx_tensor_analyses:` (`unsupported_types: [:f64]`).
+  # `argus_nx_tensor_analyses:` (`unsupported_types: [:f64]`,
+  # `float_types: [:f16, :bf16, :f32]`).
   defp project_options do
     Mix.Project.config()
     |> Keyword.get(:argus_nx_tensor_analyses, [])
-    |> Keyword.take([:unsupported_types])
+    |> Keyword.take([:unsupported_types, :float_types])
   end
 
   # As `mix argus` compiles: the argus compiler fails `mix compile` on its

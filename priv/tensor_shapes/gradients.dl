@@ -1,3 +1,764 @@
 // Gradients that are infinite or NaN, or that Nx cannot compute, where a `grad` differentiates.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// `Nx.Defn.grad` and `Nx.Defn.value_and_grad` differentiate the function
+// they are handed by walking its expression back from the result and
+// applying each operation's derivative (`Nx.Defn.Grad`). Where a
+// derivative is infinite or NaN at a value the code's own math reaches,
+// so is the gradient, even where the value is finite: an arc cosine at 1,
+// an arc tangent at the origin, a logarithm a select masks out. Some
+// operations have no derivative, and Nx raises; some uses of
+// `custom_grad` lose a gradient silently; a function returning a tuple
+// cannot be differentiated.
+//
+// Each check asks of the values a gradient flows back through
+// (`carries_gradient`): what is made from the variable a grad
+// differentiates, in the functions it differentiates. What `stop_grad`
+// returns carries none, so nothing behind it is reported.
+
+// ══ Findings ═══════════════════════════════════════════════════════════
+
+nonfinite(context, site, kind, cause, origin) :- gradient_hazard(context, site, kind, cause, origin).
+call_error(context, site, kind, detail, origin) :-
+  gradient_call_error(site, kind, detail, origin),
+  site_active(context, site).
+
+// A result these rules find can be infinite or NaN, by kind.
+.decl gradient_hazard(context: Context, site: symbol, kind: symbol, cause: symbol, origin: symbol)
+gradient_hazard(context, site, "gradient_at_origin", cause, origin) :-
+  angle_at_origin(context, site, origin, cause).
+gradient_hazard(context, site, "gradient_at_origin", "input", "") :-
+  angle_of_inputs(context, site).
+gradient_hazard(context, site, "gradient_at_edge", cause, origin) :-
+  steep_at_edge(context, site, origin, cause).
+gradient_hazard(context, site, "masked_gradient", cause, select) :-
+  masked_singularity(site, select, cause),
+  site_active(context, site).
+gradient_hazard(context, site, "exponent_gradient", cause, "") :-
+  exponent_of_negative_base(context, site, cause).
+gradient_hazard(context, site, "sigmoid_gradient_overflow", cause, mask) :-
+  sigmoid_of_additive_mask(site, mask, cause),
+  site_active(context, site).
+gradient_hazard(context, site, "degenerate_gradient", cause, origin) :-
+  degenerate_decomposition(site, origin, cause, "nan"),
+  site_active(context, site).
+
+// A call these rules find Nx raises at, or that computes a gradient other
+// than the code means, by kind.
+.decl gradient_call_error(site: symbol, kind: symbol, detail: symbol, origin: symbol)
+gradient_call_error(site, "singular_gradient", cause, origin) :-
+  degenerate_decomposition(site, origin, cause, "raises").
+gradient_call_error(site, "no_gradient", "", "") :- lacks_gradient(site).
+gradient_call_error(site, "complex_gradient", "", "") :- complex_gradient(site).
+gradient_call_error(site, "custom_grad_not_list", "", "") :- custom_gradient_not_list(site).
+gradient_call_error(site, "custom_grad_short", cat(to_string(returned), " of ", to_string(listed)), "") :-
+  short_custom_gradient(site, returned, listed).
+gradient_call_error(site, "custom_grad_unlisted", "", "") :- unlisted_gradient(site).
+gradient_call_error(site, "gradient_of_container", shape, "") :- container_gradient(site, shape).
+
+// ══ Detection ══════════════════════════════════════════════════════════
+
+// An angle of two coordinates the code's math lets both be zero (`atan2`,
+// the phase of a complex number), where a grad differentiates it: the
+// value there is 0, and the derivative, y/(x² + y²), is 0/0.
+.decl angle_at_origin(context: Context, site: symbol, origin: symbol, cause: symbol)
+angle_at_origin(context, site, origin, cause) :-
+  takes_angle(site, coordinates),
+  both_coordinates_zero(context, coordinates, origin, cause),
+  cause != "input".
+
+// Such an angle of coordinates only inputs make zero: noisier, as the
+// inputs may never both be.
+.decl angle_of_inputs(context: Context, site: symbol)
+angle_of_inputs(context, site) :-
+  takes_angle(site, coordinates),
+  both_coordinates_zero(context, coordinates, _, "input"),
+  !angle_at_origin(context, site, _, _).
+
+// An arc sine or arc cosine of a value its math takes to ±1 (a clip into
+// [-1, 1], a tanh that rounds to 1), or an arc hyperbolic cosine of one it
+// takes to 1, where a grad differentiates it: the value is finite there,
+// and the derivative, 1/sqrt(1 - x²) or 1/sqrt(x² - 1), infinite.
+.decl steep_at_edge(context: Context, site: symbol, origin: symbol, cause: symbol)
+steep_at_edge(context, site, origin, cause) :-
+  differentiated_at_edge(context, site, origin, cause),
+  !outside_domain(context, site, _, _).
+
+// A select that keeps a branch only where a value is away from zero, of a
+// branch that takes the logarithm or a root of that value, or divides by
+// it, where a grad differentiates it (the "double where"): the value is
+// finite, but the select's derivative sends zero into the branch where it
+// masks it out, and zero times the infinite derivative there is NaN.
+.decl masked_singularity(site: symbol, select: symbol, cause: symbol)
+masked_singularity(site, select, cause) :-
+  kept_away_from_zero(select, function, branch, kind, source),
+  computes_branch(select, branch, site),
+  singular_where_zero(site, function, kind, source, cause),
+  carries_gradient(function, kind, source).
+
+// A power whose exponent a grad differentiates, of a base that can be
+// negative: the exponent's derivative is the logarithm of the base times
+// the power, NaN there. `cause` is "written" for a base written negative.
+.decl exponent_of_negative_base(context: Context, site: symbol, cause: symbol)
+exponent_of_negative_base(context, site, "written") :-
+  differentiated_exponent(site),
+  negative_base_written(site),
+  site_active(context, site).
+exponent_of_negative_base(context, site, "negative") :-
+  differentiated_exponent(site),
+  argument_can_be_negative(context, site, 0),
+  !negative_base_written(site).
+
+// A sigmoid of a sum that adds a written number far below zero to a value
+// a grad differentiates (an additive mask, `x + (1 - mask) * -1.0e9`): Nx
+// differentiates a sigmoid as exp(-x) * s * s, and exp(-x) overflows to
+// infinity there while s is zero or nearly, which gives an infinity or a
+// NaN where the derivative is 0. A select that masks instead sends the
+// masked elements' gradient to the written number alone.
+.decl sigmoid_of_additive_mask(site: symbol, mask: symbol, cause: symbol)
+sigmoid_of_additive_mask(site, addition, cause) :-
+  sigmoid_of_sum(site, addition),
+  adds_far_below_zero(addition, other, cause),
+  differentiated_operand(addition, other).
+
+// A decomposition of a matrix built degenerate (`cause`: an outer product,
+// of rank one; a product of matrices over an axis shorter than its sides,
+// short of full rank; the identity times a scalar, every eigenvalue the
+// same), where a grad differentiates it. Its derivative divides by the
+// gaps between eigenvalues or singular values, or by the singular values,
+// or solves with the matrix: the gradient is NaN, or Nx raises
+// (`outcome`).
+.decl degenerate_decomposition(site: symbol, origin: symbol, cause: symbol, outcome: symbol)
+degenerate_decomposition(site, origin, cause, outcome) :-
+  differentiated_decomposition(site, operation, origin),
+  degenerate_operand(site, origin, cause),
+  fails_at_degenerate(operation, cause, outcome).
+
+// A call Nx has no derivative for (`reduce`, `window_reduce`,
+// `window_product`, `quotient`, `map`), on the way back from what a grad
+// differentiates: Nx raises computing the gradient.
+.decl lacks_gradient(site: symbol)
+lacks_gradient(site) :-
+  underivable_call(site),
+  !stopped_result(site).
+
+// A Fourier transform of a real value a grad differentiates: Nx gives the
+// gradient as complex numbers (the real part right, the imaginary part
+// spurious), and an update with it makes the parameters complex.
+.decl complex_gradient(site: symbol)
+complex_gradient(site) :-
+  fourier_transform(site),
+  differentiated_operand(site, 0),
+  !already_complex_operand(site).
+
+// A `custom_grad` whose gradient function returns something other than a
+// list: Nx raises.
+.decl custom_gradient_not_list(site: symbol)
+custom_gradient_not_list(site) :-
+  custom_gradient_function(site, gradient_function),
+  returns_other_than_list(gradient_function).
+
+// A `custom_grad` whose gradient function returns fewer gradients than it
+// lists inputs: Nx pairs them with `Enum.zip`, and the inputs past the
+// last gradient get none from it, silently.
+.decl short_custom_gradient(site: symbol, returned: number, listed: number)
+short_custom_gradient(site, returned, listed) :-
+  counted_length(site, "inputs", listed),
+  counted_length(site, "gradients", returned),
+  returned < listed.
+
+// A `custom_grad` whose expression is made from a value a grad
+// differentiates that it does not list among its inputs: Nx follows the
+// gradient back only through the inputs, and that value gets none from it.
+.decl unlisted_gradient(site: symbol)
+unlisted_gradient(site) :-
+  custom_gradient_reaches(site, function, kind, source),
+  gradient_leaf(function, kind, source),
+  carries_gradient(function, kind, source).
+
+// A `grad` or `value_and_grad` (without a transform) of a function that
+// returns a tuple or a map: Nx differentiates a tensor, and raises.
+.decl container_gradient(site: symbol, shape: symbol)
+container_gradient(site, shape) :-
+  differentiates_without_transform(site, function),
+  returns_container(function, shape).
+
+// ══ Words ══════════════════════════════════════════════════════════════
+
+// ── What a gradient flows back through ────────────────────────────────
+
+// A value made from the variable a `grad` or `value_and_grad`
+// differentiates, which the gradient flows back through: the first
+// parameter of the function handed to it, and what is made from it through
+// Nx calls, the program's calls and returns, the terms the code builds and
+// reads, the values a closure captures, and the calls of funs and of
+// functions outside the program (a lookup, another module's `defn`, a
+// `cond`'s branches), whose results the rules take as made of their
+// arguments. An Nx call whose derivative Nx takes as zero (a comparison, a
+// rounding, an index, `stop_grad`) ends it. Followed in no context: a
+// helper one call hands such a value carries it at every call (it errs
+// loud there).
+.decl carries_gradient(function: symbol, kind: symbol, source: symbol)
+carries_gradient(root, "param", "0") :- gradient_reach.root(root, _).
+carries_gradient(function, "result", site) :-
+  carries_gradient(function, kind, source),
+  flow_argument(site, function, _, kind, source),
+  operation_site(site, operation, _),
+  !blocks_gradient(operation).
+carries_gradient(function, "result", site) :-
+  carries_gradient(function, kind, source),
+  flow_argument(site, function, _, kind, source),
+  remote_call(site, _, module, _, _),
+  !nx_module(module),
+  !program_call(site, _, _).
+carries_gradient(function, "result", site) :-
+  carries_gradient(function, kind, source),
+  flow_argument(site, function, _, kind, source),
+  flow_dynamic(site, function, _).
+carries_gradient(callee, "param", to_string(position)) :-
+  carries_gradient(function, kind, source),
+  flow_argument(site, function, position, kind, source),
+  program_call(site, function, callee).
+carries_gradient(callee, "param", to_string(position)) :-
+  carries_gradient(function, kind, source),
+  flow_argument(site, function, position, kind, source),
+  flow_dynamic(site, function, _),
+  site_active(context, site),
+  invocation(context, site, callee, _).
+carries_gradient(callee, "param", to_string(index)) :-
+  carries_gradient(function, kind, source),
+  remote_argument(site, function, index, kind, source),
+  remote_defn(site, function, callee).
+carries_gradient(function, "result", site) :-
+  carries_gradient(callee, kind, source),
+  flow_return(callee, _, kind, source),
+  program_call(site, function, callee).
+carries_gradient(function, "result", site) :-
+  carries_gradient(callee, kind, source),
+  flow_return(callee, _, kind, source),
+  remote_defn(site, function, callee).
+carries_gradient(function, "object", object) :-
+  carries_gradient(function, kind, source),
+  flow_field(function, object, _, kind, source).
+carries_gradient(function, "load", load) :-
+  carries_gradient(function, kind, source),
+  flow_load(function, load, _, kind, source).
+carries_gradient(closure, "param", to_string(total - captured + index)) :-
+  carries_gradient(function, kind, source),
+  flow_field(function, object, selector, kind, source),
+  flow_closure(object, closure),
+  !gradient_function_object(object),
+  flow_object(function, object, "closure", captured),
+  selector_position(selector, index),
+  function_def(closure, _, _, total, _).
+
+// The Nx functions whose derivative Nx takes as zero, and `stop_grad`.
+.decl blocks_gradient(operation: symbol)
+blocks_gradient(operation) :- sign_class(operation, "compare").
+blocks_gradient(operation) :- sign_class(operation, "round").
+blocks_gradient(operation) :- sign_class(operation, "index").
+blocks_gradient(operation) :- shape_query(operation).
+blocks_gradient(cat("Nx.", name)) :- integer_binary(name), name != "quotient".
+blocks_gradient(cat("Nx.", name)) :- integer_unary(name).
+blocks_gradient(cat("Nx.Defn.Kernel.", name)) :- kernel_integer_binary(name), name != "div".
+blocks_gradient("Nx.Defn.Kernel.stop_grad"). blocks_gradient("Nx.eye"). blocks_gradient("Nx.sign").
+blocks_gradient("Nx.all"). blocks_gradient("Nx.any").
+
+// The operand at `position` of a call carries a gradient back.
+.decl differentiated_operand(site: symbol, position: number)
+differentiated_operand(site, position) :-
+  carries_gradient(function, kind, source),
+  flow_argument(site, function, position, kind, source).
+
+// ── The angle at the origin ───────────────────────────────────────────
+
+// A call taking the angle of a point from its two coordinates, and the
+// call whose operands they are: an `atan2` its own, the phase of a complex
+// number its `Nx.complex`.
+.decl takes_angle(site: symbol, coordinates: symbol)
+takes_angle(site, site) :- operation_site(site, "Nx.atan2", 2).
+takes_angle(site, coordinates) :-
+  operation_site(site, "Nx.phase", 1),
+  flow_argument(site, _, 0, "result", coordinates),
+  operation_site(coordinates, "Nx.complex", 2).
+
+// The signs of such coordinates are asked where a grad differentiates
+// them, in a context their angle runs in.
+sign_site(context, coordinates) :-
+  takes_angle(site, coordinates),
+  differentiated_operand(coordinates, _),
+  site_active(context, site).
+
+// Both coordinates can be zero, one of them by `cause`, from `origin`.
+.decl both_coordinates_zero(context: Context, coordinates: symbol, origin: symbol, cause: symbol)
+both_coordinates_zero(context, coordinates, origin, cause) :-
+  takes_angle(_, coordinates),
+  argument_can_be_zero(context, coordinates, position, origin, cause),
+  argument_can_be_zero(context, coordinates, 1 - position, _, _).
+
+// ── The edges of a domain ─────────────────────────────────────────────
+
+// A function defined on only part of the line (`takes_domain`) whose
+// operand carries a gradient back and can be where its derivative is
+// infinite, while the function is finite: asin and acos at ±1, acosh at 1.
+// The operand is there in a region its math takes it to
+// (`argument_region`), or, for acosh, at 1 plus a value its math lets be
+// zero.
+.decl differentiated_at_edge(context: Context, site: symbol, origin: symbol, cause: symbol)
+differentiated_at_edge(context, site, origin, cause) :-
+  takes_domain(site, domain),
+  differentiated_operand(site, 0),
+  argument_region(context, site, 0, region, origin, cause),
+  ( domain = "closed_unit", ( region = "one" ; region = "minus_one" ) ;
+    domain = "at_least_one", region = "one" ),
+  known_region_cause(cause).
+differentiated_at_edge(context, site, origin, cause) :-
+  takes_domain(site, "at_least_one"),
+  differentiated_operand(site, 0),
+  flow_argument(site, function, 0, "result", addition),
+  sign_rule(addition, "add"),
+  flow_argument(addition, function, position, "literal", one),
+  match("1(\\.0+)?", one),
+  argument_can_be_zero(context, addition, 1 - position, origin, cause),
+  cause != "input".
+
+// ── The double where ──────────────────────────────────────────────────
+
+// The predicates of the selects a gradient flows back through are asked
+// what they compare.
+select_demand(select, function, predicate) :-
+  operation_site(select, "Nx.select", 3),
+  differentiated_operand(select, branch),
+  branch > 0,
+  flow_argument(select, function, 0, "result", predicate),
+  1 = count : { flow_argument(select, function, 0, _, _) }.
+
+// A select's branch (1 for `on_true`, 2 for `on_false`) a gradient flows
+// back through, which it keeps only where a value is away from zero, as
+// its predicate compares the value with zero: where the value is zero, it
+// keeps the other branch.
+.decl kept_away_from_zero(select: symbol, function: symbol, branch: number, kind: symbol, source: symbol)
+kept_away_from_zero(select, function, branch, kind, source) :-
+  select_demand(select, function, predicate),
+  differentiated_operand(select, branch),
+  compares_with_zero(predicate, function, kind, source, relation),
+  branch_ensures(relation, branch, _).
+
+// The Nx calls a select's branch is computed by: the branch, and what
+// they are made of in the function, back to where a gradient stops.
+.decl computes_branch(select: symbol, branch: number, site: symbol)
+computes_branch(select, branch, site) :-
+  kept_away_from_zero(select, function, branch, _, _),
+  flow_argument(select, function, branch, "result", site),
+  operation_site(site, operation, _),
+  !blocks_gradient(operation).
+computes_branch(select, branch, site) :-
+  computes_branch(select, branch, later),
+  flow_argument(later, _, _, "result", site),
+  operation_site(site, operation, _),
+  !blocks_gradient(operation).
+
+// A call whose derivative is infinite where the value it takes is zero:
+// a logarithm, a root (`singular_derivative`), a division by it (`cause`
+// says which).
+.decl singular_where_zero(site: symbol, function: symbol, kind: symbol, source: symbol, cause: symbol)
+singular_where_zero(site, function, kind, source, "logarithm") :-
+  computes_branch(_, _, site),
+  takes_logarithm(site, position),
+  flow_argument(site, function, position, kind, source).
+singular_where_zero(site, function, kind, source, "root") :-
+  computes_branch(_, _, site),
+  singular_derivative(site, _),
+  !divides_by(site, 0),
+  flow_argument(site, function, 0, kind, source).
+singular_where_zero(site, function, kind, source, "division") :-
+  computes_branch(_, _, site),
+  divides_by(site, position),
+  flow_argument(site, function, position, kind, source).
+
+// ── Exponents ─────────────────────────────────────────────────────────
+
+// A power whose exponent carries a gradient back.
+.decl differentiated_exponent(site: symbol)
+differentiated_exponent(site) :-
+  operation_site(site, operation, 2),
+  sign_class(operation, "power"),
+  differentiated_operand(site, 1).
+
+// Their bases' signs are asked.
+sign_site(context, site) :- differentiated_exponent(site), site_active(context, site).
+
+// Such a power's base is a written negative number.
+.decl negative_base_written(site: symbol)
+negative_base_written(site) :-
+  differentiated_exponent(site),
+  flow_argument(site, _, 0, "literal", text),
+  negative_literal(text).
+
+// An exponent a power holds where the call does not write it: a value the
+// rules hold for it, spelled as written (an option, a return). Held in
+// some context, and so of the call in all: a helper run with a root
+// exponent in one context is a root power in every other.
+.decl held_exponent(site: symbol, spelled: symbol)
+held_exponent(site, spelled) :-
+  operation_site(site, operation, 2),
+  sign_class(operation, "power"),
+  flow_argument(site, function, 1, kind, source),
+  kind != "literal",
+  site_active(context, site),
+  value_of(context, function, kind, source, $Term(text, start)),
+  term_spelling(text, start, spelled).
+
+// A power's exponent is a quotient of two written numbers, as a `defn`
+// computes `1 / 3`.
+.decl exponent_quotient(site: symbol, numerator: symbol, denominator: symbol)
+exponent_quotient(site, numerator, denominator) :-
+  operation_site(site, operation, 2),
+  sign_class(operation, "power"),
+  flow_argument(site, function, 1, "result", quotient),
+  sign_rule(quotient, "divide"),
+  flow_argument(quotient, function, 0, "literal", numerator),
+  flow_argument(quotient, function, 1, "literal", denominator).
+
+// The value of an exponent's quotient.
+.decl divided_exponent(site: symbol, exponent: float)
+divided_exponent(site, numerator / denominator) :-
+  exponent_quotient(site, numerator_text, denominator_text),
+  number_spelled(numerator_text, numerator),
+  number_spelled(denominator_text, denominator),
+  denominator != 0.0.
+
+// A written number, by its value, for the numbers these rules read: the
+// terms of an exponent's quotient, and the numbers a mask can hold.
+// Soufflé's floats are f32, and `to_float` aborts the solve on a spelling
+// past f32's normal range, so such a number is read as the nearest value
+// within it: 3.0e38 past its largest, 0.0 below its smallest.
+.decl number_spelled(text: symbol, value: float)
+number_spelled(text, to_float(text)) :-
+  number_spelling_asked(text),
+  match("-?([0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7]))", text).
+number_spelled(text, value) :-
+  number_spelling_asked(text),
+  match("-?[0-9]\\.[0-9]+e(3[89]|[4-9][0-9]|[1-9][0-9][0-9])", text),
+  ( match("-.*", text), value = -300000000000000000000000000000000000000.0 ;
+    !match("-.*", text), value = 300000000000000000000000000000000000000.0 ).
+number_spelled(text, 0.0) :-
+  number_spelling_asked(text),
+  match("-?[0-9]\\.[0-9]+e-(3[89]|[4-9][0-9]|[1-9][0-9][0-9])", text).
+
+.decl number_spelling_asked(text: symbol)
+number_spelling_asked(text) :- exponent_quotient(_, text, _).
+number_spelling_asked(text) :- exponent_quotient(_, _, text).
+number_spelling_asked(text) :- far_value_demand(_, "literal", text).
+
+// A power whose exponent is held negative, as a fraction (a quotient
+// `to_number` changes by dropping its fraction), or between 0 and 1.
+negative_power(site) :- held_exponent(site, spelled), negative_literal(spelled).
+negative_power(site) :- divided_exponent(site, exponent), exponent < 0.0.
+fractional_power(site) :-
+  held_exponent(site, spelled),
+  match("-?[0-9]+\\.[0-9]+(e[-+]?[0-9]+)?", spelled),
+  !match("-?[0-9]+\\.0+(e[-+]?[0-9]+)?", spelled).
+fractional_power(site) :-
+  divided_exponent(site, exponent),
+  whole = min(max(exponent, -1000000000.0), 1000000000.0),
+  to_float(to_number(whole)) != whole.
+root_power(site) :- held_exponent(site, spelled), match("0\\.[0-9]*[1-9][0-9]*", spelled).
+root_power(site) :- divided_exponent(site, exponent), exponent > 0.0, exponent < 1.0.
+
+// ── Additive masks ────────────────────────────────────────────────────
+
+// A sigmoid, where a grad differentiates it, of a sum or difference.
+.decl sigmoid_of_sum(site: symbol, addition: symbol)
+sigmoid_of_sum(site, addition) :-
+  operation_site(site, "Nx.sigmoid", 1),
+  differentiated_operand(site, 0),
+  flow_argument(site, _, 0, "result", addition),
+  sign_rule(addition, class),
+  ( class = "add" ; class = "subtract" ).
+
+// A sum adds to its operand at `other` a term that can hold a written
+// number far below zero, or subtracts one that can hold one far above.
+.decl adds_far_below_zero(addition: symbol, other: number, cause: symbol)
+adds_far_below_zero(addition, 1 - position, cause) :-
+  sigmoid_of_sum(_, addition),
+  flow_argument(addition, function, position, kind, source),
+  holds_far_value(function, kind, source, direction, cause),
+  sign_rule(addition, class),
+  ( direction = "below", ( class = "add" ; position = 0 ) ;
+    direction = "above", class = "subtract", position = 1 ).
+
+// The values asked whether they can hold a written number far from zero:
+// the terms of such sums, and what they are made of.
+.decl far_value_demand(function: symbol, kind: symbol, source: symbol)
+far_value_demand(function, kind, source) :-
+  sigmoid_of_sum(_, addition),
+  flow_argument(addition, function, _, kind, source).
+far_value_demand(function, kind, source) :-
+  far_value_demand(function, "result", site),
+  operation_site(site, operation, _),
+  keeps_far_value(operation, position),
+  flow_argument(site, function, position, kind, source).
+
+// A value can hold a written number far below or above zero
+// (`direction`), past where exp overflows in f32 and bf16 (e^88.73,
+// "overflow") or in f16 only (e^11.09, "half_precision"): the number, an
+// infinity or the largest finite value from `Nx.Constants`, and a product,
+// a move or a select of one.
+.decl holds_far_value(function: symbol, kind: symbol, source: symbol, direction: symbol, cause: symbol)
+holds_far_value(function, "literal", text, direction, cause) :-
+  far_value_demand(function, "literal", text),
+  number_spelled(text, value),
+  ( value <= -88.73, direction = "below", cause = "overflow" ;
+    value <= -11.09, value > -88.73, direction = "below", cause = "half_precision" ;
+    value >= 88.73, direction = "above", cause = "overflow" ;
+    value >= 11.09, value < 88.73, direction = "above", cause = "half_precision" ).
+holds_far_value(function, "result", site, direction, "overflow") :-
+  far_value_demand(function, "result", site),
+  remote_call(site, _, "Nx.Constants", name, _),
+  ( name = "neg_infinity", direction = "below" ; name = "min_finite", direction = "below" ;
+    name = "infinity", direction = "above" ; name = "max_finite", direction = "above" ).
+holds_far_value(function, "result", site, direction, cause) :-
+  holds_far_value(function, kind, source, direction, cause),
+  flow_argument(site, function, position, kind, source),
+  far_value_demand(function, "result", site),
+  operation_site(site, operation, _),
+  keeps_far_value(operation, position).
+
+// The operands whose far values a call's result keeps: a product's (by a
+// mask of zeros and ones), a move's, a select's branches.
+.decl keeps_far_value(operation: symbol, position: number)
+keeps_far_value(operation, position) :-
+  sign_class(operation, "multiply"), ( position = 0 ; position = 1 ).
+keeps_far_value(cat("Nx.", name), 0) :- moves_elements(name).
+keeps_far_value("Nx.select", 1). keeps_far_value("Nx.select", 2).
+
+// ── Degenerate matrices ───────────────────────────────────────────────
+
+// A decomposition a gradient flows back through, and the call its operand
+// is the result of.
+.decl differentiated_decomposition(site: symbol, operation: symbol, origin: symbol)
+differentiated_decomposition(site, operation, origin) :-
+  operation_site(site, operation, _),
+  fails_at_degenerate(operation, _, _),
+  differentiated_operand(site, 0),
+  flow_argument(site, _, 0, "result", origin).
+
+// A decomposition's operand, made by `origin`, degenerate by construction:
+// an outer product ("rank_one"), a product of two matrices over an axis
+// shorter than both of its sides ("low_rank"), and the identity times a
+// scalar ("scaled_identity").
+.decl degenerate_operand(site: symbol, origin: symbol, cause: symbol)
+degenerate_operand(site, origin, "rank_one") :-
+  differentiated_decomposition(site, _, origin),
+  operation_site(origin, "Nx.outer", 2).
+degenerate_operand(site, origin, "low_rank") :-
+  differentiated_decomposition(site, _, origin),
+  operation_site(origin, "Nx.dot", 2),
+  site_active(context, origin),
+  argument_tensor(context, origin, 0, [_, [[rows, nil], _, [[inner, nil], _, nil]]]),
+  argument_tensor(context, origin, 1, [_, [[inner, nil], _, [[columns, nil], _, nil]]]),
+  inner > 0,
+  inner < rows,
+  inner < columns.
+degenerate_operand(site, origin, "scaled_identity") :-
+  differentiated_decomposition(site, _, origin),
+  sign_rule(origin, "multiply"),
+  flow_argument(origin, _, position, "result", identity),
+  operation_site(identity, "Nx.eye", _),
+  site_active(context, origin),
+  argument_tensor(context, origin, 1 - position, [_, nil]).
+
+// What differentiating a decomposition of a degenerate matrix gives: NaN
+// from the gaps between repeated singular values or eigenvalues, or from
+// zero singular values; a raise from solving with a singular matrix.
+.decl fails_at_degenerate(operation: symbol, cause: symbol, outcome: symbol)
+fails_at_degenerate("Nx.LinAlg.svd", "rank_one", "nan"). fails_at_degenerate("Nx.LinAlg.svd", "low_rank", "nan").
+fails_at_degenerate("Nx.LinAlg.svd", "scaled_identity", "nan").
+fails_at_degenerate("Nx.LinAlg.pinv", "rank_one", "nan"). fails_at_degenerate("Nx.LinAlg.pinv", "low_rank", "nan").
+fails_at_degenerate("Nx.LinAlg.pinv", "scaled_identity", "nan").
+fails_at_degenerate("Nx.LinAlg.eigh", "scaled_identity", "nan").
+fails_at_degenerate("Nx.LinAlg.invert", "rank_one", "nan"). fails_at_degenerate("Nx.LinAlg.invert", "low_rank", "nan").
+fails_at_degenerate("Nx.LinAlg.least_squares", "rank_one", "nan").
+fails_at_degenerate("Nx.LinAlg.least_squares", "low_rank", "nan").
+fails_at_degenerate("Nx.LinAlg.cholesky", "rank_one", "raises").
+fails_at_degenerate("Nx.LinAlg.cholesky", "low_rank", "raises").
+fails_at_degenerate("Nx.LinAlg.qr", "rank_one", "raises"). fails_at_degenerate("Nx.LinAlg.qr", "low_rank", "raises").
+fails_at_degenerate("Nx.LinAlg.lu", "rank_one", "raises"). fails_at_degenerate("Nx.LinAlg.lu", "low_rank", "raises").
+fails_at_degenerate("Nx.LinAlg.solve", "rank_one", "raises").
+fails_at_degenerate("Nx.LinAlg.solve", "low_rank", "raises").
+
+// ── Calls with no derivative ──────────────────────────────────────────
+
+// A call of an Nx function Nx has no derivative for, whose operand at a
+// position a gradient would flow back through carries one.
+.decl underivable_call(site: symbol)
+underivable_call(site) :-
+  operation_site(site, operation, _),
+  no_derivative(operation, position),
+  differentiated_operand(site, position).
+
+// The Nx functions Nx has no derivative for, by the positions of their
+// tensor operands.
+.decl no_derivative(operation: symbol, position: number)
+no_derivative("Nx.reduce", 0). no_derivative("Nx.reduce", 1).
+no_derivative("Nx.window_reduce", 0). no_derivative("Nx.window_reduce", 1).
+no_derivative("Nx.window_product", 0).
+no_derivative("Nx.quotient", 0). no_derivative("Nx.quotient", 1).
+no_derivative("Nx.Defn.Kernel.div", 0). no_derivative("Nx.Defn.Kernel.div", 1).
+no_derivative("Nx.map", 0).
+
+// Such a call whose result `stop_grad` is taken of, which no gradient
+// comes back through.
+.decl stopped_result(site: symbol)
+stopped_result(site) :-
+  underivable_call(site),
+  flow_argument(stop, _, 0, "result", site),
+  operation_site(stop, "Nx.Defn.Kernel.stop_grad", 1).
+
+// ── Fourier transforms ────────────────────────────────────────────────
+
+// A Fourier transform: `fft`, `ifft`, `rfft`, `irfft`, `fft2`, `ifft2`.
+.decl fourier_transform(site: symbol)
+fourier_transform(site) :- operation_site(site, operation, _), fourier(operation).
+fourier_transform(site) :- operation_site(site, operation, _), fourier2(operation).
+
+// A transform's operand is complex: another transform's result, or a
+// complex number made of parts.
+.decl already_complex_operand(site: symbol)
+already_complex_operand(site) :-
+  fourier_transform(site),
+  flow_argument(site, _, 0, "result", made),
+  fourier_transform(made).
+already_complex_operand(site) :-
+  fourier_transform(site),
+  flow_argument(site, _, 0, "result", made),
+  operation_site(made, "Nx.complex", 2).
+
+// ── custom_grad ───────────────────────────────────────────────────────
+
+// A `custom_grad` call, in its function.
+.decl custom_gradient(site: symbol, function: symbol)
+custom_gradient(site, function) :-
+  operation_site(site, "Nx.Defn.Kernel.custom_grad", 3),
+  site_function(site, function).
+
+// The function a `custom_grad` computes its gradient with.
+.decl custom_gradient_function(site: symbol, gradient_function: symbol)
+custom_gradient_function(site, gradient_function) :-
+  custom_gradient(site, function),
+  flow_argument(site, function, 2, "object", object),
+  flow_closure(object, gradient_function).
+custom_gradient_function(site, gradient_function) :-
+  custom_gradient(site, _),
+  fun_handed(site, _, gradient_function, 2).
+
+// A closure the code hands `custom_grad` as its gradient function, which
+// the grad calls but does not differentiate.
+.decl gradient_function_object(object: symbol)
+gradient_function_object(object) :-
+  custom_gradient(site, function),
+  flow_argument(site, function, 2, "object", object).
+
+// An input a `custom_grad` lists.
+.decl custom_gradient_input(site: symbol, function: symbol, kind: symbol, source: symbol)
+custom_gradient_input(site, function, kind, source) :-
+  counted_cell(site, "inputs", function, _, cell),
+  flow_field(function, cell, "head", kind, source).
+
+// A gradient function returns, on some path, a value that is not a list:
+// an Nx call's result, the gradient it is handed, or a term other than a
+// list.
+.decl returns_other_than_list(gradient_function: symbol)
+returns_other_than_list(gradient_function) :-
+  custom_gradient_function(_, gradient_function),
+  flow_return(gradient_function, _, "result", site),
+  operation_site(site, _, _).
+returns_other_than_list(gradient_function) :-
+  custom_gradient_function(_, gradient_function),
+  flow_return(gradient_function, _, "param", "0").
+returns_other_than_list(gradient_function) :-
+  custom_gradient_function(_, gradient_function),
+  flow_return(gradient_function, _, "object", object),
+  flow_object(gradient_function, object, shape, _),
+  shape != "list".
+
+// A list a `custom_grad` counts, cell by cell, in the function that writes
+// it: the inputs it lists (`role` "inputs"), and a list its gradient
+// function returns ("gradients").
+.decl counted_cell(site: symbol, role: symbol, function: symbol, index: number, cell: symbol)
+counted_cell(site, "inputs", function, 0, list) :-
+  custom_gradient(site, function),
+  flow_argument(site, function, 1, "object", list),
+  flow_object(function, list, "list", _).
+counted_cell(site, "gradients", gradient_function, 0, list) :-
+  custom_gradient_function(site, gradient_function),
+  flow_return(gradient_function, _, "object", list),
+  flow_object(gradient_function, list, "list", _).
+counted_cell(site, role, function, index + 1, next) :-
+  counted_cell(site, role, function, index, cell),
+  index < 64,
+  flow_field(function, cell, "tail", "object", next),
+  flow_object(function, next, "list", _).
+
+// How long a counted list is, where the code writes where it ends.
+.decl counted_length(site: symbol, role: symbol, length: number)
+counted_length(site, role, index + 1) :-
+  counted_cell(site, role, function, index, cell),
+  flow_field(function, cell, "tail", "literal", "[]").
+counted_length(site, "gradients", 0) :-
+  custom_gradient_function(site, gradient_function),
+  flow_return(gradient_function, _, "literal", "[]").
+
+// The values a `custom_grad`'s expression is made from, back through Nx
+// calls to the inputs it lists, which it stops at.
+.decl custom_gradient_reaches(site: symbol, function: symbol, kind: symbol, source: symbol)
+custom_gradient_reaches(site, function, kind, source) :-
+  custom_gradient(site, function),
+  flow_argument(site, function, 0, kind, source),
+  !custom_gradient_input(site, function, kind, source).
+custom_gradient_reaches(site, function, kind, source) :-
+  custom_gradient_reaches(site, function, "result", later),
+  operation_site(later, operation, _),
+  !blocks_gradient(operation),
+  flow_argument(later, function, _, kind, source),
+  !custom_gradient_input(site, function, kind, source).
+
+// A value the function is handed: a parameter, or a field read from one.
+// What another call returns is not one, as it can be made from the inputs.
+.decl gradient_leaf(function: symbol, kind: symbol, source: symbol)
+gradient_leaf(function, kind, source) :-
+  custom_gradient_reaches(_, function, kind, source),
+  ( kind = "param" ; kind = "load" ).
+
+// A call inside a `custom_grad`'s expression, whose gradient the gradient
+// function replaces.
+stopped_gradient(site) :-
+  singular_derivative(site, _),
+  custom_gradient_reaches(_, function, "result", site),
+  site_function(site, function).
+
+// ── Gradients of containers ───────────────────────────────────────────
+
+// A `grad` or `value_and_grad` with no transform, and the function it
+// differentiates.
+.decl differentiates_without_transform(site: symbol, function: symbol)
+differentiates_without_transform(site, function) :-
+  remote_call(site, _, "Nx.Defn", name, arity),
+  gradient_function(name, arity, position),
+  arity < 3,
+  fun_handed(site, _, function, position).
+
+// A function returns a tuple or a map (`shape`), on some path.
+.decl returns_container(function: symbol, shape: symbol)
+returns_container(function, shape) :-
+  differentiates_without_transform(_, function),
+  active(context, function),
+  return_value(context, function, $Object(_, object, _)),
+  flow_object(_, object, shape, _),
+  ( shape = "tuple" ; shape = "map" ).
+returns_container(function, "tuple") :-
+  differentiates_without_transform(_, function),
+  active(context, function),
+  return_value(context, function, $Uniform(_)).

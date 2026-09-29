@@ -1,3 +1,457 @@
-// Values used again after they are spent: random keys, and tensors after a transfer or deallocation.
+// Values used again after they are spent: random keys drawn from twice,
+// and tensors used after a call freed their memory.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// Both are an order between two uses of one value in a function: a use on
+// some path after the call that spent the value. `flow_next` orders a
+// function's calls and returns, and the rules take its closure only from
+// the calls that spend a value. A value is named by where the code reads
+// it from, so two reads of one variable, or of one field of it, name one
+// value. What a value is across calls is not followed: a function that
+// hands a key on to a helper that draws from it draws from it too, but a
+// key a helper returns is a new value.
+
+// ══ Order and names ══════════════════════════════════════════════════
+
+.decl flow_next(at: symbol, func: symbol, next: symbol)
+.input flow_next
+
+// A call that spends a value: it draws from a key, or frees a tensor's
+// memory. The rules ask what runs after these only.
+.decl spends(site: symbol, function: symbol)
+spends(site, function) :- consumes_key(site, function, _, _, _).
+spends(site, function) :- frees_tensor(site, function, _, _, _).
+spends(call, function) :- donates(call, function, _).
+
+// Control can reach `later`, a call or a return, from the call `spent` in
+// one trip through their function. A MAY word: some path runs one after
+// the other, and another may run only one of them.
+.decl runs_later(spent: symbol, later: symbol)
+runs_later(spent, next) :- spends(spent, function), flow_next(spent, function, next).
+runs_later(spent, next) :- runs_later(spent, later), flow_next(later, _, next).
+
+// What a return after a call that spends a value hands its caller: its
+// result, and what the terms it builds hold, field by field.
+.decl returned_value(at: symbol, function: symbol, kind: symbol, source: symbol)
+returned_value(at, function, kind, source) :-
+  spends(spent, function),
+  runs_later(spent, at),
+  flow_return(function, at, kind, source).
+returned_value(at, function, kind, source) :-
+  returned_value(at, function, "object", object),
+  flow_field(function, object, _, kind, source).
+
+// What a call after one that frees a tensor's memory is handed: its
+// arguments, and what the terms they are hold, field by field.
+.decl handed_later(use: symbol, function: symbol, position: number, kind: symbol, source: symbol)
+handed_later(use, function, position, kind, source) :-
+  frees_tensor(freed, function, _, _, _),
+  runs_later(freed, use),
+  flow_argument(use, function, position, kind, source).
+handed_later(use, function, position, kind, source) :-
+  donates(freed, function, _),
+  runs_later(freed, use),
+  flow_argument(use, function, position, kind, source).
+handed_later(use, function, position, kind, source) :-
+  handed_later(use, function, position, "object", object),
+  flow_field(function, object, _, kind, source).
+
+// The values of a function the rules compare.
+.decl value_name_demand(function: symbol, kind: symbol, source: symbol)
+value_name_demand(function, kind, source) :- consumes_key(_, function, kind, source, _).
+value_name_demand(function, kind, source) :- frees_tensor(_, function, kind, source, _).
+value_name_demand(function, "result", mark) :- donates(_, function, mark).
+value_name_demand(function, kind, source) :- returned_value(_, function, kind, source).
+value_name_demand(function, kind, source) :-
+  returned_value(_, function, "object", object),
+  flow_base(function, object, kind, source).
+value_name_demand(function, kind, source) :- handed_later(_, function, _, kind, source).
+value_name_demand(function, kind, source) :-
+  value_name_demand(function, "load", load),
+  flow_load(function, load, _, kind, source).
+value_name_demand(function, kind, source) :-
+  renames_value(site, function, _),
+  flow_argument(site, function, 0, kind, source).
+
+// A call whose result is another name for the value it is handed:
+// `Access.get` of a literal index (`keys[1]`), and the Nx functions that
+// change a tensor's names, vectorized axes or donation mark and keep its
+// data.
+.decl renames_value(site: symbol, function: symbol, suffix: symbol)
+renames_value(site, function, cat("[", index, "]")) :-
+  value_name_demand(function, "result", site),
+  remote_call(site, function, "Access", "get", 2),
+  flow_argument(site, function, 1, "literal", index).
+renames_value(site, function, "") :-
+  value_name_demand(function, "result", site),
+  remote_call(site, function, "Nx", name, _),
+  match("rename|vectorize|devectorize|donatable", name).
+
+// A value's name in its function, the same wherever the code reads the
+// value: a parameter, a call's result or a term the function builds by
+// its source, a field read by what it reads from and the field, and a
+// renaming call's result by what it renames. A literal has none: two
+// literals are no value spent twice.
+.decl value_named(function: symbol, kind: symbol, source: symbol, name: symbol)
+value_named(function, kind, source, cat(kind, " ", source)) :-
+  value_name_demand(function, kind, source),
+  kind != "load",
+  kind != "literal",
+  !renames_value(source, function, _).
+value_named(function, "load", load, cat(name, selector)) :-
+  value_named(function, kind, source, name),
+  flow_load(function, load, selector, kind, source),
+  value_name_demand(function, "load", load),
+  strlen(name) < 240.
+value_named(function, "result", site, cat(name, suffix)) :-
+  value_named(function, kind, source, name),
+  flow_argument(site, function, 0, kind, source),
+  renames_value(site, function, suffix),
+  strlen(name) < 240.
+
+// ══ Random keys ══════════════════════════════════════════════════════
+//
+// Every `Nx.Random` sampler draws its bits from `split(key)[1]` and hands
+// back `split(key)[0]` as the next key: two draws from one key get the
+// same bits, so `uniform` twice gives equal tensors, and `normal` is the
+// inverse normal CDF of `uniform` element by element. Nothing raises. A
+// key threaded through, each draw from the key the last one returned, or
+// split once into as many keys as draws, gives independent samples.
+
+// The `Nx.Random` functions that draw from the key they take first: the
+// samplers, their `_split` forms, and `split`. `fold_in` makes a new key
+// of its data and draws nothing.
+.decl random_draw(name: symbol)
+random_draw("split"). random_draw("uniform"). random_draw("uniform_split").
+random_draw("normal"). random_draw("normal_split"). random_draw("randint").
+random_draw("randint_split"). random_draw("gumbel"). random_draw("gumbel_split").
+random_draw("shuffle"). random_draw("choice"). random_draw("multivariate_normal").
+random_draw("multivariate_normal_split").
+
+// A call that draws from a key, the source of the key it is handed, and
+// the function it calls as a finding shows it: an `Nx.Random` function
+// called as a function, or in a `defn` (`Nx.Defn.Compiler.__remote__/4`,
+// which hands it its arguments in a list), or a function of the program
+// that draws from the key it is handed.
+.decl consumes_key(site: symbol, function: symbol, kind: symbol, source: symbol, shown: symbol)
+consumes_key(site, function, kind, source, cat("Nx.Random.", name)) :-
+  remote_call(site, function, "Nx.Random", name, _),
+  random_draw(name),
+  flow_argument(site, function, 0, kind, source).
+consumes_key(site, function, kind, source, cat("Nx.Random.", name)) :-
+  random_draw(name),
+  flow_argument(site, function, 1, "literal", cat(":", name)),
+  flow_argument(site, function, 0, "literal", "Nx.Random"),
+  remote_argument(site, function, 0, kind, source).
+consumes_key(site, function, kind, source, cat(module, ".", name)) :-
+  consumes_key_parameter(callee, position),
+  program_call(site, function, callee),
+  function_def(callee, module, name, _, _),
+  flow_argument(site, function, position, kind, source).
+consumes_key(site, function, kind, source, cat(module, ".", name)) :-
+  consumes_key_parameter(callee, position),
+  remote_defn(site, function, callee),
+  function_def(callee, module, name, _, _),
+  remote_argument(site, function, position, kind, source).
+
+// A function of the program that draws from the key it is handed at
+// `position`, as its `defn` wrapper does from what it hands the body.
+.decl consumes_key_parameter(function: symbol, position: number)
+consumes_key_parameter(function, to_number(position)) :-
+  consumes_key(_, function, "param", position, _).
+consumes_key_parameter(wrapper, position) :-
+  consumes_key_parameter(body, position),
+  defn_wrapper(wrapper, body).
+
+// A call that draws from the key named `key` in its function.
+.decl key_drawn(site: symbol, function: symbol, key: symbol)
+key_drawn(site, function, key) :-
+  consumes_key(site, function, kind, source, _),
+  value_named(function, kind, source, key).
+
+// A random key drawn from twice: a call draws from a key an earlier call
+// of its function drew from, and gets the same bits.
+.decl reused_key(first: symbol, second: symbol, function: symbol)
+reused_key(first, second, function) :-
+  key_drawn(first, function, key),
+  key_drawn(second, function, key),
+  runs_later(first, second).
+
+// A function that draws from a key and runs on each pass of a loop: the
+// code of a closure handed to a call that runs it once for each element
+// or pass, an `Enum`, `Stream` or `:lists` function or a `defn`'s `while`
+// (`Nx.Defn.Kernel.__while__/6`).
+.decl loop_body(loop: symbol, function: symbol, closure: symbol, body: symbol)
+loop_body(loop, function, closure, body) :-
+  consumes_key(_, body, _, _, _),
+  flow_closure(closure, body),
+  flow_argument(loop, function, _, "object", closure),
+  remote_call(loop, function, module, _, _),
+  match("Enum|Stream|:lists", module).
+loop_body(loop, function, closure, body) :-
+  consumes_key(_, body, _, _, _),
+  flow_closure(closure, body),
+  flow_argument(loop, function, 4, "object", closure),
+  remote_call(loop, function, "Nx.Defn.Kernel", "__while__", 6).
+
+// A value a loop's closure captured, by its name in the loop's body: the
+// body's parameter that holds it, as a fun takes the arguments it is
+// called with, then what it captured.
+.decl loop_captures(closure: symbol, body: symbol, name: symbol)
+loop_captures(closure, body, cat("param ", to_string(arity - captured + index))) :-
+  loop_body(_, function, closure, body),
+  flow_object(function, closure, "closure", captured),
+  function_def(body, _, _, arity, _),
+  flow_field(function, closure, selector, _, _),
+  selector_position(selector, index).
+
+// A key a loop's fun captured and draws from: every pass draws the same
+// bits.
+.decl key_captured_by_loop(draw: symbol, loop: symbol, body: symbol)
+key_captured_by_loop(draw, loop, body) :-
+  loop_body(loop, _, closure, body),
+  loop_captures(closure, body, key),
+  key_drawn(draw, body, key).
+
+// A loop whose fun returns what its next pass is handed, and the fun: a
+// reduce, a scan, a `map_reduce`, a `while`.
+.decl hands_to_next_pass(loop: symbol, body: symbol)
+hands_to_next_pass(loop, body) :-
+  loop_body(loop, _, _, body),
+  remote_call(loop, _, module, name, _),
+  accumulating(module, name).
+
+.decl accumulating(module: symbol, name: symbol)
+accumulating("Enum", "reduce"). accumulating("Enum", "reduce_while").
+accumulating("Enum", "map_reduce"). accumulating("Enum", "flat_map_reduce").
+accumulating("Enum", "scan"). accumulating("Stream", "scan").
+accumulating("Stream", "transform"). accumulating("Stream", "unfold").
+accumulating("Stream", "iterate"). accumulating(":lists", "foldl").
+accumulating(":lists", "foldr"). accumulating(":lists", "mapfoldl").
+accumulating(":lists", "mapfoldr"). accumulating("Nx.Defn.Kernel", "__while__").
+
+// A loop's fun that draws from a key and returns the same key for the
+// next pass to draw from.
+.decl key_passed_back(draw: symbol, loop: symbol, body: symbol)
+key_passed_back(draw, loop, body) :-
+  hands_to_next_pass(loop, body),
+  key_drawn(draw, body, key),
+  return_holds(return, body, key),
+  runs_later(draw, return).
+
+// A function that returns a key it has drawn from, for its caller to draw
+// the same bits again.
+.decl spent_key_returned(return: symbol, draw: symbol, function: symbol)
+spent_key_returned(return, draw, function) :-
+  key_drawn(draw, function, key),
+  return_holds(return, function, key),
+  runs_later(draw, return),
+  !hands_to_next_pass(_, function).
+
+// The return at `at` hands its caller the value named `name`: as its
+// result, in a term it builds, or as a field of what it hands back
+// unchanged, the term a spent value was read from (`state` after a draw
+// from `state.key`), or an update of it that leaves that field
+// (`%{state | sample: sample}`).
+.decl return_holds(at: symbol, function: symbol, name: symbol)
+return_holds(at, function, name) :-
+  returned_value(at, function, kind, source),
+  value_named(function, kind, source, name).
+return_holds(at, function, cat(base, selector)) :-
+  return_holds(at, function, base),
+  spent_field(function, base, selector).
+return_holds(at, function, cat(base, selector)) :-
+  spent_field(function, base, selector),
+  returned_value(at, function, "object", object),
+  flow_base(function, object, kind, source),
+  value_named(function, kind, source, base),
+  !flow_sets(object, selector),
+  !flow_field(function, object, "*", _, _).
+
+// A value a call spends that it reads as the field `selector` of the
+// value named `base`, as a draw from `state.key` does.
+.decl spent_field(function: symbol, base: symbol, selector: symbol)
+spent_field(function, base, selector) :-
+  consumes_key(_, function, "load", load, _),
+  flow_load(function, load, selector, kind, source),
+  value_named(function, kind, source, base).
+spent_field(function, base, selector) :-
+  frees_tensor(_, function, "load", load, _),
+  flow_load(function, load, selector, kind, source),
+  value_named(function, kind, source, base).
+spent_field(function, base, selector) :-
+  donates(_, function, mark),
+  flow_argument(mark, function, 0, "load", load),
+  flow_load(function, load, selector, kind, source),
+  value_named(function, kind, source, base).
+
+// The call a finding on a draw points back to: the draw, where it is a
+// remote call, and none for a local one.
+.decl draw_origin(site: symbol, origin: symbol)
+draw_origin(site, site) :- consumes_key(site, function, _, _, _), remote_call(site, function, _, _, _).
+draw_origin(site, "") :- consumes_key(site, function, _, _, _), local_call(site, function, _, _).
+
+// ══ Tensors after their memory is freed ══════════════════════════════
+//
+// `Nx.backend_transfer` copies a tensor to another backend and frees it
+// where it was, and `Nx.backend_deallocate` frees it: EMLX raises
+// "Tensor has been deallocated" and EXLA "Buffer has been deleted or
+// donated" on reading it after. A call on EXLA handed a tensor marked
+// `Nx.donatable/1`, a JIT call or an operation of its backend, gives the
+// tensor's memory to its result. The BinaryBackend has nothing to free and
+// runs on, so tests on it pass.
+
+// A call that frees the memory of the tensor it is handed, or of those in
+// the term it is handed, and the kind a later use reports:
+// `Nx.backend_transfer/1` (to the BinaryBackend, as `backend_transfer/2`
+// to `Nx.BinaryBackend`) and `Nx.backend_deallocate/1`. A transfer to
+// another backend is left out: the tensor may be on the BinaryBackend,
+// where nothing is freed.
+.decl frees_tensor(site: symbol, function: symbol, kind: symbol, source: symbol, freed: symbol)
+frees_tensor(site, function, kind, source, "used_after_transfer") :-
+  remote_call(site, function, "Nx", "backend_transfer", 1),
+  flow_argument(site, function, 0, kind, source).
+frees_tensor(site, function, kind, source, "used_after_transfer") :-
+  remote_call(site, function, "Nx", "backend_transfer", 2),
+  flow_argument(site, function, 1, "literal", "Nx.BinaryBackend"),
+  flow_argument(site, function, 0, kind, source).
+frees_tensor(site, function, kind, source, "used_after_deallocation") :-
+  remote_call(site, function, "Nx", "backend_deallocate", 1),
+  flow_argument(site, function, 0, kind, source).
+frees_tensor(site, function, kind, source, freed) :-
+  frees_tensor(site, function, "object", object, freed),
+  flow_field(function, object, _, kind, source).
+
+// A call that reads the data of the tensors it is handed: an Nx function
+// other than those that answer about a tensor's struct or change only
+// that, or a JIT call (`Nx.Defn.jit_apply`, a `defn` of the program).
+.decl reads_tensor_data(site: symbol) inline
+reads_tensor_data(site) :- operation_site(site, operation, _), !keeps_to_struct(operation).
+reads_tensor_data(site) :- remote_call(site, _, "Nx.Defn", "jit_apply", _).
+reads_tensor_data(site) :- remote_call(site, _, "EXLA", "jit_apply", _).
+reads_tensor_data(site) :- program_call(site, _, callee), defn_wrapper(callee, _).
+
+// Nx functions that read and change only a tensor's struct.
+.decl keeps_to_struct(operation: symbol)
+keeps_to_struct(operation) :- shape_query(operation).
+keeps_to_struct("Nx.type"). keeps_to_struct("Nx.byte_size"). keeps_to_struct("Nx.bit_size").
+keeps_to_struct("Nx.axes"). keeps_to_struct("Nx.to_template"). keeps_to_struct("Nx.compatible?").
+keeps_to_struct("Nx.donatable?"). keeps_to_struct("Nx.donatable"). keeps_to_struct("Nx.rename").
+keeps_to_struct("Nx.vectorize"). keeps_to_struct("Nx.devectorize").
+
+// A call handed a tensor marked with `Nx.donatable/1`, as itself or in a
+// term, that reads its data or calls a fun on it (as a JIT-compiled
+// function is called): EXLA donates the memory the mark shares with the
+// tensor it marks.
+.decl donates(call: symbol, function: symbol, mark: symbol)
+donates(call, function, mark) :-
+  holds_mark(function, kind, source, mark),
+  flow_argument(call, function, _, kind, source),
+  reads_tensor_data(call).
+donates(call, function, mark) :-
+  holds_mark(function, kind, source, mark),
+  flow_argument(call, function, _, kind, source),
+  flow_dynamic(call, function, _).
+
+.decl holds_mark(function: symbol, kind: symbol, source: symbol, mark: symbol)
+holds_mark(function, "result", mark, mark) :- remote_call(mark, function, "Nx", "donatable", 1).
+holds_mark(function, "object", object, mark) :-
+  holds_mark(function, kind, source, mark),
+  flow_field(function, object, _, kind, source).
+
+// A tensor whose memory the call `freed` frees, by name, the call a
+// finding points back to, and the kind a later use of it reports.
+.decl frees_memory(freed: symbol, origin: symbol, function: symbol, tensor: symbol, kind: symbol)
+frees_memory(site, site, function, tensor, kind) :-
+  frees_tensor(site, function, source_kind, source, kind),
+  value_named(function, source_kind, source, tensor).
+frees_memory(call, mark, function, tensor, "used_after_donation") :-
+  donates(call, function, mark),
+  value_named(function, "result", mark, tensor).
+
+// The functions of the program a call after one that frees a tensor's
+// memory hands a value to, and those they hand their parameters on to.
+.decl parameter_read_demand(function: symbol)
+parameter_read_demand(callee) :-
+  handed_later(use, function, _, _, _),
+  program_call(use, function, callee).
+parameter_read_demand(callee) :-
+  parameter_read_demand(function),
+  program_call(site, function, callee),
+  flow_argument(site, function, _, "param", _).
+
+// A function of the program that reads the data of the tensor it is
+// handed at `position`, or hands it on to one that does.
+.decl reads_parameter(function: symbol, position: number)
+reads_parameter(function, to_number(position)) :-
+  parameter_read_demand(function),
+  flow_argument(site, function, _, "param", position),
+  reads_tensor_data(site).
+reads_parameter(function, to_number(position)) :-
+  reads_parameter(callee, argument),
+  program_call(site, function, callee),
+  flow_argument(site, function, argument, "param", position),
+  parameter_read_demand(function).
+
+// A use of the tensor named `tensor` at `use`, and how: "read" where the
+// call reads its data, "handed_on" where it hands it to a fun or a
+// function of the program that reads it, "returned" where the function
+// returns it.
+.decl uses_tensor(use: symbol, function: symbol, tensor: symbol, how: symbol)
+uses_tensor(use, function, tensor, "read") :-
+  handed_later(use, function, _, kind, source),
+  reads_tensor_data(use),
+  value_named(function, kind, source, tensor).
+uses_tensor(use, function, tensor, "handed_on") :-
+  handed_later(use, function, _, kind, source),
+  flow_dynamic(use, function, _),
+  value_named(function, kind, source, tensor).
+uses_tensor(use, function, tensor, "handed_on") :-
+  handed_later(use, function, position, kind, source),
+  kind != "object",
+  program_call(use, function, callee),
+  reads_parameter(callee, position),
+  !defn_wrapper(callee, _),
+  value_named(function, kind, source, tensor).
+uses_tensor(at, function, tensor, "returned") :- return_holds(at, function, tensor).
+
+// A tensor used after a call that freed its memory: EMLX and EXLA raise
+// on reading it.
+.decl freed_tensor_used(use: symbol, freed: symbol, origin: symbol, function: symbol, kind: symbol, how: symbol)
+freed_tensor_used(use, freed, origin, function, kind, how) :-
+  frees_memory(freed, origin, function, tensor, kind),
+  uses_tensor(use, function, tensor, how),
+  runs_later(freed, use).
+
+// ══ Findings ═════════════════════════════════════════════════════════
+//
+// Each in the context of its function over its own names.
+
+call_error($Canonical(function, arguments), second, "reused_key", cat(shown, " after ", first_shown), origin) :-
+  reused_key(first, second, function),
+  consumes_key(second, function, _, _, shown),
+  consumes_key(first, function, _, _, first_shown),
+  draw_origin(first, origin),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments).
+call_error($Canonical(body, arguments), draw, "captured_loop_key", shown, loop) :-
+  key_captured_by_loop(draw, loop, body),
+  consumes_key(draw, body, _, _, shown),
+  function_def(body, _, _, arity, _),
+  own_names(arity, 0, arguments).
+call_error($Canonical(body, arguments), draw, "passed_back_key", shown, loop) :-
+  key_passed_back(draw, loop, body),
+  consumes_key(draw, body, _, _, shown),
+  function_def(body, _, _, arity, _),
+  own_names(arity, 0, arguments).
+call_error($Canonical(function, arguments), return, "spent_key_returned", shown, origin) :-
+  spent_key_returned(return, draw, function),
+  consumes_key(draw, function, _, _, shown),
+  draw_origin(draw, origin),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments).
+call_error($Canonical(function, arguments), use, kind, how, origin) :-
+  freed_tensor_used(use, _, origin, function, kind, how),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments).

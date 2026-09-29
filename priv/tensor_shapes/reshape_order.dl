@@ -1,3 +1,140 @@
 // Reshapes that reorder sizes, where a transpose was meant.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// `Nx.reshape/2` keeps a tensor's elements in their row-major order and
+// only regroups them under new sizes. Splitting an axis in place
+// (`{batch, seq, heads * head_dim}` to `{batch, seq, heads, head_dim}`),
+// or merging neighboring axes, keeps what each axis indexes. Moving a size
+// past another axis's does not: `{batch, seq, heads * head_dim}` reshaped
+// to `{batch, heads, seq, head_dim}` holds as many elements, so Nx accepts
+// it, but its `heads` axis runs along sequence positions, and whatever
+// reads it mixes positions and heads. Splitting heads wants the reshape to
+// `{batch, seq, heads, head_dim}` and then a transpose; merging them back,
+// the transpose before the reshape.
+//
+// The order compared is that of the size variables the code names, each
+// on one axis of the tensor and one of the result. A product's variables
+// are one size, kept in no order (`heads * head_dim`), so only their order
+// across axes is compared: a split in place never reorders, and moving a
+// variable past one of another axis does. Literal factors are left out: a
+// reshape that moves them (a pixel shuffle's `{c * 4, h, w}` to
+// `{c, 2, 2, h, w}`) is a reinterpretation the code usually means. It errs
+// quiet where it cannot place a variable: one on several axes of a side
+// (`{dim, dim}`) has no one axis to compare, and a size not known on
+// either side could hide any variable.
+//
+// A reshape that only lists whole axes in another order (`{heads, dim}`
+// to `{dim, heads}`) moves sizes past each other as well, and is reported
+// the same way: a transpose is what reorders axes.
+
+// A reshape that moves a size past another axis's size, so the result's
+// axes do not index what their sizes say.
+.decl reordering_reshape(context: Context, site: symbol, detail: symbol)
+reordering_reshape(context, site, detail) :-
+  reshape_sides(context, site, tensor, result),
+  sizes_decided(tensor, result),
+  swaps_sizes(tensor, result, earlier, later),
+  swap_spelled(tensor, result, earlier, later, detail).
+
+misalignment(context, site, "reshape_order", detail) :- reordering_reshape(context, site, detail).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The axes a reshape is handed and the axes it gives, `:auto` inferred.
+.decl reshape_sides(context: Context, site: symbol, tensor: Axes, result: Axes)
+reshape_sides(context, site, tensor, result) :-
+  site_instance(site, "Nx.reshape", _, [tensor, shape, nil]),
+  instance(context, site, [tensor, shape, nil], _),
+  result_axes(site, [tensor, shape, nil], result).
+
+// The two sides of a reshape, in any context: what the words below read.
+.decl reshape_pair(tensor: Axes, result: Axes)
+reshape_pair(tensor, result) :- reshape_sides(_, _, tensor, result).
+
+.decl reshaped_axes(axes: Axes)
+reshaped_axes(tensor) :- reshape_pair(tensor, _).
+reshaped_axes(result) :- reshape_pair(_, result).
+
+// The axes of a side from `axis` on, counted from the first.
+.decl reshaped_axis_from(axes: Axes, axis: number, rest: Axes)
+reshaped_axis_from(axes, 0, axes) :- reshaped_axes(axes).
+reshaped_axis_from(axes, axis + 1, rest) :-
+  reshaped_axis_from(axes, axis, [_, _, rest]),
+  rest != nil.
+
+// The size of each axis of a side.
+.decl reshaped_axis(axes: Axes, axis: number, size: Size)
+reshaped_axis(axes, axis, size) :- reshaped_axis_from(axes, axis, [size, _, _]).
+
+.decl reshaped_size(axes: Axes, size: Size)
+reshaped_size(axes, size) :- reshaped_axis(axes, _, size).
+
+// A side has a size neither known nor named by variables: not known at
+// all, or an `:auto` left so.
+.decl holds_undecided_size(axes: Axes)
+holds_undecided_size(axes) :- reshaped_axis(axes, _, [coefficient, _]), coefficient <= 0.
+
+// Every size on both sides is known or named by variables, so the
+// variables each side names are all it has.
+.decl sizes_decided(tensor: Axes, result: Axes)
+sizes_decided(tensor, result) :-
+  reshape_pair(tensor, result),
+  !holds_undecided_size(tensor),
+  !holds_undecided_size(result).
+
+// The factors of a size on a side, from one of them on.
+.decl reshaped_factors_from(factors: Factors, rest: Factors)
+reshaped_factors_from(factors, factors) :- reshaped_axis(_, _, [_, factors]), factors != nil.
+reshaped_factors_from(factors, rest) :-
+  reshaped_factors_from(factors, [_, rest]),
+  rest != nil.
+
+// A variable among a size's factors.
+.decl reshaped_factor(factors: Factors, variable: symbol)
+reshaped_factor(factors, variable) :- reshaped_factors_from(factors, [variable, _]).
+
+// A variable the size of an axis of a side multiplies.
+.decl reshaped_variable(axes: Axes, axis: number, variable: symbol)
+reshaped_variable(axes, axis, variable) :-
+  reshaped_axis(axes, axis, [_, factors]),
+  reshaped_factor(factors, variable).
+
+.decl variable_on_two_axes(axes: Axes, variable: symbol)
+variable_on_two_axes(axes, variable) :-
+  reshaped_variable(axes, one, variable),
+  reshaped_variable(axes, other, variable),
+  one < other.
+
+// A variable on one axis of a side and on no other.
+.decl sole_variable(axes: Axes, axis: number, variable: symbol)
+sole_variable(axes, axis, variable) :-
+  reshaped_variable(axes, axis, variable),
+  !variable_on_two_axes(axes, variable).
+
+// Two variables, each on one axis of either side, that the reshape puts
+// in the other order: `earlier` sits on an axis before `later`'s in the
+// tensor, and on one after it in the result. Two variables sharing an
+// axis on either side have no order there to compare.
+.decl swaps_sizes(tensor: Axes, result: Axes, earlier: symbol, later: symbol)
+swaps_sizes(tensor, result, earlier, later) :-
+  reshape_pair(tensor, result),
+  sole_variable(tensor, earlier_from, earlier),
+  sole_variable(tensor, later_from, later),
+  earlier_from < later_from,
+  sole_variable(result, earlier_to, earlier),
+  sole_variable(result, later_to, later),
+  later_to < earlier_to.
+
+// "the tensor has seq on axis 1 before heads on axis 2, and the result
+// has heads on axis 1 before seq on axis 2".
+.decl swap_spelled(tensor: Axes, result: Axes, earlier: symbol, later: symbol, detail: symbol)
+swap_spelled(tensor, result, earlier, later, detail) :-
+  swaps_sizes(tensor, result, earlier, later),
+  sole_variable(tensor, earlier_from, earlier),
+  sole_variable(tensor, later_from, later),
+  sole_variable(result, earlier_to, earlier),
+  sole_variable(result, later_to, later),
+  factor_shown(earlier, earlier_shown),
+  factor_shown(later, later_shown),
+  detail = cat("the tensor has ", earlier_shown, " on axis ", to_string(earlier_from), " before ", later_shown, " on axis ", to_string(later_from), ", and the result has ", later_shown, " on axis ", to_string(later_to), " before ", earlier_shown, " on axis ", to_string(earlier_to)).

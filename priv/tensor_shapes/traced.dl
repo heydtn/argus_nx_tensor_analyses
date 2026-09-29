@@ -1,3 +1,779 @@
-// Host operations on tensors in traced code, and Elixir operators on tensors outside a `defn`.
+// Host operations on tensors in traced code, and Elixir operators on
+// tensors outside a `defn`.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// Nx computes a `defn`, and a function handed to `Nx.Defn.jit`, `compile`
+// or a grad, by tracing it: it runs the function once over expressions,
+// tensors that stand for values without holding them, and compiles what
+// they record. Code that runs while Nx traces cannot read a tensor's data
+// (`Nx.to_number/1` of an expression raises) nor run another compiled
+// function. Outside a trace a tensor is a struct like any other: Elixir's
+// operators take it as a term, so arithmetic on it raises, and a
+// comparison or truth test of it answers the same whatever it holds.
+//
+// Reported as `call_error` rows: a data read in traced code
+// (`data_read_in_trace`), a jitted or compiled function run there
+// (`jit_in_trace`), Elixir's operators and tests applied to a tensor
+// (`tensor_arithmetic`, `tensor_boolean`, `tensor_comparison`,
+// `tensor_truth`), a compiled function called with an argument its
+// template does not fit (`compiled_template`), a closure handed to a
+// trace that captures a tensor (`captured_tensor`), a template computed
+// with (`template_computed`), and a batch size `Nx.to_batched/3` has no
+// clause for (`batch_size`). Reported as violations: conversions whose
+// operand has a shape Nx rejects (`scalar`, `needs_axes`, `batch`).
+//
+// Which way they err: a value is a tensor, an expression, a template or a
+// jitted function only where the rules see it made so and follow it to
+// where it is used, through the program's calls, closures and the terms a
+// function builds. A value they cannot follow is none of these and gives
+// no finding, and so does an operand with several sources, or several
+// values in its context (they err quiet).
+//
+// Souffle's front end passes over the whole program once per relation,
+// so the words below write out, rather than name, the conditions only
+// they read.
+
+// ══ Facts ═══════════════════════════════════════════════════════════
+
+// The operands of Elixir's operators and tests: the instruction at `site`
+// applies `operator` (a BIF such as `*`, `<` or `not`, `fconv` into float
+// arithmetic, a test such as `is_lt`, or `select_val`, whose choices
+// follow its value) to the source at `position`, as `ShapeFlow` extracts
+// them.
+.decl flow_operand(site: symbol, func: symbol, operator: symbol, position: number, kind: symbol, source: symbol)
+.input flow_operand
+
+// ══ Traced code ═════════════════════════════════════════════════════
+
+// A function Nx runs while it traces a computation: a `defn`'s body
+// (`__defn:name__`, a `deftransform`'s too, which a `defn` reaches it
+// through), a function handed to one of `Nx.Defn`'s traces, and what they
+// call, closures and the program's protocol implementations included, but
+// not a callback Nx runs later on the values computed (`io_call`,
+// `print_value`, `runtime_call`, the functions they take after the
+// tensor). Rooted by how Nx traces: "defn", "jit" or "grad".
+.decl runs_in_trace(function: symbol)
+runs_in_trace(function) :- traced_reach.reaches(_, function).
+
+.init traced_reach = ForwardCallReachCut
+traced_reach.root("defn", function) :-
+  function_def(function, _, name, _, _),
+  match("__defn:.*", name).
+traced_reach.root(how, function) :-
+  trace_call(site, _, position, how),
+  fun_handed(site, _, function, position).
+traced_reach.reaches(how, callee) :-
+  traced_reach.reaches(how, caller),
+  implementation_call(_, caller, callee).
+traced_reach.cut(caller, callback) :-
+  remote_call(site, caller, module, name, _),
+  match("Nx|Nx\\.Defn\\.Kernel", module),
+  match("io_call|print_value|runtime_call", name),
+  fun_handed(site, caller, callback, position),
+  position > 0.
+
+// A call of one of `Nx.Defn`'s traces, and the position of the function
+// it traces: "grad" for `grad` and `value_and_grad`, "jit" for `jit`,
+// `jit_apply`, `compile` and `debug_expr`, but a `defn`'s own call of
+// `jit_apply` on its body, which is its "defn".
+.decl trace_call(site: symbol, function: symbol, position: number, how: symbol)
+trace_call(site, function, 0, "jit") :-
+  remote_call(site, function, "Nx.Defn", name, _),
+  match("jit|jit_apply|compile|debug_expr|debug_expr_apply", name),
+  !runs_own_body(site).
+trace_call(site, function, 0, "grad") :-
+  remote_call(site, function, "Nx.Defn", name, 1),
+  match("grad|value_and_grad", name).
+trace_call(site, function, 1, "grad") :-
+  remote_call(site, function, "Nx.Defn", name, arity),
+  arity > 1,
+  match("grad|value_and_grad", name).
+
+// How a finding's function is traced: as a `defn` where one reaches it,
+// else by a jit, else by a grad.
+.decl traced_first_as(function: symbol, how: symbol)
+traced_first_as(function, "defn") :-
+  reported_function(function),
+  traced_reach.reaches("defn", function).
+traced_first_as(function, "jit") :-
+  reported_function(function),
+  traced_reach.reaches("jit", function),
+  !traced_reach.reaches("defn", function).
+traced_first_as(function, "grad") :-
+  reported_function(function),
+  traced_reach.reaches("grad", function),
+  !traced_reach.reaches("defn", function),
+  !traced_reach.reaches("jit", function).
+
+// The parameters Nx hands a function it traces: every one of a `defn`'s
+// body, and of a function handed to a trace those before the values a
+// closure captured, which its function takes after its arguments and
+// which come from where it was made.
+.decl traced_parameter(function: symbol, position: number)
+traced_parameter(function, position) :-
+  traced_reach.root(_, function),
+  function_def(function, _, _, arity, _),
+  flow_closure(object, function),
+  flow_object(_, object, "closure", captured),
+  position = range(0, arity - captured).
+traced_parameter(function, position) :-
+  traced_reach.root(_, function),
+  function_def(function, _, _, arity, _),
+  !flow_closure(_, function),
+  position = range(0, arity).
+
+// ══ What a source holds ═════════════════════════════════════════════
+//
+// What a source may hold, of the kinds of value the rules follow
+// (`what`): an "expression" in traced code, a "template", a "jitted"
+// function. Each is made by a call (`maker`), then a parameter holds what
+// the program's calls hand it, a call's result what its function
+// returns, a closure's captured value what the function that made it
+// captured, and a field read of a term the function built what the term
+// holds there; an expression only within traced code. Asked on demand
+// (`held_asked`), from the sources the rules name.
+
+.decl held_asked(function: symbol, kind: symbol, source: symbol, what: symbol)
+.decl holds(function: symbol, kind: symbol, source: symbol, what: symbol, maker: symbol)
+
+// A call's result: what the function it runs returns.
+held_asked(callee, kind, source, what) :-
+  held_asked(function, "result", site, what),
+  program_call(site, function, callee),
+  ( what != "expression" ; runs_in_trace(callee) ),
+  flow_return(callee, _, kind, source).
+holds(function, "result", site, what, maker) :-
+  holds(callee, kind, source, what, maker),
+  flow_return(callee, _, kind, source),
+  program_call(site, function, callee),
+  held_asked(function, "result", site, what).
+
+// A parameter: what the program's calls of its function hand it.
+held_asked(caller, kind, source, what) :-
+  held_asked(function, "param", parameter, what),
+  program_call(site, caller, function),
+  ( what != "expression" ; runs_in_trace(caller) ),
+  flow_argument(site, caller, position, kind, source),
+  parameter = to_string(position).
+holds(function, "param", to_string(position), what, maker) :-
+  holds(caller, kind, source, what, maker),
+  flow_argument(site, caller, position, kind, source),
+  program_call(site, caller, function),
+  held_asked(function, "param", to_string(position), what).
+
+// A closure's captured value: what the function that made it captured.
+// Its function takes the values a closure captured after its arguments.
+held_asked(builder, kind, source, what) :-
+  held_asked(closure, "param", parameter, what),
+  flow_closure(object, closure),
+  flow_object(builder, object, "closure", captured),
+  ( what != "expression" ; runs_in_trace(builder) ),
+  function_def(closure, _, _, arity, _),
+  flow_field(builder, object, cat("{", to_string(to_number(parameter) - arity + captured), "}"), kind, source).
+holds(closure, "param", to_string(arity - captured + index), what, maker) :-
+  holds(builder, kind, source, what, maker),
+  flow_field(builder, object, selector, kind, source),
+  flow_closure(object, closure),
+  flow_object(builder, object, "closure", captured),
+  function_def(closure, _, _, arity, _),
+  selector_position(selector, index),
+  held_asked(closure, "param", to_string(arity - captured + index), what).
+
+// A field read of a term the function built: what it holds there.
+held_asked(function, kind, source, what) :-
+  held_asked(function, "load", load, what),
+  flow_load(function, load, selector, "object", object),
+  flow_field(function, object, selector, kind, source).
+holds(function, "load", load, what, maker) :-
+  holds(function, kind, source, what, maker),
+  flow_field(function, object, selector, kind, source),
+  flow_load(function, load, selector, "object", object),
+  held_asked(function, "load", load, what).
+
+// ── Expressions ────────────────────────────────────────────────────
+//
+// `maker` "" where the source holds an expression whatever it arrives
+// from, "leaf" for a value read from inside a container of them, which is
+// an expression or a value the container keeps as it is.
+
+// What Nx hands a function it traces.
+holds(function, "param", to_string(position), "expression", "") :-
+  held_asked(function, "param", to_string(position), "expression"),
+  traced_parameter(function, position).
+
+// A tensor traced code makes of no tensor, with the default backend,
+// which is expressions' while Nx traces.
+holds(function, "result", site, "expression", "") :-
+  held_asked(function, "result", site, "expression"),
+  operation_site(site, operation, arity),
+  tensor_constructor(operation, arity).
+holds(function, "result", site, "expression", "") :-
+  held_asked(function, "result", site, "expression"),
+  operation_site(site, operation, _),
+  match("Nx\\.(iota|eye|tri)|Nx\\.Random\\.key", operation).
+
+// An Nx call's result where an operand is an expression, a leaf of a
+// container of them, or a written number, which Nx makes an expression.
+held_asked(function, kind, source, "expression") :-
+  held_asked(function, "result", site, "expression"),
+  returns_tensor(site),
+  flow_argument(site, function, _, kind, source).
+holds(function, "result", site, "expression", "") :-
+  holds(function, kind, source, "expression", _),
+  flow_argument(site, function, _, kind, source),
+  returns_tensor(site),
+  held_asked(function, "result", site, "expression").
+holds(function, "result", site, "expression", "") :-
+  held_asked(function, "result", site, "expression"),
+  returns_tensor(site),
+  operation_site(site, operation, arity),
+  operand_slot(operation, arity, _, position),
+  flow_argument(site, function, position, "literal", text),
+  match("-?[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text).
+
+// A field read of an expression: a leaf of a container.
+held_asked(function, kind, source, "expression") :-
+  held_asked(function, "load", load, "expression"),
+  flow_load(function, load, _, kind, source).
+holds(function, "load", load, "expression", "leaf") :-
+  holds(function, kind, source, "expression", _),
+  flow_load(function, load, _, kind, source),
+  held_asked(function, "load", load, "expression").
+
+// What traced code reads the data of, and applies Elixir's operators to.
+held_asked(function, kind, source, "expression") :-
+  reads_data(site, function),
+  runs_in_trace(function),
+  flow_argument(site, function, 0, kind, source).
+held_asked(function, kind, source, "expression") :-
+  tensor_asked(function, kind, source),
+  runs_in_trace(function).
+
+// ── Jitted functions and templates ─────────────────────────────────
+
+// A function `Nx.Defn.jit` or `compile` makes that raises when it runs
+// while Nx traces another (`makes_jitted`), asked of what the program's
+// calls of funs call, where it makes one.
+holds(function, "result", site, "jitted", site) :-
+  held_asked(function, "result", site, "jitted"),
+  makes_jitted(site).
+held_asked(function, kind, source, "jitted") :-
+  makes_jitted(_),
+  flow_callee(_, function, "fun", kind, source).
+
+// A template, a tensor with a shape and a type and no data, asked of what
+// calls compute with, where the program makes one.
+holds(function, "result", site, "template", site) :-
+  held_asked(function, "result", site, "template"),
+  operation_site(site, operation, _),
+  match("Nx\\.(template|to_template)", operation).
+held_asked(function, kind, source, "template") :-
+  operation_site(_, "Nx.template", _),
+  computes_on(_, function, _, kind, source).
+
+// A call of `Nx.Defn.jit` or `compile` whose function raises when it
+// runs during another compilation: any compile, and a jit told nothing
+// else to do then.
+.decl makes_jitted(site: symbol)
+makes_jitted(site) :-
+  remote_call(site, _, "Nx.Defn", name, _),
+  match("jit|compile", name),
+  !resolves_conflict(site).
+
+// A jit whose options may say what to do when another compilation runs
+// (`on_conflict:`), as `Nx.Defn.jit/2` and `jit_apply/3` take them: any
+// but written ones without the key.
+.decl resolves_conflict(site: symbol)
+resolves_conflict(site) :-
+  remote_call(site, function, "Nx.Defn", name, arity),
+  ( name = "jit", arity = 2, position = 1 ; name = "jit_apply", arity = 3, position = 2 ),
+  flow_argument(site, function, position, kind, _),
+  kind != "literal".
+resolves_conflict(site) :-
+  remote_call(site, function, "Nx.Defn", name, arity),
+  ( name = "jit", arity = 2, position = 1 ; name = "jit_apply", arity = 3, position = 2 ),
+  flow_argument(site, function, position, "literal", text),
+  match(".*on_conflict:.*", text).
+
+// An Nx call whose result is a tensor: any but those that answer with a
+// number, a shape, a type, a list, a binary or a tuple, or hand back
+// options.
+.decl returns_tensor(site: symbol)
+returns_tensor(site) :-
+  operation_site(site, operation, _),
+  !match("Nx\\.(to_number|to_list|to_flat_list|to_binary|to_batched|to_heatmap|to_pointer|shape|rank|size|axis_size|axis_index|names|type|byte_size|compatible\\?|default_backend|backend_deallocate|serialize|top_k|split|load_numpy_archive!)|Nx\\.LinAlg\\.(qr|svd|eigh|lu|schur)|Nx\\.Random\\.(uniform|normal|randint|gumbel|choice|shuffle)|Nx\\.Defn\\.Kernel\\.(keyword!|assert_keys|elem|then|tap)", operation).
+
+// ══ Data read in traced code ════════════════════════════════════════
+
+// A read of a tensor's data in code Nx is tracing, where the tensor, from
+// the call's one source of it, is an expression, which holds no data: Nx
+// raises. `defn` rejects such a read written in its own body; this one it
+// reaches through a transform or a helper, or it is in a function handed
+// to `Nx.Defn.jit` or a grad.
+.decl data_read_in_trace(site: symbol, function: symbol)
+data_read_in_trace(site, function) :-
+  reads_data(site, function),
+  runs_in_trace(function),
+  reads_expression(site, function).
+
+// The call reads its tensor's data: as a number, a list, a binary, ...
+.decl reads_data(site: symbol, function: symbol)
+reads_data(site, function) :-
+  remote_call(site, function, "Nx", name, _),
+  match("to_number|to_list|to_flat_list|to_binary|to_batched|to_heatmap|to_pointer|backend_(copy|transfer|deallocate)", name).
+
+// What the call reads is an expression, from its one source.
+.decl reads_expression(site: symbol, function: symbol)
+reads_expression(site, function) :-
+  reads_data(site, function),
+  flow_argument(site, function, 0, kind, source),
+  holds(function, kind, source, "expression", ""),
+  1 = count : { flow_argument(site, function, 0, _, _) }.
+
+// ══ Conversions ═════════════════════════════════════════════════════
+
+// A conversion whose one operand in the context has a shape Nx rejects:
+// a number of a tensor with axes or a vectorized axis, a list or batches
+// of a scalar with no vectorized axis (which they would count), a heatmap
+// of any scalar.
+.decl conversion_rejected(context: Context, site: symbol, operation: symbol, tensor: Tensor)
+conversion_rejected(context, site, "Nx.to_number", [vectorized, axes]) :-
+  converts_operand(context, site, "Nx.to_number", [vectorized, axes]),
+  axes != nil.
+conversion_rejected(context, site, "Nx.to_number", [[name, size, rest], axes]) :-
+  converts_operand(context, site, "Nx.to_number", [[name, size, rest], axes]),
+  name != "?".
+conversion_rejected(context, site, operation, [nil, nil]) :-
+  converts_operand(context, site, operation, [nil, nil]),
+  ( operation = "Nx.to_list" ; operation = "Nx.to_batched" ).
+conversion_rejected(context, site, "Nx.to_heatmap", [vectorized, nil]) :-
+  converts_operand(context, site, "Nx.to_heatmap", [vectorized, nil]).
+
+// Batches larger than the leading axis Nx cuts them from, its first
+// vectorized axis or else its first axis, of the one batch size the call
+// gets in the context.
+.decl batch_beyond(context: Context, site: symbol, batch: number, leading: number)
+batch_beyond(context, site, batch, leading) :-
+  converts_operand(context, site, "Nx.to_batched", tensor),
+  leading_size(tensor, leading),
+  batch_size(context, site, batch),
+  leading < batch.
+
+// The size of a tensor's leading axis, where it is known: its first
+// vectorized axis's, or its first axis's.
+.decl leading_size(tensor: Tensor, size: number)
+leading_size(tensor, size) :-
+  converts_operand(_, _, "Nx.to_batched", tensor),
+  ( tensor = [nil, [[size, nil], _, _]] ; tensor = [[name, [size, nil], _], _], name != "?" ),
+  size > 0.
+
+// The one batch size `Nx.to_batched/3` gets in the context.
+.decl batch_size(context: Context, site: symbol, batch: number)
+batch_size(context, site, batch) :-
+  converts_operand(context, site, "Nx.to_batched", _),
+  argument_value(context, site, 1, $Integer([batch, nil])),
+  1 = count : { argument_value(context, site, 1, _) }.
+
+// The one tensor a conversion's operand is in a context.
+.decl converts_operand(context: Context, site: symbol, operation: symbol, tensor: Tensor)
+converts_operand(context, site, operation, tensor) :-
+  operation_site(site, operation, _),
+  match("Nx\\.(to_number|to_list|to_heatmap|to_batched)", operation),
+  argument_tensor(context, site, 0, tensor),
+  1 = count : { argument_value(context, site, 0, _) }.
+
+// ══ Elixir's operators on tensors ═══════════════════════════════════
+
+// Elixir's arithmetic or a boolean operator applied to a tensor, which it
+// takes as a struct: ArithmeticError, or for `not`, `and` and `or`
+// ArgumentError and BadBooleanError. Nx overloads no operator outside a
+// `defn`.
+.decl operator_on_tensor(context: Context, site: symbol, family: symbol, operator: symbol, origin: symbol)
+operator_on_tensor(context, site, family, operator, origin) :-
+  applies_operator(site, operator, family, position),
+  family != "comparison",
+  operand_holds_tensor(context, site, position, origin).
+operator_on_tensor(context, site, "boolean", operator, origin) :-
+  raises_bad_boolean(site, operator, function, kind, source),
+  holds_tensor(context, function, kind, source, origin).
+
+// A tensor compared as Elixir compares terms, with a written number, a
+// number the rules hold, or, ordering it, another tensor: a struct sorts
+// after every number and equals none, so the answer is the same whatever
+// the tensor holds.
+.decl tensor_compared(context: Context, site: symbol, other: symbol, origin: symbol)
+tensor_compared(context, site, other, origin) :-
+  applies_operator(site, _, "comparison", position),
+  operand_holds_tensor(context, site, position, origin),
+  compared_with(context, site, position, other).
+
+// A truth test (`if`, `unless`, `&&`, `!`: a test against `false` or
+// `nil`) of the one result of an Nx comparison, logical operation or
+// reduction to a truth: a tensor is a struct, which is always truthy,
+// whatever it holds.
+.decl tensor_truth_tested(site: symbol, function: symbol, origin: symbol)
+tensor_truth_tested(site, function, origin) :-
+  tests_truth(site, function, origin),
+  predicate_call(origin).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The instruction applies an operator of the family to a value at
+// `position`: arithmetic (`fconv` takes a value into float arithmetic), a
+// boolean operator, or a comparison of terms (a `select_val` compares the
+// value at 0 with each of its choices).
+.decl applies_operator(site: symbol, operator: symbol, family: symbol, position: number)
+applies_operator(site, operator, "arithmetic", position) :-
+  flow_operand(site, _, operator, position, kind, _),
+  kind != "literal",
+  match("[-+*/]|div|rem|abs|float|trunc|round|ceil|floor|bnot|band|bor|bxor|bsl|bsr|fconv", operator).
+applies_operator(site, operator, "boolean", position) :-
+  flow_operand(site, _, operator, position, kind, _),
+  kind != "literal",
+  match("not|and|or|xor", operator).
+applies_operator(site, operator, "comparison", position) :-
+  flow_operand(site, _, operator, position, kind, _),
+  kind != "literal",
+  match("<|>|=<|>=|==|/=|=:=|=/=|min|max|is_(lt|ge|eq|ne|eq_exact|ne_exact)", operator).
+applies_operator(site, "select_val", "comparison", 0) :-
+  flow_operand(site, _, "select_val", 0, kind, _),
+  kind != "literal".
+
+// Elixir's `and` or `or` raising for a value that is not a boolean: the
+// compiler's call of `:erlang.error({:badbool, operator, value})`.
+.decl raises_bad_boolean(site: symbol, operator: symbol, function: symbol, kind: symbol, source: symbol)
+raises_bad_boolean(site, substr(atom, 1, strlen(atom) - 1), function, kind, source) :-
+  remote_call(site, function, ":erlang", "error", 1),
+  flow_argument(site, function, 0, "object", reason),
+  flow_field(function, reason, "{0}", "literal", ":badbool"),
+  flow_field(function, reason, "{1}", "literal", atom),
+  flow_field(function, reason, "{2}", kind, source).
+
+// What a tensor is compared with: a written number, a number the rules
+// hold, or, ordering it, another tensor.
+.decl compared_with(context: Context, site: symbol, position: number, other: symbol)
+compared_with(context, site, position, text) :-
+  operand_holds_tensor(context, site, position, _),
+  flow_operand(site, _, _, other_position, "literal", text),
+  other_position != position,
+  match("-?[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", text).
+compared_with(context, site, position, "a number") :-
+  operand_holds_tensor(context, site, position, _),
+  flow_operand(site, function, _, other_position, kind, source),
+  other_position != position,
+  value_of(context, function, kind, source, $Integer(_)).
+compared_with(context, site, 0, "another tensor") :-
+  operand_holds_tensor(context, site, 0, _),
+  operand_holds_tensor(context, site, 1, _),
+  applies_operator(site, operator, "comparison", 0),
+  match("<|>|=<|>=|min|max|is_(lt|ge)", operator).
+
+// A test against `false` or `nil`, as `if` and `&&` test a value's truth,
+// of the one value an Nx call, `origin`, makes.
+.decl tests_truth(site: symbol, function: symbol, origin: symbol)
+tests_truth(site, function, origin) :-
+  flow_operand(site, function, operator, position, "result", origin),
+  match("select_val|is_(eq|ne|eq_exact|ne_exact)", operator),
+  flow_operand(site, function, operator, _, "literal", literal),
+  match("false|nil", literal),
+  1 = count : { flow_operand(site, function, _, position, _, _) }.
+
+// An Nx call whose tensor of 0s and 1s code may take for a boolean: a
+// comparison, a logical operation, `all`, `any`, `all_close`, a test for
+// NaN or infinity.
+.decl predicate_call(site: symbol)
+predicate_call(site) :-
+  operation_site(site, operation, _),
+  match("Nx\\.(all|any|all_close|equal|not_equal|greater|greater_equal|less|less_equal|logical_(and|or|xor|not)|is_nan|is_infinity)", operation).
+
+// The sources the rules ask are tensors of: what operators apply to, what
+// `and` and `or` test, and what a closure handed to a trace captures.
+.decl tensor_asked(function: symbol, kind: symbol, source: symbol)
+tensor_asked(function, kind, source) :-
+  applies_operator(site, _, _, position),
+  flow_operand(site, function, _, position, kind, source).
+tensor_asked(function, kind, source) :- raises_bad_boolean(_, _, function, kind, source).
+tensor_asked(function, kind, source) :-
+  hands_closure_to_trace(_, function, closure, _),
+  flow_field(function, closure, _, kind, source),
+  kind != "literal".
+
+// A source holds a tensor in the context on every path there, and the Nx
+// call that makes it (`origin`, "" where no one call does): an Nx call's
+// result that is a tensor, and a source that is none, whose one value in
+// the context is a tensor, or which is an expression in traced code.
+.decl holds_tensor(context: Context, function: symbol, kind: symbol, source: symbol, origin: symbol)
+holds_tensor(context, function, "result", site, site) :-
+  tensor_asked(function, "result", site),
+  returns_tensor(site),
+  own_context(function, context).
+holds_tensor(context, function, kind, source, "") :-
+  tensor_asked(function, kind, source),
+  !returns_tensor(source),
+  value_of(context, function, kind, source, $Tensor(_)),
+  1 = count : { value_of(context, function, kind, source, _) }.
+holds_tensor(context, function, kind, source, "") :-
+  tensor_asked(function, kind, source),
+  !returns_tensor(source),
+  holds(function, kind, source, "expression", ""),
+  own_context(function, context).
+
+// An operand, from its one source, holds a tensor in the context.
+.decl operand_holds_tensor(context: Context, site: symbol, position: number, origin: symbol)
+operand_holds_tensor(context, site, position, origin) :-
+  flow_operand(site, function, _, position, kind, source),
+  holds_tensor(context, function, kind, source, origin),
+  1 = count : { flow_operand(site, function, _, position, _, _) }.
+
+// ══ Compiled functions ══════════════════════════════════════════════
+
+// A jitted or compiled function run in code Nx is tracing: Nx compiles
+// one function at a time, and raises.
+.decl jit_in_trace(site: symbol, function: symbol, maker: symbol)
+jit_in_trace(site, function, maker) :-
+  runs_jitted(site, function, maker),
+  runs_in_trace(function).
+
+// A compiled function called with an argument its template does not fit,
+// the one tensor the argument is in the context, both of sizes all known:
+// Nx raises, as a compiled function takes tensors of only the shapes and
+// types it was compiled for. `got` and `expected` are the two shapes.
+.decl template_misfit(context: Context, site: symbol, position: number, template: symbol, got: symbol, expected: symbol)
+template_misfit(context, site, position, template, got, expected) :-
+  compiled_template(site, position, template, expected),
+  compiled_argument(context, site, position, got),
+  got != expected.
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The call runs a jitted or compiled function the call `maker` made: it
+// calls one, or is a `jit_apply` told nothing else to do during another
+// compilation, other than a `defn`'s own, which runs its body only
+// outside one (`maker` "").
+.decl runs_jitted(site: symbol, function: symbol, maker: symbol)
+runs_jitted(site, function, maker) :-
+  flow_callee(site, function, "fun", kind, source),
+  holds(function, kind, source, "jitted", maker).
+runs_jitted(site, function, "") :-
+  remote_call(site, function, "Nx.Defn", "jit_apply", _),
+  !resolves_conflict(site),
+  !runs_own_body(site).
+
+// A `defn`'s call of `jit_apply` on its own body.
+.decl runs_own_body(site: symbol)
+runs_own_body(site) :-
+  remote_call(site, wrapper, "Nx.Defn", "jit_apply", 2),
+  fun_handed(site, wrapper, body, 0),
+  defn_wrapper(wrapper, body).
+
+// The template, and its sizes spelled, that the compiled function a call
+// runs takes at `position`: an `Nx.template` call's of sizes all known,
+// of a written list of as many templates as the call hands arguments.
+.decl compiled_template(site: symbol, position: number, template: symbol, sizes: symbol)
+compiled_template(site, position, template, sizes) :-
+  runs_jitted(site, _, maker),
+  flow_dynamic(site, _, arity),
+  compiled_argument_cell(maker, function, position, cell),
+  arity = count : { compiled_argument_cell(maker, function, _, _) },
+  flow_field(function, cell, "head", "result", template),
+  operation_site(template, "Nx.template", _),
+  result_value(_, template, $Tensor([_, axes])),
+  sizes_spelled(axes, sizes),
+  match("\\{[0-9, ]*\\}", sizes).
+
+// The sizes, all known, of the one tensor a compiled call's argument at
+// `position` is in the context.
+.decl compiled_argument(context: Context, site: symbol, position: number, sizes: symbol)
+compiled_argument(context, site, position, sizes) :-
+  compiled_template(site, position, _, _),
+  argument_value(context, site, position, $Tensor([_, axes])),
+  1 = count : { argument_value(context, site, position, _) },
+  sizes_spelled(axes, sizes),
+  match("\\{[0-9, ]*\\}", sizes).
+
+// ══ Tensors captured by a traced closure ════════════════════════════
+
+// A closure handed to a trace outside traced code that captures a tensor
+// its function computes with: Nx traces it with the tensor as a
+// constant, which only a tensor on Nx.BinaryBackend can be. Nx raises on
+// any other backend.
+.decl captured_in_trace(site: symbol, function: symbol, how: symbol, origin: symbol)
+captured_in_trace(site, function, how, origin) :-
+  hands_closure_to_trace(site, function, closure, how),
+  captures_tensor(function, closure, origin),
+  !runs_in_trace(function).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The call hands the closure `closure` to a trace.
+.decl hands_closure_to_trace(site: symbol, function: symbol, closure: symbol, how: symbol)
+hands_closure_to_trace(site, function, closure, how) :-
+  trace_call(site, function, position, how),
+  flow_argument(site, function, position, "object", closure),
+  flow_closure(closure, _).
+
+// The closure captures a tensor, which the Nx call `origin` makes, and
+// its function computes with it.
+.decl captures_tensor(function: symbol, closure: symbol, origin: symbol)
+captures_tensor(function, closure, origin) :-
+  hands_closure_to_trace(_, function, closure, _),
+  flow_field(function, closure, selector, kind, source),
+  holds_tensor(_, function, kind, source, origin),
+  computes_with_captured(closure, selector).
+
+// A closure's function hands the value it captured at `selector` to an
+// Nx call that computes a tensor.
+.decl computes_with_captured(closure: symbol, selector: symbol)
+computes_with_captured(closure, selector) :-
+  hands_closure_to_trace(_, function, closure, _),
+  flow_closure(closure, target),
+  flow_object(function, closure, "closure", captured),
+  function_def(target, _, _, arity, _),
+  flow_field(function, closure, selector, _, _),
+  selector_position(selector, index),
+  flow_argument(site, target, _, "param", to_string(arity - captured + index)),
+  returns_tensor(site).
+
+// ══ Templates computed with ═════════════════════════════════════════
+
+// A template, which describes a tensor and holds no data, computed with:
+// an operand of an Nx call that reads its data, or an argument of a
+// jitted function. Nx raises.
+.decl template_computed(site: symbol, function: symbol, position: number, template: symbol)
+template_computed(site, function, position, template) :-
+  computes(site),
+  computes_on(site, function, position, kind, source),
+  holds(function, kind, source, "template", template).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The call computes with tensors: an Nx call, a jitted function's, a
+// `jit_apply`.
+.decl computes(site: symbol)
+computes(site) :- operation_site(site, _, _).
+computes(site) :- runs_jitted(site, _, maker), maker != "".
+computes(site) :- remote_call(site, _, "Nx.Defn", "jit_apply", _).
+
+// The value at `position` that a call would compute with: a tensor
+// operand of an Nx call but one that reads only a tensor's shape, names
+// and type or gives it back, what a data read reads, an argument of a
+// call of a fun, one of the list `jit_apply` runs its function on.
+.decl computes_on(site: symbol, function: symbol, position: number, kind: symbol, source: symbol)
+computes_on(site, function, position, kind, source) :-
+  operation_site(site, operation, arity),
+  operand_slot(operation, arity, _, position),
+  !match("Nx\\.(shape|rank|size|axis_size|axis_index|names|type|byte_size|to_template|template|compatible\\?|rename|vectorize|devectorize|tensor|transpose|flatten|fill|iota|eye)", operation),
+  flow_argument(site, function, position, kind, source).
+computes_on(site, function, 0, kind, source) :-
+  reads_data(site, function),
+  flow_argument(site, function, 0, kind, source).
+computes_on(site, function, position, kind, source) :-
+  flow_dynamic(site, function, _),
+  flow_argument(site, function, position, kind, source).
+computes_on(site, function, position, kind, source) :-
+  remote_call(site, function, "Nx.Defn", "jit_apply", _),
+  compiled_argument_cell(site, function, position, cell),
+  flow_field(function, cell, "head", kind, source).
+
+// The cells of the written list a compile takes its templates in, or
+// `jit_apply` its arguments, by index.
+.decl compiled_argument_cell(site: symbol, function: symbol, index: number, cell: symbol)
+compiled_argument_cell(site, function, 0, cell) :-
+  remote_call(site, function, "Nx.Defn", name, _),
+  match("compile|jit_apply", name),
+  flow_argument(site, function, 1, "object", cell),
+  flow_object(function, cell, "list", _).
+compiled_argument_cell(site, function, index + 1, next) :-
+  compiled_argument_cell(site, function, index, cell),
+  index < 16,
+  flow_field(function, cell, "tail", "object", next),
+  flow_object(function, next, "list", _).
+
+// ══ Findings ════════════════════════════════════════════════════════
+
+// A function one of these findings is in.
+.decl reported_function(function: symbol)
+reported_function(function) :- tensor_asked(function, _, _).
+reported_function(function) :- data_read_in_trace(_, function).
+reported_function(function) :- jit_in_trace(_, function, _).
+reported_function(function) :- tensor_truth_tested(_, function, _).
+reported_function(function) :- template_computed(_, function, _, _).
+
+// The context a function is analyzed in over its own names, where a
+// finding that holds however the function is called is reported.
+.decl own_context(function: symbol, context: Context)
+own_context(function, $Canonical(function, arguments)) :-
+  reported_function(function),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments).
+
+// The findings, in the context they hold in: a data read's origin is the
+// Nx call that makes what it reads, or none.
+call_error(context, site, "data_read_in_trace", how, origin) :-
+  data_read_in_trace(site, function),
+  traced_first_as(function, how),
+  flow_argument(site, function, 0, "result", origin),
+  operation_site(origin, _, _),
+  own_context(function, context).
+call_error(context, site, "data_read_in_trace", how, "") :-
+  data_read_in_trace(site, function),
+  traced_first_as(function, how),
+  flow_argument(site, function, 0, kind, source),
+  ( kind != "result" ; !operation_site(source, _, _) ),
+  own_context(function, context).
+call_error(context, site, "jit_in_trace", how, maker) :-
+  jit_in_trace(site, function, maker),
+  traced_first_as(function, how),
+  own_context(function, context).
+call_error(context, site, "tensor_arithmetic", operator, origin) :-
+  operator_on_tensor(context, site, "arithmetic", operator, origin).
+call_error(context, site, "tensor_boolean", operator, origin) :-
+  operator_on_tensor(context, site, "boolean", operator, origin).
+call_error(context, site, "tensor_comparison", other, origin) :-
+  tensor_compared(context, site, other, origin).
+call_error(context, site, "tensor_truth", "", origin) :-
+  tensor_truth_tested(site, function, origin),
+  own_context(function, context).
+call_error(context, site, "compiled_template", cat("argument at position ", to_string(position + 1), " is not compatible with compiled function template: got ", got, ", expected ", expected), template) :-
+  template_misfit(context, site, position, template, got, expected).
+call_error(context, site, "captured_tensor", how, origin) :-
+  captured_in_trace(site, function, how, origin),
+  own_context(function, context).
+call_error(context, site, "template_computed", to_string(position), template) :-
+  template_computed(site, function, position, template),
+  own_context(function, context).
+
+// A batch size `Nx.to_batched/3` has no clause for: an integer below 1,
+// a float, an atom.
+call_error(context, site, "batch_size", text, "") :-
+  operation_site(site, "Nx.to_batched", _),
+  argument_literal(site, 1, text),
+  ( term_integer(text, 0, size), size < 1 ; term_float(text, 0) ; term_atom(text, 0, _) ),
+  site_active(context, site).
+
+violation(context, site, "scalar", cat("cannot convert tensor of shape ", spelled, " to number")) :-
+  conversion_rejected(context, site, "Nx.to_number", [nil, axes]),
+  sizes_spelled(axes, spelled).
+violation(context, site, "scalar", cat("cannot convert vectorized tensor of shape ", spelled, " to number")) :-
+  conversion_rejected(context, site, "Nx.to_number", [[name, _size, _rest], axes]),
+  name != "?",
+  sizes_spelled(axes, spelled).
+violation(context, site, "needs_axes", "cannot convert a scalar tensor to a list") :-
+  conversion_rejected(context, site, "Nx.to_list", _).
+violation(context, site, "needs_axes", "cannot show heatmap for scalar tensors") :-
+  conversion_rejected(context, site, "Nx.to_heatmap", _).
+violation(context, site, "needs_axes", "cannot batch non-vectorized scalar tensor") :-
+  conversion_rejected(context, site, "Nx.to_batched", _).
+violation(context, site, "batch", cat("cannot batch beyond original tensor: batches of ", to_string(batch), " from a leading axis of ", to_string(leading))) :-
+  batch_beyond(context, site, batch, leading).
+
+spelling_demand(axes) :- conversion_rejected(_, _, _, [_, axes]).
+spelling_demand(axes) :-
+  runs_jitted(site, _, _),
+  argument_value(_, site, _, $Tensor([_, axes])).
+spelling_demand(axes) :-
+  runs_jitted(_, _, maker),
+  compiled_argument_cell(maker, function, _, cell),
+  flow_field(function, cell, "head", "result", template),
+  result_value(_, template, $Tensor([_, axes])).

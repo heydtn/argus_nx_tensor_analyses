@@ -1,3 +1,683 @@
 // Math written out that overflows or underflows, and the sign and class facts of the Nx functions the core leaves out.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// Floating point has a narrow range: an exponential overflows to infinity
+// above about 88 in f32 and bf16 (11 in f16), and a value that keeps
+// shrinking underflows to zero. A function Nx computes stably can
+// overflow once the code writes it out: a softplus as `log1p(exp(x))`, a
+// log-sigmoid as `log(sigmoid(x))`, a logistic as `exp(x) / (1 + exp(x))`.
+// A product of fractions underflows to zero, and a uniform sample is
+// exactly its minimum now and then. These rules report such math where
+// the sign analysis lets the exponent be positive or the value reach
+// zero, and report calls Nx rejects or answers wrongly for their math: an
+// integer power with a negative exponent, a constant in a type that has
+// no such value, a comparison with NaN, a floor or ceiling of a logarithm
+// that is off by one at exact powers.
+//
+// The facts at the end fill in the sign, region and class tables for Nx
+// functions the core gives none, so that its own checks see through them:
+// a division by a `window_sum` of a mask, a reciprocal square root of a
+// `window_mean` of squares, a `weighted_mean` whose weights can all be
+// zero.
+
+// ══ Written-out math that overflows ════════════════════════════════
+
+// A softplus written out, `log1p(exp(x))` or `log(1 + exp(x))`, over an
+// exponent that can be positive: the exponential overflows to infinity,
+// and so does the result.
+.decl overflowing_softplus(context: Context, site: symbol, exponential: symbol)
+overflowing_softplus(context, site, exponential) :-
+  written_softplus(site, exponential),
+  site_active(context, site),
+  can_overflow(context, exponential).
+
+// The logistic function written out, `exp(x) / (1 + exp(x))`, over an
+// exponent that can be positive: both exponentials overflow, and infinity
+// over infinity is NaN.
+.decl overflowing_logistic(context: Context, site: symbol, exponential: symbol)
+overflowing_logistic(context, site, exponential) :-
+  written_logistic(site, exponential),
+  site_active(context, site),
+  can_overflow(context, exponential).
+
+// A logarithm of a sigmoid of a value that can be negative: far enough
+// below zero the sigmoid underflows to zero, and its logarithm is
+// negative infinity.
+.decl underflowing_log_sigmoid(context: Context, site: symbol, sigmoid: symbol)
+underflowing_log_sigmoid(context, site, sigmoid) :-
+  logarithm_of_sigmoid(site, sigmoid),
+  site_active(context, site),
+  argument_can_be_negative(context, sigmoid, 0).
+
+nonfinite(context, site, "exp_overflow", "softplus", exponential) :-
+  overflowing_softplus(context, site, exponential).
+nonfinite(context, site, "exp_overflow", "logistic", exponential) :-
+  overflowing_logistic(context, site, exponential).
+nonfinite(context, site, "log_of_zero", "sigmoid", sigmoid) :-
+  underflowing_log_sigmoid(context, site, sigmoid).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The logarithm of one plus an exponential: `log1p(exp(x))`, or the
+// logarithm of an exponential plus a written number, `log(1 + exp(x))`.
+.decl written_softplus(site: symbol, exponential: symbol)
+written_softplus(site, exponential) :-
+  operation_site(site, "Nx.log1p", 1),
+  flow_argument(site, _, 0, "result", exponential),
+  operation_site(exponential, "Nx.exp", 1).
+written_softplus(site, exponential) :-
+  takes_logarithm(site, 0),
+  flow_argument(site, function, 0, "result", total),
+  plus_exponential(total, function, exponential).
+
+// An exponential over a written number plus the same exponential, or one
+// of the same values.
+.decl written_logistic(site: symbol, exponential: symbol)
+written_logistic(site, exponential) :-
+  divides_by(site, 1),
+  flow_argument(site, function, 0, "result", dividend),
+  exponential_of(dividend, function, kind, source),
+  flow_argument(site, function, 1, "result", total),
+  plus_exponential(total, function, exponential),
+  exponential_of(exponential, function, kind, source).
+
+// A sum of an exponential and a written number: `1 + exp(x)`.
+.decl plus_exponential(total: symbol, function: symbol, exponential: symbol)
+plus_exponential(total, function, exponential) :-
+  operation_site(total, operation, 2),
+  ( operation = "Nx.add" ; operation = "Nx.Defn.Kernel.+" ),
+  flow_argument(total, function, position, "result", exponential),
+  operation_site(exponential, "Nx.exp", 1),
+  flow_argument(total, function, 1 - position, "literal", _).
+
+// An exponential whose exponent can be positive and is not shifted down
+// by its maximum: nothing keeps it from overflowing.
+.decl can_overflow(context: Context, exponential: symbol)
+can_overflow(context, exponential) :-
+  argument_can_be_positive(context, exponential, 0),
+  !shifted_by_maximum(exponential).
+
+// A logarithm of a sigmoid: `log(sigmoid(x))`.
+.decl logarithm_of_sigmoid(site: symbol, sigmoid: symbol)
+logarithm_of_sigmoid(site, sigmoid) :-
+  takes_logarithm(site, 0),
+  flow_argument(site, _, 0, "result", sigmoid),
+  operation_site(sigmoid, "Nx.sigmoid", 1).
+
+// The signs of the exponentials and sigmoids written out, which nothing
+// else may ask of.
+sign_site(context, exponential) :-
+  written_softplus(_, exponential),
+  site_active(context, exponential).
+sign_site(context, exponential) :-
+  written_logistic(_, exponential),
+  site_active(context, exponential).
+sign_site(context, sigmoid) :-
+  logarithm_of_sigmoid(_, sigmoid),
+  site_active(context, sigmoid).
+
+// ══ Products that underflow ════════════════════════════════════════
+
+// A product of fractions over many elements underflows to zero: fifty
+// values of 0.1 multiply to zero in f32. Where it can, the product can be
+// zero, whatever its elements' signs say.
+can_be_zero(context, function, "result", site, site, "product_underflow") :-
+  first_positive(context, site),
+  signed_call(context, site, function, "product"),
+  product_of_fractions(context, site),
+  long_product(context, site).
+
+// A product's operand can be a fraction strictly between -1 and 1: a
+// sigmoid, a tanh, a written fraction, a clip into the unit interval. A
+// comparison, an index, a sign or an identity matrix lies between -1 and
+// 1 only as an exact zero, which is no fraction.
+.decl product_of_fractions(context: Context, site: symbol)
+product_of_fractions(context, site) :-
+  signed_call(context, site, _, "product"),
+  argument_region(context, site, 0, "inside", _, cause),
+  known_region_cause(cause),
+  cause != "comparison", cause != "index", cause != "sign", cause != "identity".
+
+// A product over at least 20 elements, or over a size variable, which
+// can be that many: 0.01 to the 20th is already below the smallest normal
+// f32.
+.decl long_product(context: Context, site: symbol)
+long_product(context, site) :-
+  product_length(context, site, [elements, nil]),
+  elements >= 20.
+long_product(context, site) :-
+  product_length(context, site, [coefficient, [_factor, _rest]]),
+  coefficient > 0.
+
+// How many elements a product multiplies together: all of them without
+// `:axes`, each axis it reduces, a cumulative product's axis.
+.decl product_length(context: Context, site: symbol, size: Size)
+product_length(context, site, size) :-
+  signed_call(context, site, _, "product"),
+  operation_site(site, "Nx.product", _),
+  instance(context, site, [first, _, _], _),
+  option_absent(site, "axes"),
+  axes_product(first, size).
+product_length(context, site, size) :-
+  signed_call(context, site, _, "product"),
+  operation_site(site, "Nx.product", _),
+  instance(context, site, [first, _, _], _),
+  reduction_axes(site, first, mask, _),
+  axes_axis(first, axis, size, _),
+  (mask band (1 bshl axis)) != 0.
+product_length(context, site, size) :-
+  signed_call(context, site, _, "product"),
+  operation_site(site, "Nx.cumulative_product", _),
+  instance(context, site, [first, _, _], _),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, size, _).
+
+// ══ Random samples ═════════════════════════════════════════════════
+//
+// A uniform sample lies in [min, max), and draws exactly `min` at a rate
+// the type's precision sets: one in 2^7 per element in bf16, 2^10 in f16,
+// 2^23 in f32. An integer sample lies in [min, max - 1], and draws `min`
+// once in max - min. A sample from zero is zero now and then, and a
+// logarithm or division of it is not finite, as in hand-written
+// Box-Muller, exponential or Gumbel noise. A sample over a range has the
+// signs a sum of `min` and `max` has: negative where `min` can be,
+// positive where either end can be, zero where the range can cross zero
+// (the sum's "cancel"), and zero where `min` can be ("sample"). Normal and
+// Gumbel samples can have any sign, as a value with no sign rule does.
+//
+// A sample a sampler returns in `{sample, key}`, read out of the tuple
+// where the call is made, has the signs of what the sampler draws: over
+// a range, as the split samplers' (a negative or computed `min` can make
+// it negative); from zero by default for `uniform/1,2`; any sign for a
+// normal, Gumbel or multivariate normal sample; its tensor's for a
+// shuffle or a choice. Inside a `defn`, a call to `Nx.Random` compiles to
+// `Nx.Defn.Compiler.__remote__/4`, which these rules do not read as a
+// sampler.
+
+sign_class("Nx.Random.uniform_split", "add").
+sign_class("Nx.Random.randint_split", "add").
+operand_positions(site, 1, 2, -1) :-
+  operation_site(site, operation, _),
+  range_sampler(operation).
+
+// A sample is exactly its minimum now and then: zero where the minimum
+// can be.
+can_be_zero(context, function, "result", site, site, "sample") :-
+  argument_can_be_zero(context, site, 1, _, _),
+  sampler_call(context, site, function).
+
+// A sample read out of a sampler's `{sample, key}`: from zero by default.
+can_be_zero(context, function, "load", load, site, "sample") :-
+  sign_demand(context, function, "load", load),
+  sample_element(function, load, site),
+  samples_from_zero(site).
+can_be_positive(context, function, "load", load) :-
+  sign_demand(context, function, "load", load),
+  sample_element(function, load, site),
+  samples_from_nonnegative(site).
+
+// Over a range, or from a tensor: the signs the call's sign rule gives
+// its result, a range's as the split samplers', a shuffle's or choice's
+// its tensor's.
+can_be_negative(context, function, "load", load) :-
+  can_be_negative(context, function, "result", site),
+  sample_element(function, load, site),
+  sampled_by_rule(site),
+  sign_demand(context, function, "load", load).
+can_be_positive(context, function, "load", load) :-
+  can_be_positive(context, function, "result", site),
+  sample_element(function, load, site),
+  sampled_by_rule(site),
+  sign_demand(context, function, "load", load).
+can_be_zero(context, function, "load", load, origin, cause) :-
+  can_be_zero(context, function, "result", site, origin, cause),
+  sample_element(function, load, site),
+  sampled_by_rule(site),
+  sign_demand(context, function, "load", load).
+
+// Normal, Gumbel and multivariate normal samples: either sign.
+can_be_negative(context, function, "load", load) :-
+  sign_demand(context, function, "load", load),
+  sample_element(function, load, site),
+  either_sign_sampler(site).
+can_be_positive(context, function, "load", load) :-
+  sign_demand(context, function, "load", load),
+  sample_element(function, load, site),
+  either_sign_sampler(site).
+
+// A sample's signs are its sampler's: asked of the call where the sample
+// is asked of.
+sign_demand(context, function, "result", site) :-
+  sign_demand(context, function, "load", load),
+  sample_element(function, load, site),
+  sampled_by_rule(site).
+
+// A sampler whose draw a sign rule describes: over a range, or from a
+// tensor.
+.decl sampled_by_rule(site: symbol)
+sampled_by_rule(site) :-
+  operation_site(site, operation, arity),
+  tuple_sampler(operation),
+  arity >= 3.
+sampled_by_rule(site) :-
+  operation_site(site, operation, _),
+  tensor_sampler(operation).
+
+signed_load(function, load) :- sample_element(function, load, _).
+
+// A tuple sampler over a range `[min, max)`, its second and third
+// arguments, draws as the split samplers do; a shuffle or choice draws
+// from its tensor, its second argument.
+sign_rule(site, "add") :-
+  operation_site(site, operation, arity),
+  tuple_sampler(operation),
+  arity >= 3.
+operand_positions(site, 1, 2, -1) :-
+  operation_site(site, operation, arity),
+  tuple_sampler(operation),
+  arity >= 3.
+sign_rule(site, "preserve") :-
+  operation_site(site, operation, _),
+  tensor_sampler(operation).
+operand_positions(site, 1, -1, -1) :-
+  operation_site(site, operation, _),
+  tensor_sampler(operation).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The samplers over a range `[min, max)` handed as their second and third
+// arguments, which return the sample itself.
+.decl range_sampler(operation: symbol)
+range_sampler("Nx.Random.uniform_split"). range_sampler("Nx.Random.randint_split").
+
+// A range sampler's result whose signs are asked.
+.decl sampler_call(context: Context, site: symbol, function: symbol)
+sampler_call(context, site, function) :-
+  signed_call(context, site, function, "add"),
+  operation_site(site, operation, _),
+  range_sampler(operation).
+
+// The samplers that return `{sample, key}`, from a `min` handed as their
+// second argument where they take one.
+.decl tuple_sampler(operation: symbol)
+tuple_sampler("Nx.Random.uniform"). tuple_sampler("Nx.Random.randint").
+
+// The samplers of either sign, and those that draw a tensor's elements
+// (its second argument), which return `{sample, key}` too.
+.decl either_sign_sampler(site: symbol)
+either_sign_sampler(site) :-
+  operation_site(site, operation, _),
+  match("Nx\\.Random\\.(normal|gumbel|multivariate_normal)", operation).
+
+.decl tensor_sampler(operation: symbol)
+tensor_sampler("Nx.Random.shuffle"). tensor_sampler("Nx.Random.choice").
+
+// The sample a sampler returns in `{sample, key}`, as the function that
+// calls it reads it out of the tuple.
+.decl sample_element(function: symbol, load: symbol, site: symbol)
+sample_element(function, load, site) :-
+  flow_load(function, load, "{0}", "result", site),
+  operation_site(site, operation, _),
+  sample_tuple_sampler(operation).
+
+.decl sample_tuple_sampler(operation: symbol)
+sample_tuple_sampler(operation) :- tuple_sampler(operation).
+sample_tuple_sampler(operation) :- tensor_sampler(operation).
+sample_tuple_sampler("Nx.Random.normal"). sample_tuple_sampler("Nx.Random.gumbel").
+sample_tuple_sampler("Nx.Random.multivariate_normal").
+
+// A tuple sampler whose minimum is zero, written or by default: a uniform
+// sample from `uniform/1` or `uniform/2`, which take a key and options.
+.decl samples_from_zero(site: symbol)
+samples_from_zero(site) :-
+  operation_site(site, "Nx.Random.uniform", arity),
+  arity <= 2.
+samples_from_zero(site) :-
+  operation_site(site, operation, arity),
+  tuple_sampler(operation),
+  arity >= 3,
+  flow_argument(site, _, 1, "literal", text),
+  written_zero(text).
+
+// A tuple sampler whose minimum cannot be negative: its sample is
+// positive but at the minimum.
+.decl samples_from_nonnegative(site: symbol)
+samples_from_nonnegative(site) :- samples_from_zero(site).
+samples_from_nonnegative(site) :-
+  operation_site(site, operation, arity),
+  tuple_sampler(operation),
+  arity >= 3,
+  flow_argument(site, _, 1, "literal", text),
+  positive_literal(text).
+
+// A sample is a float, or an integer for randint, unless the sampler is
+// given a type.
+type_class("Nx.Random.uniform_split", "typed"). default_class("Nx.Random.uniform_split", "float").
+type_class("Nx.Random.normal_split", "typed"). default_class("Nx.Random.normal_split", "float").
+type_class("Nx.Random.gumbel_split", "typed"). default_class("Nx.Random.gumbel_split", "float").
+type_class("Nx.Random.randint_split", "typed"). default_class("Nx.Random.randint_split", "integer").
+
+// ══ Logarithms to a base ═══════════════════════════════════════════
+
+// `Nx.log/2` is the logarithm of its first operand over the logarithm of
+// its base: a logarithm of zero, as `Nx.log/1` is.
+takes_logarithm(site, 0) :- logarithm_with_base(site).
+
+// A logarithm to a base the code's math can make exactly 1: the
+// logarithm of the base is zero, and the quotient an infinity or NaN.
+// Nx raises for a base that is the number 1.
+.decl logarithm_to_base_one(context: Context, site: symbol, origin: symbol, cause: symbol)
+logarithm_to_base_one(context, site, origin, cause) :-
+  logarithm_with_base(site),
+  argument_region(context, site, 1, "one", origin, cause),
+  known_region_cause(cause).
+
+nonfinite(context, site, "log_base_one", cause, origin) :-
+  logarithm_to_base_one(context, site, origin, cause).
+
+// A logarithm to a base the code hands, `Nx.log/2`.
+.decl logarithm_with_base(site: symbol)
+logarithm_with_base(site) :- operation_site(site, "Nx.log", 2).
+
+// ══ A log-sum-exp's scaling factor ═════════════════════════════════
+
+// A log-sum-exp whose `:exp_scaling_factor` cannot be negative but can be
+// zero everywhere it sums, as a mask that selects nothing is: the sum is
+// zero, and its logarithm negative infinity.
+.decl zero_scaled_exponentials(context: Context, site: symbol, origin: symbol, cause: symbol)
+zero_scaled_exponentials(context, site, origin, cause) :-
+  scaling_factor(site, function, kind, source),
+  site_active(context, site),
+  can_be_zero(context, function, kind, source, origin, cause),
+  !can_be_negative(context, function, kind, source),
+  cause != "input",
+  !partial_zero(cause).
+
+// A log-sum-exp whose scaling factor nothing keeps positive: it can be
+// negative, and the logarithm of a negative sum is NaN, or it can be zero
+// as far as the code shows.
+.decl unchecked_scaling(context: Context, site: symbol, origin: symbol, cause: symbol)
+unchecked_scaling(context, site, "", "negative") :-
+  scaling_factor(site, function, kind, source),
+  site_active(context, site),
+  can_be_negative(context, function, kind, source),
+  !definite_site(site).
+unchecked_scaling(context, site, origin, cause) :-
+  scaling_factor(site, function, kind, source),
+  site_active(context, site),
+  can_be_zero(context, function, kind, source, origin, cause),
+  !partial_zero(cause),
+  !definite_site(site).
+
+nonfinite(context, site, "log_of_zero", cause, origin) :-
+  zero_scaled_exponentials(context, site, origin, cause).
+unchecked(context, site, "unchecked_logarithm", cause, origin) :-
+  unchecked_scaling(context, site, origin, cause).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The value a log-sum-exp scales its exponentials by: its
+// `:exp_scaling_factor`, in options the call builds.
+.decl scaling_factor(site: symbol, function: symbol, kind: symbol, source: symbol)
+scaling_factor(site, function, kind, source) :-
+  operation_site(site, "Nx.logsumexp", 2),
+  option_pair(site, "exp_scaling_factor", kind, source),
+  site_function(site, function).
+
+sign_demand(context, function, kind, source) :-
+  scaling_factor(site, function, kind, source),
+  site_active(context, site).
+
+// ══ Calls Nx answers wrongly or rejects for their math ═════════════
+
+// A comparison with NaN, which NaN fails whatever the other operand is:
+// an equality is always 0, and an inequality always 1.
+.decl compares_with_nan(site: symbol, relation: symbol, origin: symbol)
+compares_with_nan(site, relation, origin) :-
+  compares(site, relation),
+  nan_operand(site, origin).
+
+// An integer power whose exponent can be negative, which has no integer
+// value: Nx's binary backend raises, EXLA and EMLX on the GPU give 0, and
+// EMLX on the CPU hangs.
+.decl negative_integer_power(context: Context, site: symbol)
+negative_integer_power(context, site) :-
+  integer_power(context, site),
+  argument_can_be_negative(context, site, 1).
+
+// A constant made in a type that has no such value: NaN or an infinity in
+// an integer or complex type, pi or epsilon in anything but a float, the
+// largest or smallest value in a complex type, the imaginary unit in
+// anything but a complex type. Nx raises.
+.decl constant_without_type(context: Context, site: symbol, name: symbol)
+constant_without_type(context, site, name) :-
+  makes_constant(site, constant),
+  given_type(context, site, name, class),
+  constant_lacks(constant, class).
+
+// A floor, ceiling or conversion to integers of a logarithm to base 2 or
+// 10: the logarithm of an exact power rounds just below or above the
+// whole number, and the whole number taken is off by one there.
+.decl rounded_logarithm(site: symbol, rounding: symbol, logarithm: symbol)
+rounded_logarithm(site, rounding, logarithm) :-
+  rounds_to_integer(site, rounding),
+  rounds_logarithm_to_base(site, logarithm).
+
+call_error(context, site, "nan_comparison", relation, origin) :-
+  compares_with_nan(site, relation, origin),
+  site_active(context, site).
+call_error(context, site, "integer_negative_power", "integer", "") :-
+  negative_integer_power(context, site).
+call_error(context, site, "constant_type", name, "") :-
+  constant_without_type(context, site, name).
+call_error(context, site, "rounded_logarithm", rounding, logarithm) :-
+  rounded_logarithm(site, rounding, logarithm),
+  site_active(context, site).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A comparison, by the relation of its first operand to its second.
+.decl compares(site: symbol, relation: symbol)
+compares(site, relation) :-
+  operation_site(site, operation, 2),
+  comparison_relation(operation, relation, _).
+
+// An operand of a comparison that is NaN, and the call that makes it (""
+// for `:nan` written as the operand).
+.decl nan_operand(site: symbol, origin: symbol)
+nan_operand(site, origin) :-
+  compares(site, _),
+  flow_argument(site, _, _, kind, source),
+  not_a_number(kind, source, origin).
+
+// A value that is NaN: `Nx.Constants.nan`, a tensor of `:nan`, or `:nan`
+// written as an operand.
+.decl not_a_number(kind: symbol, source: symbol, origin: symbol)
+not_a_number("result", site, site) :- remote_call(site, _, "Nx.Constants", "nan", _).
+not_a_number("result", site, site) :-
+  operation_site(site, operation, arity),
+  tensor_constructor(operation, arity),
+  flow_argument(site, _, 0, "literal", ":nan").
+not_a_number("literal", ":nan", "").
+
+// A power whose base and exponent can both be integers, which makes it an
+// integer power.
+.decl integer_power(context: Context, site: symbol)
+integer_power(context, site) :-
+  sign_rule(site, "power"),
+  argument_class(context, site, 0, "integer", _),
+  argument_class(context, site, 1, "integer", _).
+
+// A power whose exponent the code computes, whose operands' signs and
+// classes are asked here. A written exponent is a number the code sees,
+// and a negative one a division (`divides_by`), whose signs are asked.
+.decl computed_power(site: symbol)
+computed_power(site) :-
+  sign_rule(site, "power"),
+  flow_argument(site, _, 1, kind, _),
+  kind != "literal".
+
+sign_site(context, site) :- computed_power(site), site_active(context, site).
+
+// The constants a class of types has no value of.
+.decl constant_lacks(constant: symbol, class: symbol)
+constant_lacks(constant, "integer") :- float_constant(constant).
+constant_lacks(constant, "complex") :- float_constant(constant).
+constant_lacks("max_finite", "complex"). constant_lacks("min_finite", "complex").
+constant_lacks("max", "complex"). constant_lacks("min", "complex").
+constant_lacks("i", "integer"). constant_lacks("i", "float").
+
+// The constants only floats have.
+.decl float_constant(constant: symbol)
+float_constant("nan"). float_constant("infinity"). float_constant("neg_infinity").
+float_constant("epsilon"). float_constant("smallest_positive_normal"). float_constant("pi").
+float_constant("e"). float_constant("euler_gamma").
+
+// A call of `Nx.Constants`, by the constant it makes.
+.decl makes_constant(site: symbol, constant: symbol)
+makes_constant(site, constant) :- remote_call(site, _, "Nx.Constants", constant, _).
+
+// The type of each constant given one, which some types lack.
+type_asked(context, site) :-
+  makes_constant(site, constant),
+  constant_lacks(constant, _),
+  type_position(site, _),
+  site_active(context, site).
+
+// A call that takes a whole number of its operand, by how: a floor, a
+// ceiling, or a conversion to an integer type written at the call, which
+// truncates.
+.decl rounds_to_integer(site: symbol, rounding: symbol)
+rounds_to_integer(site, "floor") :- operation_site(site, "Nx.floor", 1).
+rounds_to_integer(site, "ceil") :- operation_site(site, "Nx.ceil", 1).
+rounds_to_integer(site, "truncation") :-
+  operation_site(site, "Nx.as_type", 2),
+  flow_argument(site, _, 1, "literal", spelled),
+  type_spelling(spelled, _, "integer").
+
+// A whole number taken of a logarithm to a base.
+.decl rounds_logarithm_to_base(site: symbol, logarithm: symbol)
+rounds_logarithm_to_base(site, logarithm) :-
+  rounds_to_integer(site, _),
+  flow_argument(site, function, 0, "result", logarithm),
+  logarithm_to_base(logarithm, function).
+
+// A logarithm to a base: `log2`, `log10`, `Nx.log/2`, or a natural
+// logarithm over a written number or another natural logarithm.
+.decl logarithm_to_base(site: symbol, function: symbol)
+logarithm_to_base(site, function) :-
+  operation_site(site, operation, 1),
+  ( operation = "Nx.log2" ; operation = "Nx.log10" ),
+  site_function(site, function).
+logarithm_to_base(site, function) :-
+  logarithm_with_base(site),
+  site_function(site, function).
+logarithm_to_base(site, function) :-
+  divides_by(site, 1),
+  flow_argument(site, function, 0, "result", logarithm),
+  natural_logarithm(logarithm),
+  flow_argument(site, function, 1, "literal", _).
+logarithm_to_base(site, function) :-
+  divides_by(site, 1),
+  flow_argument(site, function, 0, "result", logarithm),
+  natural_logarithm(logarithm),
+  flow_argument(site, function, 1, "result", base),
+  natural_logarithm(base).
+
+// A natural logarithm: Nx's, or Erlang's of a number.
+.decl natural_logarithm(site: symbol)
+natural_logarithm(site) :- operation_site(site, "Nx.log", 1).
+natural_logarithm(site) :- remote_call(site, _, ":math", "log", 1).
+
+// ══ Sign, region and class facts ═══════════════════════════════════
+//
+// A window's sum, product, maximum and minimum are a sum's, a product's
+// and an element's; a window's mean has its elements' signs, and lies
+// among them. A median or a mode is one of its elements, or a mean of
+// two. A difference of neighbors is a difference of the operand with
+// itself. A weighted mean is a sum of products over a sum of weights,
+// with a quotient's signs. The type of `window_mean`, `median` and
+// `weighted_mean` is not their operand's (a mean of integers is a float,
+// and so is the median of an even number of them), so their sign classes
+// are ones that set no type, and they take a type class of their own.
+
+sign_class("Nx.window_sum", "sum").
+sign_class("Nx.window_product", "product").
+moves_elements("window_max"). moves_elements("window_min"). moves_elements("mode").
+sign_class("Nx.window_mean", "preserve"). unit_class("Nx.window_mean", "move").
+type_class("Nx.window_mean", "float").
+sign_class("Nx.median", "preserve"). unit_class("Nx.median", "move").
+type_class("Nx.median", "median").
+sign_class("Nx.diff", "subtract").
+operand_positions(site, 0, 0, -1) :- operation_site(site, "Nx.diff", _).
+sign_class("Nx.weighted_mean", "divide"). type_class("Nx.weighted_mean", "float").
+
+// `Nx.weighted_mean/3` divides by the sum of its weights, which is zero
+// where they all are.
+divisor_position("Nx.weighted_mean", 2, 1). divisor_position("Nx.weighted_mean", 3, 1).
+
+// Floats whatever the operands: a covariance is a mean, a convolution is
+// computed in floating point, an inverse real transform is real.
+type_class("Nx.covariance", "float"). type_class("Nx.conv", "float"). type_class("Nx.irfft", "float").
+
+// `linspace` makes f32 unless given a type, and `argsort` s32 unless
+// given one.
+type_class("Nx.linspace", "typed"). default_class("Nx.linspace", "float").
+type_class("Nx.argsort", "typed"). default_class("Nx.argsort", "integer").
+
+// `median`: a float or complex operand's class, and an integer operand's
+// where the median takes an odd number of elements, the middle one of
+// which it picks, and a float where it takes an even number, the middle
+// two of which it averages.
+value_class(context, function, "result", site, class, origin) :-
+  argument_class(context, site, 0, class, origin),
+  type_call(context, site, function, "median"),
+  class != "integer".
+value_class(context, function, "result", site, "integer", origin) :-
+  argument_class(context, site, 0, "integer", origin),
+  type_call(context, site, function, "median"),
+  median_parity(context, site, parity),
+  parity != "even".
+value_class(context, function, "result", site, "float", site) :-
+  argument_class(context, site, 0, "integer", _),
+  type_call(context, site, function, "median"),
+  median_parity(context, site, parity),
+  parity != "odd".
+
+// How many elements a median takes the middle of: the size of its
+// `:axis`, or of the whole tensor.
+.decl median_length(context: Context, site: symbol, size: Size)
+median_length(context, site, size) :-
+  operation_site(site, "Nx.median", _),
+  instance(context, site, [first, _, _], _),
+  option(site, "axis", text, start),
+  term_axis(first, text, start, axis),
+  axes_axis(first, axis, size, _).
+median_length(context, site, size) :-
+  operation_site(site, "Nx.median", _),
+  instance(context, site, [first, _, _], _),
+  option_absent(site, "axis"),
+  axes_product(first, size).
+
+.decl median_counted(context: Context, site: symbol)
+median_counted(context, site) :- median_length(context, site, _).
+
+// Whether that number is "odd", "even", or "either": a size variable
+// times an odd number, or a size not known.
+.decl median_parity(context: Context, site: symbol, parity: symbol)
+median_parity(context, site, "odd") :-
+  median_length(context, site, [elements, nil]),
+  elements > 0,
+  elements % 2 = 1.
+median_parity(context, site, "even") :-
+  median_length(context, site, [coefficient, _]),
+  coefficient > 0,
+  coefficient % 2 = 0.
+median_parity(context, site, "either") :-
+  median_length(context, site, [coefficient, [_, _]]),
+  coefficient % 2 = 1.
+median_parity(context, site, "either") :- median_length(context, site, [0, nil]).
+median_parity(context, site, "either") :-
+  type_call(context, site, _, "median"),
+  !median_counted(context, site).

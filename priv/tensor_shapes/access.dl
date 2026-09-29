@@ -1,3 +1,695 @@
 // Tensor access (`t[i]`), and tuples of tensors handed where a tensor is expected.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// `tensor[key]` compiles to `Access.get(tensor, key)`, which `Nx.Tensor`'s
+// `fetch/2` answers with a slice: an integer or a scalar tensor removes the
+// axis it indexes, a range keeps it at the range's length, a list indexes
+// the axes in order and a keyword list the axes it names, and a tensor with
+// axes takes from the first axis as `Nx.take/2` does. An integer index and
+// a range's bounds count from the end where negative. The rules give the
+// slice its shape, and report the keys Nx rejects.
+
+// ══ Findings ════════════════════════════════════════════════════════
+
+// A scalar tensor indexed: it has no axis to index.
+call_error(context, site, "access_scalar", "cannot use the tensor[index] syntax on scalar tensor", "") :-
+  indexed_tensor(context, site, [_, nil]).
+
+// An index, or a range's bound, past either end of the axis it indexes, as
+// Nx checks them: the first bound, then the last. An index within an axis
+// of `extent` lies in [-extent, extent).
+call_error(context, site, "access_out_of_bounds", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  axis_entry(key, axes, axis, _, index, _, step),
+  step > 0,
+  axis_extent(axes, axis, extent),
+  extent > 0,
+  max(index + 1 - extent, 0 - extent - index) > 0,
+  sizes_spelled(axes, spelled),
+  detail = cat("index ", to_string(index), " is out of bounds for axis ", to_string(axis), " in shape ", spelled).
+call_error(context, site, "access_out_of_bounds", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  axis_entry(key, axes, axis, _, first, index, step),
+  step > 0,
+  axis_extent(axes, axis, extent),
+  extent > 0,
+  max(first + 1 - extent, 0 - extent - first) <= 0,
+  max(index + 1 - extent, 0 - extent - index) > 0,
+  sizes_spelled(axes, spelled),
+  detail = cat("index ", to_string(index), " is out of bounds for axis ", to_string(axis), " in shape ", spelled).
+spelling_demand(axes) :- indexed_tensor(_, _, [_, axes]).
+
+// A range with a negative step, which Nx rejects before it reads the
+// bounds (and, for a step of -1, suggests the step of 1 meant).
+call_error(context, site, "access_negative_step", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  axis_entry(key, axes, _, "span", first, last, step),
+  step < 0,
+  detail = cat("range step must be positive, got range: ", to_string(first), "..", to_string(last), "//", to_string(step)).
+
+// A range that holds no index of its axis, its bounds as Nx counts them
+// from the start: where the axis's size is known, or both bounds already
+// count from the start.
+call_error(context, site, "access_empty_range", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  axis_entry(key, axes, axis, "span", first, last, step),
+  step > 0,
+  axis_extent(axes, axis, extent),
+  extent > 0,
+  max(first + 1 - extent, 0 - extent - first) <= 0,
+  max(last + 1 - extent, 0 - extent - last) <= 0,
+  start = (first + extent) % max(extent, 1),
+  stop = (last + extent) % max(extent, 1),
+  stop < start,
+  detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(start), "..", to_string(stop), "//", to_string(step)).
+call_error(context, site, "access_empty_range", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  axis_entry(key, axes, axis, "span", first, last, step),
+  step > 0,
+  last >= 0,
+  last < first,
+  axis_extent(axes, axis, 0),
+  detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(first), "..", to_string(last), "//", to_string(step)).
+
+// A list of more indices than the tensor has axes.
+call_error(context, site, "access_too_many_indices", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  key_entry(key, 0, "", _),
+  key_length(key, length),
+  axes_rank(axes, rank),
+  rank > 0,
+  length > rank,
+  sizes_spelled(axes, spelled),
+  detail = cat("unknown or duplicate axis ", to_string(length - 1), " found when slicing shape ", spelled).
+
+// A keyword list naming one axis twice.
+call_error(context, site, "access_duplicate_name", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  entry_axis(key, axes, slot, axis),
+  entry_axis(key, axes, other, axis),
+  slot < other,
+  sizes_spelled(axes, spelled),
+  detail = cat("unknown or duplicate axis ", to_string(axis), " found when slicing shape ", spelled).
+
+// A keyword list naming an axis the tensor does not have.
+call_error(context, site, "access_unknown_name", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  key_entry(key, _, name, _),
+  name != "",
+  !axes_axis(axes, _, _, name),
+  names_spelled(axes, names),
+  detail = cat("tensor does not have name ", name, ". The tensor names are: ", names).
+
+// A float the code writes as the key, or as the index of an axis in a
+// list.
+call_error(context, site, "access_float_index", detail, "") :-
+  tensor_indexed_by(context, site, _, $Term(text, start)),
+  entry_index($Term(text, start), "float", _, _, _),
+  term_spelling(text, start, spelled),
+  detail = cat("tensor[slice] expects slice to be an integer, a scalar tensor, a range, or a list or keyword list of them. Got ", spelled).
+call_error(context, site, "access_float_index", detail, "") :-
+  tensor_indexed_by(context, site, axes, key),
+  entry_axis(key, axes, slot, _),
+  key_entry(key, slot, _, $Term(text, start)),
+  key != $Term(text, start),
+  term_float(text, start),
+  term_spelling(text, start, spelled),
+  detail = cat("slicing a tensor on an axis requires an integer, a scalar tensor or a range, got: ", spelled).
+
+// A tensor key that is an integer tensor on no path in some context: a
+// scalar Nx slices at, or indices it takes. `origin` is the call that
+// makes it a float or complex tensor.
+call_error(context, site, "access_float_index_tensor", detail, origin) :-
+  indexed_tensor(context, site, _),
+  argument_value(context, site, 1, $Tensor([_, nil])),
+  argument_class(context, site, 1, class, origin),
+  class != "integer",
+  !argument_class(context, site, 1, "integer", _),
+  detail = cat("index must be integer type, got a ", class, " type for axis 0").
+call_error(context, site, "access_float_index_tensor", detail, origin) :-
+  indexed_tensor(context, site, _),
+  argument_value(context, site, 1, $Tensor([_, [_, _, _]])),
+  argument_class(context, site, 1, class, origin),
+  class != "integer",
+  !argument_class(context, site, 1, "integer", _),
+  detail = cat("indices must be an integer tensor, got a ", class, " type").
+
+// A tensor with axes where a list indexes one axis.
+call_error(context, site, "access_tensor_in_list", "tensor must be a scalar when accessing a list/keyword of dimensions", "") :-
+  tensor_indexed_by(context, site, axes, key),
+  axis_entry(key, axes, _, "tensor", _, _, _).
+
+// `put_in/2`, `update_in/2`, `get_and_update_in/2` and `pop_in/1` on a
+// tensor's index, and the functions they compile to: `Nx.Tensor`
+// implements neither `get_and_update/3` nor `pop/2`.
+call_error(context, site, "access_update", "Access.get_and_update/3 is not supported. Please use Nx.put_slice/3 instead", "") :-
+  site_active(context, site),
+  remote_call(site, function, module, name, 3),
+  match("Access\\.get_and_update|Kernel\\.(put_in|update_in|get_and_update_in)", cat(module, ".", name)),
+  flow_argument(site, function, 0, kind, source),
+  value_of(context, function, kind, source, $Tensor(_)).
+call_error(context, site, "access_update", "Access.pop/2 is not yet supported by Nx.Tensor", "") :-
+  site_active(context, site),
+  remote_call(site, function, module, name, 2),
+  match("Access\\.pop|Kernel\\.pop_in", cat(module, ".", name)),
+  flow_argument(site, function, 0, kind, source),
+  value_of(context, function, kind, source, $Tensor(_)).
+
+// A scalar tensor the code writes as the key (`t[Nx.tensor(7)]`) that
+// does not fit the first axis: Nx slices at a tensor index clamped into
+// the axis, so it reads the nearest end (`read`), where an integer index
+// would raise or count from the end.
+call_error(context, site, "access_index_clamped", detail, "") :-
+  tensor_indexed_by(context, site, axes, _),
+  flow_argument(site, _, 1, "result", made),
+  operation_site(made, "Nx.tensor", _),
+  argument_literal(made, 0, text),
+  term_integer(text, 0, value),
+  axis_extent(axes, 0, extent),
+  extent > 0,
+  read = min(max(value, 0), extent - 1),
+  read != value,
+  detail = cat("a scalar tensor index of ", to_string(value), " into axis 0 of size ", to_string(extent), " reads index ", to_string(read)).
+
+// A tuple of tensors handed where an Nx call takes a tensor: Nx converts
+// the argument with `Nx.to_tensor/1`, which rejects a collection of
+// tensors, or no clause of the call takes a tuple. `detail` is the
+// argument's position; `origin` the Nx call that returns the tuple, ""
+// where the code builds it or it comes through a call of the program.
+call_error(context, site, "tuple_as_tensor", to_string(position), origin) :-
+  takes_tensor(site, position),
+  site_active(context, site),
+  flow_argument(site, _, position, "result", origin),
+  makes_tuple(origin).
+call_error(context, site, "tuple_as_tensor", to_string(position), "") :-
+  takes_tensor(site, position),
+  site_active(context, site),
+  flow_argument(site, function, position, kind, source),
+  !makes_tuple(source),
+  value_of(context, function, kind, source, $Uniform(_)).
+call_error(context, site, "tuple_as_tensor", to_string(position), "") :-
+  takes_tensor(site, position),
+  site_active(context, site),
+  flow_argument(site, function, position, kind, source),
+  value_of(context, function, kind, source, $Object(object_context, tuple, mapping)),
+  flow_object(_, tuple, "tuple", _),
+  field_value($Object(object_context, tuple, mapping), _, $Tensor(_)).
+
+// `Nx.tensor/2` handed a list with a tensor in it, or in a list it holds:
+// it builds tensors from numbers.
+call_error(context, site, "tensors_in_tensor_data", "invalid value given to Nx.tensor/1", "") :-
+  argument_value(context, site, 0, root),
+  operation_site(site, "Nx.tensor", _),
+  data_cell(root, cell),
+  field_value(cell, "head", $Tensor(_)).
+
+// `Nx.squeeze/1` with no `:axes` over an axis whose size the code reads
+// from an input's shape: it removes the axis wherever that size is 1, so
+// the result's rank depends on the input (a batch or a sequence of one).
+call_error(context, site, "squeeze_input_size", detail, "") :-
+  site_instance(site, "Nx.squeeze", _, [first, second, third]),
+  option_absent(site, "axes"),
+  instance(context, site, [first, second, third], _),
+  axes_axis(first, axis, [1, [factor, nil]], _),
+  contains("#", factor),
+  size_spelled([1, [factor, nil]], spelled),
+  detail = cat("axis ", to_string(axis), " has size ", spelled).
+size_demand([1, [factor, nil]]) :-
+  site_instance(site, "Nx.squeeze", _, [first, _, _]),
+  option_absent(site, "axes"),
+  axes_axis(first, _, [1, [factor, nil]], _),
+  contains("#", factor).
+
+// ══ Tensor access ═══════════════════════════════════════════════════
+
+// A tensor of known axes indexed in a context: `Access.get/2,3`, which
+// `tensor[key]` compiles to, handed it.
+.decl indexed_tensor(context: Context, site: symbol, tensor: Tensor)
+indexed_tensor(context, site, tensor) :-
+  argument_value(context, site, 0, $Tensor(tensor)),
+  remote_call(site, _, "Access", "get", _).
+
+// A key a tensor is indexed with: the value `Access.get/2` is handed; a
+// range the code writes, as the term of its spelling, which the value flow
+// holds as a value not known; a range a `defn` makes of known bounds, as
+// the term of the spelling it would have; and a range `Range.new/2,3`
+// makes, as `$Term("Range.new", -1)`, whose bounds are not known.
+.decl access_key(context: Context, site: symbol, key: Value)
+access_key(context, site, key) :-
+  indexed_tensor(context, site, _),
+  argument_value(context, site, 1, key),
+  key != $Opaque("").
+.plan 1:(2,1)
+access_key(context, site, $Term(text, 0)) :-
+  indexed_tensor(context, site, _),
+  flow_argument(site, _, 1, "literal", text),
+  range_written(text, 0, _).
+access_key(context, site, $Term(text, 0)) :-
+  indexed_tensor(context, site, _),
+  flow_argument(site, _, 1, "result", made),
+  made_range(context, made, first, last, step),
+  range_spelled(text, first, last, step).
+.plan 1:(3,1,2,4), 2:(4,3,1,2)
+access_key(context, site, $Term("Range.new", -1)) :-
+  indexed_tensor(context, site, _),
+  flow_argument(site, _, 1, "result", made),
+  remote_call(made, _, "Range", "new", _).
+
+// The axes of a tensor, and a key it is indexed with.
+.decl tensor_indexed_by(context: Context, site: symbol, axes: Axes, key: Value)
+tensor_indexed_by(context, site, axes, key) :-
+  indexed_tensor(context, site, [_, axes]),
+  access_key(context, site, key).
+.plan 1:(2,1)
+axes_needed(axes) :- indexed_tensor(_, _, [_, axes]).
+
+// A key not known finds a value not known in a tensor too, but where it is
+// a range the code writes or a call makes (a literal's spelling is never a
+// call).
+looked_up(context, site, $Opaque("")) :-
+  indexed_tensor(context, site, _),
+  flow_argument(site, function, 1, kind, source),
+  value_of(context, function, kind, source, $Opaque(_)),
+  !range_written(source, 0, _),
+  !makes_range(source).
+.plan 1:(3,2,1)
+
+// A call that makes a range: `Range.new/2,3`, or, in a `defn`,
+// `Nx.Defn.Kernel.../0,2` and `Nx.Defn.Kernel...///3`.
+.decl makes_range(site: symbol)
+makes_range(site) :- remote_call(site, _, "Range", "new", _).
+makes_range(site) :- remote_call(site, _, "Nx.Defn.Kernel", name, _), match("\\.\\.(//)?", name).
+
+// A range a `defn` makes, of known bounds: `..` is the whole axis, and
+// `first..last` steps down where `first` is above `last`, as
+// `Range.new/2` does.
+.decl made_range(context: Context, site: symbol, first: number, last: number, step: number)
+made_range(context, site, 0, -1, 1) :-
+  site_active(context, site),
+  remote_call(site, _, "Nx.Defn.Kernel", "..", 0).
+made_range(context, site, first, last, 1) :-
+  range_bound(context, site, 0, first),
+  range_bound(context, site, 1, last),
+  remote_call(site, _, "Nx.Defn.Kernel", "..", 2),
+  first <= last.
+.plan 1:(2,1,3)
+made_range(context, site, first, last, -1) :-
+  range_bound(context, site, 0, first),
+  range_bound(context, site, 1, last),
+  remote_call(site, _, "Nx.Defn.Kernel", "..", 2),
+  first > last.
+.plan 1:(2,1,3)
+made_range(context, site, first, last, step) :-
+  range_bound(context, site, 0, first),
+  range_bound(context, site, 1, last),
+  range_bound(context, site, 2, step),
+  remote_call(site, _, "Nx.Defn.Kernel", "..//", 3).
+.plan 1:(2,1,3,4), 2:(3,1,2,4)
+
+// An integer a range call is handed.
+.decl range_bound(context: Context, site: symbol, position: number, value: number)
+range_bound(context, site, position, value) :-
+  argument_value(context, site, position, $Integer([value, nil])),
+  makes_range(site),
+  value > 0.
+range_bound(context, site, position, value) :-
+  argument_value(context, site, position, $Term(text, start)),
+  makes_range(site),
+  term_integer(text, start, value).
+
+// A range the code writes, as `Argus.Extractor.Terms.spell/1` spells it
+// (`%{__struct__: Range, first: 0, last: -1, step: 1}`), at a term of a
+// literal: the whole literal, which the term parser does not read, or a
+// term of one it does.
+.decl range_written(text: symbol, start: number, spelling: symbol)
+range_written(text, 0, text) :-
+  literal_source(_, text),
+  match("%\\{__struct__: Range, first: -?[0-9]{1,9}, last: -?[0-9]{1,9}, step: -?[0-9]{1,9}\\}", text).
+range_written(text, start, spelling) :-
+  term_spelling(text, start, spelling),
+  match("%\\{__struct__: Range, first: -?[0-9]{1,9}, last: -?[0-9]{1,9}, step: -?[0-9]{1,9}\\}", spelling).
+
+// A range's spelling, and its bounds and step: read between the marks
+// `, last: ` and `, step: ` of a range the code writes, whose first bound
+// starts at 28, and written out for a range a `defn` makes.
+.decl range_spelled(spelling: symbol, first: number, last: number, step: number)
+range_spelled(spelling, to_number(substr(spelling, 28, last_at - 28)), to_number(substr(spelling, last_at + 8, step_at - last_at - 8)), to_number(substr(spelling, step_at + 8, strlen(spelling) - step_at - 9))) :-
+  range_written(_, _, spelling),
+  last_at = range(28, strlen(spelling) - 8),
+  substr(spelling, last_at, 8) = ", last: ",
+  step_at = range(last_at + 8, strlen(spelling) - 8),
+  substr(spelling, step_at, 8) = ", step: ".
+range_spelled(cat("%{__struct__: Range, first: ", to_string(first), ", last: ", to_string(last), ", step: ", to_string(step), "}"), first, last, step) :-
+  made_range(_, _, first, last, step).
+
+// What indexes each axis a key names. `slot` is an entry's position in the
+// key: the entry indexes the axis at that position (`name` ""), or, in a
+// keyword list, the axis `name` names. A key that is an index itself
+// indexes the first axis.
+.decl key_entry(key: Value, slot: number, name: symbol, entry: Value)
+
+// How many entries a key has.
+.decl key_length(key: Value, length: number)
+
+// The values asked what index they are.
+.decl entry_demand(entry: Value)
+entry_demand(key) :- access_key(_, _, key).
+entry_demand(entry) :- key_entry(_, _, _, entry).
+
+key_entry(key, 0, "", key) :-
+  access_key(_, _, key),
+  entry_index(key, kind, _, _, _),
+  kind != "tensor".
+.plan 1:(2,1)
+key_length(key, 1) :-
+  access_key(_, _, key),
+  entry_index(key, kind, _, _, _),
+  kind != "tensor".
+.plan 1:(2,1)
+
+// A list the code writes: its elements in order, or a keyword list's
+// values by name.
+key_entry($Term(text, start), index, "", entry) :-
+  access_key(_, _, $Term(text, start)),
+  term_list(text, start),
+  term_child(text, start, index, child),
+  term_value(text, child, entry).
+key_entry($Term(text, start), index, cat(":", name), entry) :-
+  access_key(_, _, $Term(text, start)),
+  term_list(text, start),
+  element(text, start, index, pair, _),
+  keyword_pair(text, pair, name, value),
+  term_value(text, value, entry).
+key_length($Term(text, start), length) :-
+  access_key(_, _, $Term(text, start)),
+  term_list(text, start),
+  term_length(text, start, length).
+
+// A list the code builds, cell by cell, then the elements of a list the
+// code writes as the last cell's tail. A head holds a range the code
+// writes or makes as a key does.
+.decl key_cell(key: Value, slot: number, cell: Value)
+key_cell($Object(object_context, cell, mapping), 0, $Object(object_context, cell, mapping)) :-
+  access_key(_, _, $Object(object_context, cell, mapping)),
+  flow_object(_, cell, "list", _).
+key_cell(key, slot + 1, $Object(next_context, next, next_mapping)) :-
+  key_cell(key, slot, cell),
+  slot < 16,
+  field_value(cell, "tail", $Object(next_context, next, next_mapping)),
+  flow_object(_, next, "list", _).
+.plan 1:(2,1,3)
+field_demand(cell, "head") :- key_cell(_, _, cell).
+field_demand(cell, "tail") :- key_cell(_, _, cell).
+
+key_entry(key, slot, "", head) :-
+  key_cell(key, slot, cell),
+  field_value(cell, "head", head),
+  head != $Opaque("").
+.plan 1:(2,1)
+key_entry(key, slot, "", $Term(text, 0)) :-
+  key_cell(key, slot, $Object(_, cell, _)),
+  flow_field(_, cell, "head", "literal", text),
+  range_written(text, 0, _).
+key_entry(key, slot, "", $Term(text, 0)) :-
+  key_cell(key, slot, $Object(object_context, cell, _)),
+  flow_field(_, cell, "head", "result", made),
+  made_range(object_context, made, first, last, step),
+  range_spelled(text, first, last, step).
+.plan 1:(3,1,2,4), 2:(4,3,1,2)
+key_entry(key, slot, "", $Term("Range.new", -1)) :-
+  key_cell(key, slot, $Object(_, cell, _)),
+  flow_field(_, cell, "head", "result", made),
+  remote_call(made, _, "Range", "new", _).
+key_entry(key, slot + 1 + index, "", entry) :-
+  key_cell(key, slot, cell),
+  field_value(cell, "tail", $Term(text, start)),
+  term_list(text, start),
+  term_child(text, start, index, child),
+  term_value(text, child, entry).
+.plan 1:(2,1,3,4,5)
+key_length(key, slot + 1 + length) :-
+  key_cell(key, slot, cell),
+  field_value(cell, "tail", $Term(text, start)),
+  term_list(text, start),
+  term_length(text, start, length).
+.plan 1:(2,1,3,4)
+
+// The index an entry is:
+//
+//   * "point", the integer `first` (and `last`), counted from the end
+//     where negative;
+//   * "unknown_point", an integer or a scalar tensor of a value not known;
+//   * "span", the range `first..last//step`, its bounds counted from the
+//     end where negative;
+//   * "unknown_span", a range of bounds not known;
+//   * "float", a float, which Nx rejects;
+//   * "tensor", a tensor with axes, which Nx takes from where it is the key
+//     and rejects in a list.
+//
+// The kinds that name no bound give 0, which no axis is too short for.
+.decl entry_index(entry: Value, kind: symbol, first: number, last: number, step: number)
+entry_index($Integer([value, nil]), "point", value, value, 1) :-
+  entry_demand($Integer([value, nil])),
+  value > 0.
+entry_index($Integer([coefficient, factors]), "unknown_point", 0, 0, 1) :-
+  entry_demand($Integer([coefficient, factors])),
+  factors != nil.
+entry_index($Integer([0, nil]), "unknown_point", 0, 0, 1) :- entry_demand($Integer([0, nil])).
+entry_index($Term(text, start), "point", value, value, 1) :-
+  entry_demand($Term(text, start)),
+  term_integer(text, start, value).
+entry_index($Term(text, start), "float", 0, 0, 1) :-
+  entry_demand($Term(text, start)),
+  term_float(text, start).
+entry_index($Term(text, start), "span", first, last, step) :-
+  entry_demand($Term(text, start)),
+  range_written(text, start, spelling),
+  range_spelled(spelling, first, last, step).
+entry_index($Term(text, 0), "span", first, last, step) :-
+  entry_demand($Term(text, 0)),
+  range_spelled(text, first, last, step).
+entry_index($Term("Range.new", -1), "unknown_span", 0, 0, 1) :- entry_demand($Term("Range.new", -1)).
+entry_index($Tensor([nil, nil]), "unknown_point", 0, 0, 1) :- entry_demand($Tensor([nil, nil])).
+entry_index($Tensor([vectorized, [size, name, rest]]), "tensor", 0, 0, 1) :-
+  entry_demand($Tensor([vectorized, [size, name, rest]])).
+
+// The axis an entry of a key indexes.
+.decl entry_axis(key: Value, axes: Axes, slot: number, axis: number)
+entry_axis(key, axes, slot, slot) :-
+  tensor_indexed_by(_, _, axes, key),
+  key_entry(key, slot, "", _),
+  axes_rank(axes, rank),
+  slot < rank.
+.plan 1:(2,1,3), 2:(3,1,2)
+entry_axis(key, axes, slot, axis) :-
+  tensor_indexed_by(_, _, axes, key),
+  key_entry(key, slot, name, _),
+  name != "",
+  axes_axis(axes, axis, _, name).
+.plan 1:(2,1,3), 2:(3,1,2)
+
+// The axes a key's entries index, as a bit mask, each of them once.
+.decl selection_from(key: Value, axes: Axes, slot: number, mask: number)
+selection_from(key, axes, length, 0) :-
+  tensor_indexed_by(_, _, axes, key),
+  key_length(key, length).
+.plan 1:(2,1)
+selection_from(key, axes, slot, mask bor (1 bshl axis)) :-
+  selection_from(key, axes, next, mask),
+  slot = next - 1,
+  slot >= 0,
+  entry_axis(key, axes, slot, axis),
+  (mask band (1 bshl axis)) = 0.
+.plan 1:(2,1)
+
+// What indexes an axis.
+.decl axis_entry(key: Value, axes: Axes, axis: number, kind: symbol, first: number, last: number, step: number)
+axis_entry(key, axes, axis, kind, first, last, step) :-
+  entry_axis(key, axes, slot, axis),
+  key_entry(key, slot, _, entry),
+  entry_index(entry, kind, first, last, step).
+.plan 1:(2,1,3), 2:(3,2,1)
+
+// An indexed axis's size where it is known, and 0 where it is not known
+// or named by size variables.
+.decl axis_extent(axes: Axes, axis: number, extent: number)
+axis_extent(axes, axis, extent) :-
+  axis_entry(_, axes, axis, _, _, _, _),
+  axes_axis(axes, axis, [extent, nil], _).
+.plan 1:(2,1)
+axis_extent(axes, axis, 0) :-
+  axis_entry(_, axes, axis, _, _, _, _),
+  axes_axis(axes, axis, [_, [_, _]], _).
+.plan 1:(2,1)
+
+// An axis an index removes: one within its size, or not known.
+.decl axis_removed(key: Value, axes: Axes, axis: number)
+axis_removed(key, axes, axis) :- axis_entry(key, axes, axis, "unknown_point", _, _, _).
+axis_removed(key, axes, axis) :-
+  axis_entry(key, axes, axis, "point", index, _, _),
+  axis_extent(axes, axis, extent),
+  extent > 0,
+  max(index + 1 - extent, 0 - extent - index) <= 0.
+.plan 1:(2,1)
+axis_removed(key, axes, axis) :-
+  axis_entry(key, axes, axis, "point", _, _, _),
+  axis_extent(axes, axis, 0).
+.plan 1:(2,1)
+
+// An axis a range keeps, and the size it keeps it at: the indices the
+// range holds, where the axis's size is known; the whole axis for `..`;
+// the range's own length where both bounds count from the same end (their
+// exclusive or is not negative); a size not known otherwise.
+.decl axis_kept(key: Value, axes: Axes, axis: number, size: Size)
+axis_kept(key, axes, axis, [0, nil]) :- axis_entry(key, axes, axis, "unknown_span", _, _, _).
+axis_kept(key, axes, axis, [(stop - start) / max(step, 1) + 1, nil]) :-
+  axis_entry(key, axes, axis, "span", first, last, step),
+  step > 0,
+  axis_extent(axes, axis, extent),
+  extent > 0,
+  max(first + 1 - extent, 0 - extent - first) <= 0,
+  max(last + 1 - extent, 0 - extent - last) <= 0,
+  start = (first + extent) % max(extent, 1),
+  stop = (last + extent) % max(extent, 1),
+  stop >= start.
+.plan 1:(2,1)
+axis_kept(key, axes, axis, size) :-
+  axis_entry(key, axes, axis, "span", 0, -1, 1),
+  axes_axis(axes, axis, size, _).
+.plan 1:(2,1)
+axis_kept(key, axes, axis, [(last - first) / max(step, 1) + 1, nil]) :-
+  axis_entry(key, axes, axis, "span", first, last, step),
+  step > 0,
+  last >= first,
+  (first bxor last) >= 0,
+  axis_extent(axes, axis, 0).
+.plan 1:(2,1)
+// Bounds of either sign, other than `..` (`0..-1//1`, where each of
+// `first`, `last + 1` and `step - 1` is 0).
+axis_kept(key, axes, axis, [0, nil]) :-
+  axis_entry(key, axes, axis, "span", first, last, step),
+  step > 0,
+  (first bxor last) < 0,
+  (first bor (last + 1) bor (step - 1)) != 0,
+  axis_extent(axes, axis, 0).
+.plan 1:(2,1)
+
+// The slice's axes from `axis` on: those no entry indexes whole, those a
+// range keeps at the size it keeps, those an index removes gone.
+.decl sliced_from(key: Value, axes: Axes, mask: number, axis: number, result: Axes)
+sliced_from(key, axes, mask, rank, nil) :-
+  selection_from(key, axes, 0, mask),
+  axes_rank(axes, rank).
+.plan 1:(2,1)
+sliced_from(key, axes, mask, axis, [size, name, rest]) :-
+  sliced_from(key, axes, mask, next, rest),
+  axis = next - 1,
+  axis >= 0,
+  (mask band (1 bshl axis)) = 0,
+  axes_axis(axes, axis, size, name).
+.plan 1:(2,1)
+sliced_from(key, axes, mask, axis, [kept, name, rest]) :-
+  sliced_from(key, axes, mask, next, rest),
+  axis = next - 1,
+  axis >= 0,
+  (mask band (1 bshl axis)) != 0,
+  axis_kept(key, axes, axis, kept),
+  axes_axis(axes, axis, _, name).
+.plan 1:(2,1,3), 2:(3,1,2)
+sliced_from(key, axes, mask, axis, rest) :-
+  sliced_from(key, axes, mask, next, rest),
+  axis = next - 1,
+  axis >= 0,
+  (mask band (1 bshl axis)) != 0,
+  axis_removed(key, axes, axis).
+.plan 1:(2,1)
+
+// A slice keeps the vectorized axes.
+result_tensor(context, site, [vectorized, sliced]) :-
+  indexed_tensor(context, site, [vectorized, axes]),
+  access_key(context, site, key),
+  sliced_from(key, axes, _, 0, sliced).
+.plan 1:(2,1,3), 2:(3,2,1)
+
+// A tensor key with axes takes from the first axis: the indices' axes in
+// its place, the name of a single one merged with the axis's.
+result_tensor(context, site, [vectorized, [size, merged, rest]]) :-
+  indexed_tensor(context, site, [vectorized, [_, name, rest]]),
+  access_key(context, site, $Tensor([nil, [size, index_name, nil]])),
+  merged_name(name, index_name, merged).
+.plan 1:(2,1,3), 2:(3,1,2)
+name_pair(name, index_name) :-
+  indexed_tensor(context, site, [_, [_, name, _]]),
+  access_key(context, site, $Tensor([nil, [_, index_name, nil]])).
+.plan 1:(2,1)
+result_tensor(context, site, [vectorized, taken]) :-
+  indexed_tensor(context, site, [vectorized, [_, _, rest]]),
+  access_key(context, site, $Tensor([nil, [size, name, [next, label, others]]])),
+  appended([size, name, [next, label, others]], rest, taken).
+.plan 1:(2,1,3), 2:(3,1,2)
+append_demand([size, name, [next, label, others]], rest) :-
+  indexed_tensor(context, site, [_, [_, _, rest]]),
+  access_key(context, site, $Tensor([nil, [size, name, [next, label, others]]])).
+.plan 1:(2,1)
+
+// Asks the class of a key that is a tensor.
+sign_site(context, site) :-
+  indexed_tensor(context, site, _),
+  argument_value(context, site, 1, $Tensor(_)).
+
+// ══ Tuples where a tensor is expected ═══════════════════════════════
+
+// A call to an Nx function that returns a tuple of tensors.
+.decl makes_tuple(site: symbol)
+makes_tuple(site) :-
+  remote_call(site, _, module, name, _),
+  match("Nx(\\..*)?", module),
+  match("Nx\\.(split|top_k)|Nx\\.LinAlg\\.(qr|svd|eigh|lu)|Nx\\.Random\\.(uniform|normal|randint|shuffle|choice|gumbel|multivariate_normal)|Nx\\.Defn(\\.Kernel)?\\.value_and_grad", cat(module, ".", name)).
+
+// The operands of Nx calls that take them as tensors: all but those of the
+// calls that walk containers of tensors, and of `Nx.rank/1`, which reads a
+// tuple as a shape.
+.decl takes_tensor(site: symbol, position: number)
+takes_tensor(site, position) :-
+  operation_site(site, operation, arity),
+  operand_slot(operation, arity, _, position),
+  !match("Nx\\.(rank|vectorize|devectorize|revectorize|backend_copy|backend_transfer|backend_deallocate|donatable|io_call|runtime_call)|Nx\\.Defn\\.Kernel\\.(stop_grad|print_value|print_expr|hook|custom_grad|__unary_plus__)", operation).
+
+// The elements of a tuple the code builds, handed where a tensor is
+// taken.
+field_demand($Object(object_context, tuple, mapping), selector) :-
+  argument_value(_, site, position, $Object(object_context, tuple, mapping)),
+  takes_tensor(site, position),
+  flow_object(_, tuple, "tuple", _),
+  flow_field(_, tuple, selector, _, _),
+  selector_position(selector, _).
+
+// The cells of a list `Nx.tensor/2` is handed, and of the lists it holds.
+.decl data_cell(root: Value, cell: Value)
+data_cell($Object(object_context, cell, mapping), $Object(object_context, cell, mapping)) :-
+  argument_value(_, site, 0, $Object(object_context, cell, mapping)),
+  operation_site(site, "Nx.tensor", _),
+  flow_object(_, cell, "list", _).
+data_cell(root, $Object(next_context, next, next_mapping)) :-
+  data_cell(root, cell),
+  field_value(cell, selector, $Object(next_context, next, next_mapping)),
+  ( selector = "head" ; selector = "tail" ),
+  flow_object(_, next, "list", _).
+.plan 1:(2,1,3)
+field_demand(cell, "head") :- data_cell(_, cell).
+field_demand(cell, "tail") :- data_cell(_, cell).
+
+// ══ Squeezing ═══════════════════════════════════════════════════════
+
+// `Nx.squeeze/1` removes the axes of size 1, where every size is known or
+// named by variables (their product is determined): a size the code names
+// with variables is taken to be other than 1, as the code that reads it
+// expects. The axes whose size the code reads from an input are reported.
+squeeze_mask(site, first, mask) :-
+  site_instance(site, "Nx.squeeze", _, [first, _, _]),
+  option_absent(site, "axes"),
+  axes_product(first, [coefficient, _]),
+  coefficient > 0,
+  unit_mask(first, mask).
+.plan 1:(3,1,2,4), 2:(4,1,2,3)

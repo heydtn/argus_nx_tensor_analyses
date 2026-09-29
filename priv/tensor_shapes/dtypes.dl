@@ -1,3 +1,1595 @@
 // Exact tensor types: wraparound, narrowing, values a type cannot hold, and silent upcasts.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// Beside the class analysis (integer, float, complex), each value a check
+// asks about gets its possible exact types (`u8`, `s32`, `bf16`, `f32`, ...),
+// a row for each some path gives it, with the call that makes it so
+// (`origin`). They follow `Nx.Type` as Nx 1.0 applies it:
+//
+//   * two tensors meet at `Nx.Type.merge/2`: one family keeps the larger
+//     size, else the family of higher precedence wins (complex, then float,
+//     then brain float, then signed, then unsigned), an unsigned type
+//     meeting a signed one doubling in size and a float meeting a complex
+//     one likewise; two floats of one precedence keep the left one's type;
+//   * a tensor meets a number at `Nx.Type.merge_number/2`, the number weak:
+//     a whole number keeps an integer tensor's type where it fits and widens
+//     it where it does not (a negative one makes an unsigned tensor signed),
+//     any number keeps a float tensor's type, and a float number makes an
+//     integer tensor f32. Where Nx makes numbers tensors first
+//     (`Nx.select/3`, `Nx.clip/3`, `Nx.dot`, `Nx.put_slice/3`, a list it
+//     joins), a number is s32 or f32 and meets as a tensor does;
+//   * division and the transcendental functions make a float
+//     (`Nx.Type.to_floating/1`), a sum or product widens a narrow integer
+//     (`Nx.Type.to_aggregate/1`) and keeps a float, comparisons and logical
+//     operations give u8, an index s32, and a `type:`, a type argument or a
+//     shorthand constructor gives its own type;
+//   * `Nx.log2/1`, `Nx.log10/1`, `Nx.log/2` and `Nx.LinAlg.invert/1` meet
+//     an f32 tensor of their own, so a lower-precision float comes out f32.
+//
+// A type the code does not show is not known, and nothing is reported of
+// it. Where the analysis is told the float types the code may run at
+// (`float_type`), a type the code reads from configuration (a `type:` or
+// type argument whose value it does not write) is "configured": one type,
+// each of those in turn, which a merge keeps where it wins.
+//
+// Not followed: a type passed along as a value other than `Nx.type/1`'s
+// result; `Nx.Random`'s samplers; a list of tensors the joining function
+// did not build itself; the parameters of a context that assumes a
+// dispatch (`Assumed`); numbers other than written ones and sizes.
+//
+// Souffle's compile time grows with relations times clauses, and a
+// disjunction is a clause for each of its branches, so kinds of call, of
+// type and of rule are fact tables (`dtype_role`, `family_trait`,
+// `class_trait`) rather than a relation or a disjunction each.
+
+// The float types the code may run at, as the analysis is run with them
+// (`f16`, `bf16`, `f32`).
+.decl float_type(name: symbol)
+.input float_type
+
+// ══ Findings ════════════════════════════════════════════════════════
+
+call_error(context, site, "unsigned_wraparound", type, origin) :-
+  unsigned_wraparound(context, site, type, origin).
+call_error(context, site, "count_wraparound", cat(type, " ", length), origin) :-
+  count_wraparound(context, site, type, length, origin).
+call_error(context, site, "narrow_wraparound", type, origin) :-
+  narrow_wraparound(context, site, type, origin).
+call_error(context, site, "index_wraparound", cat(type, " ", counted), "") :-
+  index_wraparound(context, site, type, counted).
+call_error(context, site, "sequence_precision", cat(type, " ", counted), origin) :-
+  sequence_precision(context, site, type, counted, origin).
+call_error(context, site, "cast_wraparound", type, "") :-
+  cast_wraparound(context, site, type).
+call_error(context, site, "unchecked_cast_wraparound", type, "") :-
+  unchecked_cast_wraparound(context, site, type).
+call_error(context, site, "complex_to_real", cat(from, " ", to), origin) :-
+  drops_imaginary_part(context, site, from, to, origin).
+call_error(context, site, "float_truncation", cat(from, " ", to), origin) :-
+  truncates_float(context, site, from, to, origin).
+call_error(context, site, "literal_underflow", cat(number, " ", type), "") :-
+  literal_underflow(context, site, number, type).
+call_error(context, site, "pad_type_mismatch", cat(from, " ", to), "") :-
+  pad_type_mismatch(context, site, from, to).
+call_error(context, site, "integer_determinant", type, origin) :-
+  integer_determinant(context, site, type, origin).
+call_error(context, site, "f32_precision", "f64", "") :-
+  f32_precision(context, site).
+
+nonfinite(context, site, "literal_overflow", type, "") :- literal_overflow(context, site, type).
+nonfinite(context, site, "cast_overflow", type, origin) :- cast_overflow(context, site, type, origin).
+nonfinite(context, site, "float_sum_overflow", cat(type, " ", counted), "") :-
+  float_sum_overflow(context, site, type, counted).
+nonfinite(context, site, "unsigned_logsumexp", type, origin) :-
+  unsigned_logsumexp(context, site, type, origin).
+
+// An origin these findings name that is one of Nx's constants.
+origin_shown(origin, cat("Nx.Constants.", name, "/", to_string(arity))) :-
+  nonfinite(_, _, _, _, origin),
+  remote_call(origin, _, "Nx.Constants", name, arity).
+
+tensor_type_error(site, function, cat(operation, "/", to_string(arity)), kind, cat(from, " ", to), position, 0, origin, shown) :-
+  type_meeting(site, kind, position, from, to, origin),
+  operation_site(site, operation, arity),
+  site_function(site, function),
+  dtype_origin_shown(origin, shown).
+
+// The type findings: an upcast, a narrowing merge.
+.decl type_meeting(site: symbol, kind: symbol, position: number, from: symbol, to: symbol, origin: symbol)
+type_meeting(site, "upcast", position, from, to, origin) :- upcast(_, site, position, from, to, origin).
+type_meeting(site, "narrowing_merge", position, from, to, origin) :-
+  narrowing_merge(_, site, position, from, to, origin).
+
+// A type finding's origin as a reader writes it, "" for none.
+.decl dtype_origin_shown(origin: symbol, shown: symbol)
+dtype_origin_shown("", "") :- type_meeting(_, _, _, _, _, "").
+dtype_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
+  type_meeting(_, _, _, _, _, origin),
+  called_name(origin, operation, arity).
+
+// ── Wraparound ─────────────────────────────────────────────────────
+
+// A subtraction or negation whose result is unsigned and can go below
+// zero: Nx wraps it around to a large positive number (`mask - 1` is 255
+// where the mask is 0). `1 - mask` stays in [0, 1] and is not one.
+.decl unsigned_wraparound(context: Context, site: symbol, type: symbol, origin: symbol)
+unsigned_wraparound(context, site, type, origin) :-
+  dtype_call(site, "subtracts"),
+  call_type(context, site, type, origin),
+  type_trait(type, "unsigned"),
+  difference_can_be_negative(context, site),
+  !difference_stays_nonnegative(context, site).
+
+// The differences of an unsigned tensor, which go below zero wherever it
+// falls, unless it only rises along the axis.
+unsigned_wraparound(context, site, type, origin) :-
+  dtype_call(site, "difference"),
+  argument_dtype(context, site, 0, type, origin),
+  type_trait(type, "unsigned"),
+  !rises_along_axis(site).
+
+// `Nx.all_close/3` subtracts integer tensors in their merged type, which
+// wraps where it is unsigned and the second is the larger.
+unsigned_wraparound(context, site, type, origin) :-
+  dtype_call(site, "closeness"),
+  closeness_type(context, site, type, origin),
+  type_trait(type, "unsigned").
+
+// `Nx.linspace/3` into an unsigned type from a written start above its
+// written stop: its step wraps around.
+unsigned_wraparound(context, site, type, "") :-
+  dtype_call(site, "linspace"),
+  call_type(context, site, type, _),
+  type_trait(type, "unsigned"),
+  descends(context, site).
+
+// Zeros and ones counted along an axis, a window or a contraction longer
+// than the narrow integer type they are counted in holds: the count wraps
+// around (300 ones sum to 44 in u8).
+.decl count_wraparound(context: Context, site: symbol, type: symbol, length: symbol, origin: symbol)
+count_wraparound(context, site, type, length, origin) :-
+  dtype_call(site, "count"),
+  accumulated_type(context, site, type, origin),
+  counts_zeros_and_ones(context, site),
+  accumulated_length(context, site, size),
+  count_outgrows(size, type),
+  size_spelled(size, length).
+
+// So can a count along an axis of a length not known (position ids from a
+// padding mask, `cumulative_sum(not_equal(ids, pad), axis: 1)`), which a
+// long enough input takes past the type.
+count_wraparound(context, site, type, "?", origin) :-
+  dtype_call(site, "count"),
+  accumulated_type(context, site, type, origin),
+  counts_zeros_and_ones(context, site),
+  !accumulated_length(context, site, _),
+  type_trait(type, "narrow").
+
+// Narrow integers summed or multiplied in their own type, which Nx does
+// not widen for these operations: past the type's largest value they wrap
+// around.
+.decl narrow_wraparound(context: Context, site: symbol, type: symbol, origin: symbol)
+narrow_wraparound(context, site, type, origin) :-
+  dtype_call(site, "accumulate"),
+  accumulated_type(context, site, type, origin),
+  type_trait(type, "byte"),
+  !counts_zeros_and_ones(context, site),
+  accumulates_several(context, site).
+
+// `Nx.median/2` with no axis, over an even number of narrow integers, adds
+// the two middle ones in their type.
+narrow_wraparound(context, site, type, origin) :-
+  dtype_call(site, "middle"),
+  argument_dtype(context, site, 0, type, origin),
+  type_trait(type, "byte"),
+  even_count(context, site).
+
+// An argmax, argmin or argsort given a type that cannot hold every index
+// of what it searches: the index wraps around (the argmax of 300 values in
+// u8 is 43).
+.decl index_wraparound(context: Context, site: symbol, type: symbol, counted: symbol)
+index_wraparound(context, site, type, counted) :-
+  dtype_call(site, "index"),
+  call_type(context, site, type, _),
+  index_count(context, site, size),
+  sequence_outgrows(size, type),
+  size_spelled(size, counted).
+
+// A run of whole numbers (an iota, a linspace's points) made in, or
+// brought into, a type that does not hold each of them: past the type's
+// limit, neighbors round to one value (bf16 past 256, f16 past 2048) or
+// wrap around (u8 past 255).
+.decl sequence_precision(context: Context, site: symbol, type: symbol, counted: symbol, origin: symbol)
+sequence_precision(context, site, concrete, counted, origin) :-
+  counts_in_type(context, site, type, size, origin),
+  type_instance(type, concrete),
+  sequence_outgrows(size, concrete),
+  size_spelled(size, counted).
+
+// A value the code's math or a written number makes negative, made
+// unsigned: it wraps around (-1.0 is 255 in u8). So does a written number
+// outside the integer type it is made.
+.decl cast_wraparound(context: Context, site: symbol, type: symbol)
+cast_wraparound(context, site, type) :-
+  dtype_call(site, "cast"),
+  call_type(context, site, type, _),
+  type_trait(type, "unsigned"),
+  cast_operand_goes_negative(context, site).
+cast_wraparound(context, site, type) :-
+  casts_written_number(context, site, type, number),
+  integer_number(number, value),
+  outside_integer_type(value, type).
+
+// A value only an input may make negative, made unsigned: it wraps around
+// where the input is negative, which it may never be.
+.decl unchecked_cast_wraparound(context: Context, site: symbol, type: symbol)
+unchecked_cast_wraparound(context, site, type) :-
+  dtype_call(site, "cast"),
+  call_type(context, site, type, _),
+  type_trait(type, "unsigned"),
+  cast_operand_can_be_negative(context, site),
+  !cast_operand_goes_negative(context, site).
+
+// A complex tensor made real: the imaginary part is dropped.
+.decl drops_imaginary_part(context: Context, site: symbol, from: symbol, to: symbol, origin: symbol)
+drops_imaginary_part(context, site, from, to, origin) :-
+  dtype_call(site, "cast"),
+  argument_dtype(context, site, 0, from, origin),
+  type_trait(from, "complex"),
+  call_type(context, site, target, _),
+  type_instance(target, to),
+  !type_trait(to, "complex").
+
+// A float made an integer: the fraction is cut off. Often meant, so info;
+// an operand the code rounds first is not one.
+.decl truncates_float(context: Context, site: symbol, from: symbol, to: symbol, origin: symbol)
+truncates_float(context, site, from, to, origin) :-
+  dtype_call(site, "cast"),
+  argument_dtype(context, site, 0, from, origin),
+  type_trait(from, "floating"),
+  call_type(context, site, to, _),
+  type_trait(to, "integer"),
+  !rounded_first(site).
+
+// A lower-precision float made f32 where it meets a tensor fixed at f32
+// (a constant, a number Nx makes a tensor, a `type: :f32`), or by a call
+// that divides by an f32 of its own: the result is f32, not the type the
+// code runs at. A clip whose written bounds widen an integer tensor
+// likewise.
+.decl upcast(context: Context, site: symbol, position: number, from: symbol, to: symbol, origin: symbol)
+upcast(context, site, position, from, "f32", origin) :-
+  meets(context, site, position, own, _, "f32", origin, leads),
+  meeting_instance(own, "f32", leads, from, "f32"),
+  type_trait(from, "lower_precision").
+upcast(context, site, 0, from, "f32", "") :-
+  dtype_call(site, "own_f32"),
+  argument_dtype(context, site, 0, own, _),
+  type_instance(own, from),
+  type_trait(from, "lower_precision").
+upcast(context, site, 0, own, merged, origin) :-
+  dtype_call(site, "clip"),
+  meets(context, site, 0, own, _, bounds, origin, _),
+  type_trait(own, "integer"),
+  type_merged(own, bounds, merged),
+  merged != own.
+
+// An f64 tensor through a call that divides by an f32 logarithm of its
+// own: the result is f64, accurate only to f32.
+.decl f32_precision(context: Context, site: symbol)
+f32_precision(context, site) :-
+  dtype_call(site, "logarithm_base"),
+  argument_dtype(context, site, 0, "f64", _).
+
+// Two types meeting where the merged type holds less than an operand's: a
+// bf16 meeting an f16 is f16, and a bf16 past 65504 becomes infinite; a
+// u64 meeting a signed type is s64, and one past 2^63 turns negative.
+.decl narrowing_merge(context: Context, site: symbol, position: number, from: symbol, to: symbol, origin: symbol)
+narrowing_merge(context, site, position, from, to, origin) :-
+  meets(context, site, position, own, origin, other, _, leads),
+  meeting_instance(own, other, leads, from, to),
+  narrows(from, to).
+
+// A pad whose value is of another type than the tensor: the result's type
+// is the merged one, but Nx's binary backend splices the value's raw bits
+// into a tensor of the old type (0.5 into s32 is 1056964608), and EMLX
+// raises.
+.decl pad_type_mismatch(context: Context, site: symbol, from: symbol, to: symbol)
+pad_type_mismatch(context, site, from, to) :-
+  dtype_call(site, "pad"),
+  meets(context, site, 0, own, _, other, _, leads),
+  meeting_instance(own, other, leads, from, to),
+  to != from.
+pad_type_mismatch(context, site, from, to) :-
+  dtype_call(site, "pad"),
+  argument_dtype(context, site, 0, own, _),
+  argument_number(context, site, 1, number),
+  type_instance(own, from),
+  number_merged(from, number, to),
+  to != from.
+
+// A determinant of 2×2 or 3×3 integer matrices, which Nx multiplies out in
+// their type: an unsigned one wraps where the determinant is negative, a
+// signed one overflows for large entries.
+.decl integer_determinant(context: Context, site: symbol, type: symbol, origin: symbol)
+integer_determinant(context, site, type, origin) :-
+  dtype_call(site, "determinant"),
+  argument_dtype(context, site, 0, type, origin),
+  type_trait(type, "integer"),
+  multiplied_out(context, site).
+
+// ── Values a type cannot hold ──────────────────────────────────────
+
+// A written number beyond the largest finite value of the float type it
+// is made (a `-1.0e9` mask added to an f16 tensor): it is infinite there,
+// and a softmax over it NaN.
+.decl literal_overflow(context: Context, site: symbol, type: symbol)
+literal_overflow(context, site, concrete) :-
+  casts_written_number(context, site, type, number),
+  type_instance(type, concrete),
+  past_largest(number, concrete).
+
+// A written number too small for the float type it is made, which rounds
+// it to zero (an epsilon of 1.0e-12 in f16): whatever it was to keep away
+// from zero is not kept from it.
+.decl literal_underflow(context: Context, site: symbol, number: symbol, type: symbol)
+literal_underflow(context, site, number, concrete) :-
+  casts_written_number(context, site, type, number),
+  type_instance(type, concrete),
+  below_smallest(number, concrete).
+
+// A value holding a number beyond a float type's range made that type: a
+// number written where it is made (-1.0e9), or a constant at the edge of a
+// wider type (`Nx.Constants.min_finite(:f32)`), is -infinity in f16.
+.decl cast_overflow(context: Context, site: symbol, type: symbol, origin: symbol)
+cast_overflow(context, site, concrete, origin) :-
+  dtype_call(site, "cast"),
+  call_type(context, site, target, _),
+  type_instance(target, concrete),
+  argument_dtype(context, site, 0, _, origin),
+  makes_value_past_largest(origin, concrete).
+
+// A sum, mean or variance of a low-range float over more elements than
+// the type's largest value, or a dot product contracting that many: Nx
+// keeps the sum in the type (a mean of 100000 f16 ones is infinite).
+.decl float_sum_overflow(context: Context, site: symbol, type: symbol, counted: symbol)
+float_sum_overflow(context, site, concrete, counted) :-
+  dtype_call(site, "sum"),
+  summed_type(context, site, type),
+  type_instance(type, concrete),
+  summed_count(context, site, size),
+  sum_outgrows(size, concrete),
+  size_spelled(size, counted).
+
+// `Nx.logsumexp/2` of an unsigned tensor subtracts its maximum in its
+// type: every other element wraps around, and its exponential is
+// infinite.
+.decl unsigned_logsumexp(context: Context, site: symbol, type: symbol, origin: symbol)
+unsigned_logsumexp(context, site, type, origin) :-
+  dtype_call(site, "logsumexp"),
+  argument_dtype(context, site, 0, type, origin),
+  type_trait(type, "unsigned").
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The Nx calls the checks name, by the part they play: "subtract",
+// "negate" and "subtracts" (either), "difference", "closeness",
+// "linspace", "count" (a running or window sum, a contraction),
+// "accumulate" (those and the running and window products, outer products
+// and weighted means), "running", "pairwise", "contract", "middle" (a
+// median with no axis), "index" (an argmax, argmin or argsort given a
+// type), "iota" (given a type), "cast", "pad", "clip", "determinant",
+// "sum", "logsumexp", "fill", "logarithm_base", "own_f32" (a call that
+// divides by or merges an f32 of its own); "rising" for what only rises
+// along its axis;
+// "operand" and "second_operand" for the operands a check reads.
+.decl dtype_call(site: symbol, role: symbol)
+dtype_call(site, role) :- operation_site(site, operation, _), dtype_role(operation, role).
+dtype_call(site, "subtract") :- operation_site(site, operation, 2), sign_class(operation, "subtract").
+dtype_call(site, "negate") :- sign_rule(site, "negate").
+dtype_call(site, "negate") :- operation_site(site, "Nx.Defn.Kernel.-", 1).
+dtype_call(site, "subtracts") :- dtype_call(site, "subtract").
+dtype_call(site, "subtracts") :- dtype_call(site, "negate").
+dtype_call(site, "middle") :- operation_site(site, "Nx.median", _), option_absent(site, "axis").
+dtype_call(site, "index") :- dtype_call(site, "indexes"), option_given(site, "type").
+dtype_call(site, "iota") :- operation_site(site, "Nx.iota", _), option_given(site, "type").
+dtype_call(site, "logarithm_base") :- operation_site(site, "Nx.log", 2).
+dtype_call(site, "own_f32") :- dtype_rule(site, "floating_with_f32").
+
+.decl dtype_role(operation: symbol, role: symbol)
+dtype_role("Nx.diff", "difference"). dtype_role("Nx.all_close", "closeness").
+dtype_role("Nx.linspace", "linspace"). dtype_role("Nx.as_type", "cast"). dtype_role("Nx.pad", "pad").
+dtype_role("Nx.clip", "clip"). dtype_role("Nx.LinAlg.determinant", "determinant").
+dtype_role("Nx.logsumexp", "logsumexp"). dtype_role("Nx.fill", "fill").
+dtype_role("Nx.log2", "logarithm_base"). dtype_role("Nx.log10", "logarithm_base").
+dtype_role("Nx.cumulative_sum", "count"). dtype_role("Nx.window_sum", "count").
+dtype_role("Nx.window_mean", "count"). dtype_role("Nx.dot", "count").
+dtype_role("Nx.cumulative_sum", "accumulate"). dtype_role("Nx.window_sum", "accumulate").
+dtype_role("Nx.window_mean", "accumulate"). dtype_role("Nx.dot", "accumulate").
+dtype_role("Nx.cumulative_product", "accumulate"). dtype_role("Nx.window_product", "accumulate").
+dtype_role("Nx.outer", "accumulate"). dtype_role("Nx.weighted_mean", "accumulate").
+dtype_role("Nx.cumulative_sum", "running"). dtype_role("Nx.cumulative_product", "running").
+dtype_role("Nx.outer", "pairwise"). dtype_role("Nx.weighted_mean", "pairwise").
+dtype_role("Nx.dot", "contract").
+dtype_role("Nx.argmax", "indexes"). dtype_role("Nx.argmin", "indexes"). dtype_role("Nx.argsort", "indexes").
+dtype_role("Nx.sum", "sum"). dtype_role("Nx.mean", "sum"). dtype_role("Nx.variance", "sum").
+dtype_role("Nx.standard_deviation", "sum"). dtype_role("Nx.dot", "sum").
+dtype_role("Nx.cumulative_sum", "rising"). dtype_role("Nx.cumulative_max", "rising").
+dtype_role("Nx.iota", "rising"). dtype_role("Nx.sort", "rising").
+dtype_role("Nx.as_type", "operand"). dtype_role("Nx.median", "operand"). dtype_role("Nx.diff", "operand").
+dtype_role("Nx.outer", "operand"). dtype_role("Nx.weighted_mean", "operand").
+dtype_role("Nx.all_close", "operand"). dtype_role("Nx.linspace", "operand"). dtype_role("Nx.tensor", "operand").
+dtype_role("Nx.outer", "second_operand"). dtype_role("Nx.weighted_mean", "second_operand").
+dtype_role("Nx.all_close", "second_operand"). dtype_role("Nx.linspace", "second_operand").
+dtype_role("Nx.fill", "second_operand").
+
+// What kind of number a type holds: "unsigned", "integer", "complex",
+// "floating" (a real float, the configured type among them), "byte" (an
+// integer of a byte or less), "narrow" (an integer a count the code does
+// not write can pass), "lower_precision" (fewer significand bits than
+// f32's).
+.decl type_trait(type: symbol, trait: symbol)
+type_trait(type, trait) :- dtype(type, family, _), family_trait(family, trait).
+type_trait(type, "byte") :- dtype(type, family, size), family_trait(family, "integer"), size <= 8.
+type_trait(type, "narrow") :- type_trait(type, "integer"), exact_limit(type, limit), limit <= 65535.
+type_trait(type, "lower_precision") :- float_capacity(type, _, precision), precision < 24.
+type_trait("configured", "floating") :- float_type(_).
+
+.decl family_trait(family: symbol, trait: symbol)
+family_trait("u", "unsigned"). family_trait("u", "integer"). family_trait("s", "integer").
+family_trait("c", "complex"). family_trait("f", "floating"). family_trait("bf", "floating").
+family_trait("f8_e4m3fn", "floating").
+
+// A difference that can be negative: its first operand can be, or its
+// second positive; a negation of a value that can be positive.
+.decl difference_can_be_negative(context: Context, site: symbol)
+difference_can_be_negative(context, site) :-
+  dtype_call(site, "subtract"),
+  argument_can_be_negative(context, site, 0).
+difference_can_be_negative(context, site) :-
+  dtype_call(site, "subtract"),
+  argument_can_be_positive(context, site, 1).
+difference_can_be_negative(context, site) :-
+  dtype_call(site, "negate"),
+  argument_can_be_positive(context, site, 0).
+
+// A difference whose first operand is at least 1 and whose second is at
+// most 1, as `1 - mask` is, or whose first is at least every element of
+// the second, as `reduce_max(x) - x` is.
+.decl difference_stays_nonnegative(context: Context, site: symbol)
+difference_stays_nonnegative(context, site) :-
+  dtype_call(site, "subtract"),
+  argument_region(context, site, 0, _, _, _),
+  argument_region(context, site, 1, _, _, _),
+  !reaches_below_one(context, site, 0),
+  !argument_region(context, site, 1, "above", _, _).
+difference_stays_nonnegative(context, site) :-
+  dtype_call(site, "subtract"),
+  site_active(context, site),
+  flow_argument(site, function, 1, kind, source),
+  flow_argument(site, function, 0, "result", maximum),
+  at_least_maximum(maximum, function, kind, source).
+
+.decl reaches_below_one(context: Context, site: symbol, position: number)
+reaches_below_one(context, site, position) :-
+  argument_region(context, site, position, region, _, _),
+  region_order(region, order),
+  order < 3.
+
+// Signs and regions are asked of the operands of the unsigned
+// differences and casts, and of the narrow counts and sums.
+sign_site(context, site) :-
+  dtype_call(site, "subtracts"),
+  call_type(context, site, type, _),
+  type_trait(type, "unsigned").
+sign_site(context, site) :-
+  dtype_call(site, "cast"),
+  call_type(context, site, type, _),
+  type_trait(type, "unsigned").
+sign_site(context, site) :-
+  dtype_call(site, "accumulate"),
+  accumulated_type(context, site, type, _),
+  type_trait(type, "narrow").
+
+// A tensor that only rises along an axis: a running sum or maximum, an
+// iota or a sort, neither reversed nor descending.
+.decl rises_along_axis(site: symbol)
+rises_along_axis(site) :-
+  dtype_call(site, "difference"),
+  flow_argument(site, _, 0, "result", operand),
+  dtype_call(operand, "rising"),
+  !option_atom(operand, "reverse", "true"),
+  !option_atom(operand, "direction", ":desc").
+
+// The type `Nx.all_close/3` subtracts two integer tensors in.
+.decl closeness_type(context: Context, site: symbol, type: symbol, origin: symbol)
+closeness_type(context, site, merged, origin) :-
+  dtype_call(site, "closeness"),
+  argument_strict_type(context, site, 0, left, origin),
+  argument_strict_type(context, site, 1, right, _),
+  type_merged(left, right, merged).
+
+// A linspace whose written start is above its written stop.
+.decl descends(context: Context, site: symbol)
+descends(context, site) :-
+  dtype_call(site, "linspace"),
+  argument_number(context, site, 0, start),
+  argument_number(context, site, 1, stop),
+  integer_number(start, first),
+  integer_number(stop, last),
+  first > last.
+
+// A tensor of an even number of elements in the context.
+.decl even_count(context: Context, site: symbol)
+even_count(context, site) :-
+  dtype_call(site, "middle"),
+  instance(context, site, [first, _, _], _),
+  axes_product(first, [elements, nil]),
+  elements % 2 = 0.
+
+// A determinant of 2×2 or 3×3 matrices, which Nx multiplies out.
+.decl multiplied_out(context: Context, site: symbol)
+multiplied_out(context, site) :-
+  dtype_call(site, "determinant"),
+  instance(context, site, [first, _, _], _),
+  axes_rank(first, rank),
+  axes_axis(first, rank - 1, [size, nil], _),
+  size >= 2,
+  size <= 3.
+
+// A written number at or past the magnitude a float type rounds to
+// infinity.
+.decl past_largest(number: symbol, type: symbol)
+past_largest(number, type) :-
+  number_magnitude(number, magnitude),
+  float_range(type, _, overflow, _),
+  overflow > 0.0,
+  magnitude >= overflow.
+
+// A written number, not zero, below the magnitude a float type rounds to
+// zero.
+.decl below_smallest(number: symbol, type: symbol)
+below_smallest(number, type) :-
+  number_magnitude(number, magnitude),
+  float_range(type, _, _, underflow),
+  magnitude != 0.0,
+  magnitude < underflow.
+
+// A call that makes a value holding a number past what a float type
+// holds: a number written there, or a constant at the edge of a wider
+// type's range.
+.decl makes_value_past_largest(site: symbol, type: symbol)
+makes_value_past_largest(site, type) :-
+  argument_number(_, site, _, number),
+  past_largest(number, type).
+makes_value_past_largest(site, type) :-
+  remote_call(site, _, "Nx.Constants", name, _),
+  ( name = "min_finite" ; name = "max_finite" ),
+  call_type(_, site, wider, _),
+  float_range(wider, largest, _, _),
+  float_range(type, _, overflow, _),
+  overflow > 0.0,
+  largest >= overflow.
+
+// The operands a call accumulates.
+.decl accumulated_operand(site: symbol, position: number)
+accumulated_operand(site, 0) :- dtype_call(site, "accumulate"), !dtype_call(site, "contract").
+accumulated_operand(site, 1) :- dtype_call(site, "pairwise").
+accumulated_operand(site, position) :- dtype_call(site, "contract"), dtype_operand(site, position).
+
+// The type a call accumulates in: its operand's, or its operands' merged.
+.decl accumulated_type(context: Context, site: symbol, type: symbol, origin: symbol)
+accumulated_type(context, site, type, origin) :-
+  accumulated_operand(site, 0),
+  !accumulated_operand(site, 1),
+  argument_dtype(context, site, 0, type, origin).
+accumulated_type(context, site, merged, origin) :-
+  dtype_call(site, "pairwise"),
+  argument_strict_type(context, site, 0, left, origin),
+  argument_strict_type(context, site, 1, right, _),
+  type_merged(left, right, merged).
+accumulated_type(context, site, type, origin) :-
+  dtype_call(site, "contract"),
+  call_type(context, site, type, origin).
+
+// Every operand the call accumulates is 0 or 1 in the context: it lies
+// between -1 and 1 or at 1, and, being an integer, is 0 or 1.
+.decl counts_zeros_and_ones(context: Context, site: symbol)
+counts_zeros_and_ones(context, site) :-
+  dtype_call(site, "accumulate"),
+  site_active(context, site),
+  !count_can_exceed_one(context, site).
+
+.decl count_can_exceed_one(context: Context, site: symbol)
+count_can_exceed_one(context, site) :-
+  accumulated_operand(site, position),
+  argument_region(context, site, position, region, _, _),
+  region_order(region, order),
+  order != 2,
+  order != 3.
+count_can_exceed_one(context, site) :-
+  accumulated_operand(site, position),
+  site_active(context, site),
+  !argument_region(context, site, position, _, _, _).
+
+// How many values a call adds up into one: the axis a running sum or
+// product runs along, a window's elements, a contracted axis.
+.decl accumulated_length(context: Context, site: symbol, size: Size)
+accumulated_length(context, site, size) :-
+  dtype_call(site, "running"),
+  instance(context, site, [first, _, _], _),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, size, _).
+accumulated_length(context, site, [volume, nil]) :-
+  window_volume_from(site, 0, volume),
+  site_active(context, site).
+accumulated_length(context, site, size) :-
+  dtype_call(site, "contract"),
+  instance(context, site, operands, _),
+  dot_pair(site, operands, _, left, _),
+  operands = [first, _, _],
+  axes_axis(first, left, size, _).
+
+// The number of elements in an accumulating window from `index` on, from
+// its written dimensions.
+.decl window_volume_from(site: symbol, index: number, volume: number)
+window_volume_from(site, rank, 1) :-
+  dtype_call(site, "accumulate"),
+  window_dimensions(site, _, rank).
+window_volume_from(site, index - 1, min(volume, 32768) * min(size, 32768)) :-
+  window_volume_from(site, index, volume),
+  index > 0,
+  window_dimensions(site, text, _),
+  term_element_integer(text, 0, index - 1, size),
+  size >= 1.
+
+// A call that adds up or multiplies more than one value: a written number
+// of them past one, a number the code reads or does not know, or pairs (an
+// outer product, a weighted mean).
+.decl accumulates_several(context: Context, site: symbol)
+accumulates_several(context, site) :-
+  accumulated_length(context, site, [length, nil]),
+  length > 1.
+accumulates_several(context, site) :-
+  accumulated_length(context, site, [coefficient, factors]),
+  factors != nil,
+  coefficient > 0.
+accumulates_several(context, site) :-
+  accumulated_length(context, site, [0, nil]).
+accumulates_several(context, site) :-
+  dtype_call(site, "accumulate"),
+  site_active(context, site),
+  !accumulated_length(context, site, _).
+
+// How many elements an index call searches: its axis, or all of them.
+.decl index_count(context: Context, site: symbol, size: Size)
+index_count(context, site, size) :-
+  dtype_call(site, "index"),
+  instance(context, site, [first, _, _], _),
+  option(site, "axis", text, start),
+  term_axis(first, text, start, axis),
+  axes_axis(first, axis, size, _).
+index_count(context, site, size) :-
+  dtype_call(site, "index"),
+  !operation_site(site, "Nx.argsort", _),
+  option_absent(site, "axis"),
+  instance(context, site, [first, _, _], _),
+  axes_product(first, size).
+index_count(context, site, size) :-
+  dtype_call(site, "index"),
+  operation_site(site, "Nx.argsort", _),
+  instance(context, site, [first, _, _], _),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, size, _).
+
+// A run of whole numbers `size` long in a type: an iota or linspace made
+// in it, an iota made into it, or an iota meeting a tensor of it.
+.decl counts_in_type(context: Context, site: symbol, type: symbol, size: Size, origin: symbol)
+counts_in_type(context, site, type, size, "") :-
+  iota_count(site, size),
+  call_type(context, site, type, _).
+counts_in_type(context, site, type, [points, nil], "") :-
+  dtype_call(site, "linspace"),
+  option_integer(site, "n", points),
+  call_type(context, site, type, _).
+counts_in_type(context, site, type, size, origin) :-
+  dtype_call(site, "cast"),
+  argument_dtype(context, site, 0, from, origin),
+  type_trait(from, "integer"),
+  iota_count(origin, size),
+  call_type(context, site, type, _).
+counts_in_type(context, site, merged, size, origin) :-
+  meets(context, site, _, own, origin, other, _, _),
+  type_trait(own, "integer"),
+  iota_count(origin, size),
+  type_merged(own, other, merged).
+
+// How many numbers an iota counts: the length of its axis, or its size
+// without one.
+.decl iota_count(site: symbol, size: Size)
+iota_count(site, size) :-
+  site_instance(site, "Nx.iota", _, [first, _, _]),
+  option_absent(site, "axis"),
+  axes_product(first, size).
+iota_count(site, size) :-
+  site_instance(site, "Nx.iota", _, [first, _, _]),
+  option(site, "axis", text, start),
+  term_axis(first, text, start, axis),
+  axes_axis(first, axis, size, _).
+
+// The operand of a cast can be negative: by math the rules follow, or as
+// the data the code writes.
+.decl cast_operand_can_be_negative(context: Context, site: symbol)
+cast_operand_can_be_negative(context, site) :-
+  dtype_call(site, "cast"),
+  argument_can_be_negative(context, site, 0),
+  !operand_sign_unknown(context, site).
+cast_operand_can_be_negative(context, site) :- casts_written_negative(context, site).
+
+// A cast operand the code's math takes negative, or a written negative.
+.decl cast_operand_goes_negative(context: Context, site: symbol)
+cast_operand_goes_negative(context, site) :-
+  dtype_call(site, "cast"),
+  flow_argument(site, function, 0, kind, source),
+  can_go_negative(context, function, kind, source, _, _).
+cast_operand_goes_negative(context, site) :- casts_written_negative(context, site).
+
+negative_asked(context, function, kind, source) :-
+  dtype_call(site, "cast"),
+  site_active(context, site),
+  flow_argument(site, function, 0, kind, source).
+
+// A cast of a tensor made of written data with a negative number in it.
+.decl casts_written_negative(context: Context, site: symbol)
+casts_written_negative(context, site) :-
+  dtype_call(site, "cast"),
+  site_active(context, site),
+  flow_argument(site, _, 0, "result", made),
+  operation_site(made, operation, _),
+  tensor_constructor(operation, _),
+  flow_argument(made, _, 0, "literal", text),
+  match(".*-[0-9].*", text).
+
+.decl operand_sign_unknown(context: Context, site: symbol)
+operand_sign_unknown(context, site) :-
+  dtype_call(site, "cast"),
+  signed_argument(context, site, 0, function, kind, source),
+  sign_unknown(context, function, kind, source).
+
+// An operand the code rounds before casting it.
+.decl rounded_first(site: symbol)
+rounded_first(site) :-
+  dtype_call(site, "cast"),
+  flow_argument(site, _, 0, "result", operand),
+  sign_rule(operand, "round").
+
+// A number the code writes made a type: meeting a tensor of that type (a
+// float tensor keeps its type), filled in as a type given, or an end of a
+// linspace in its type.
+.decl casts_written_number(context: Context, site: symbol, type: symbol, number: symbol)
+casts_written_number(context, site, type, number) :-
+  operands_meet(context, site, type, number, type),
+  number_demand(number).
+casts_written_number(context, site, type, number) :-
+  operands_meet(context, site, number, type, type),
+  number_demand(number).
+casts_written_number(context, site, type, number) :-
+  dtype_call(site, "fill"),
+  dtype_rule(site, "typed"),
+  argument_number(context, site, 1, number),
+  call_type(context, site, type, _).
+casts_written_number(context, site, type, number) :-
+  dtype_call(site, "linspace"),
+  argument_number(context, site, position, number),
+  position <= 1,
+  call_type(context, site, type, _).
+
+// A whole number an integer type does not hold: past its largest value,
+// or below its smallest (0, or one below minus the largest).
+.decl outside_integer_type(value: number, type: symbol)
+outside_integer_type(value, type) :-
+  integer_number(_, value),
+  type_trait(type, "integer"),
+  exact_limit(type, limit),
+  value > limit.
+outside_integer_type(value, type) :-
+  integer_number(_, value),
+  value < 0,
+  type_trait(type, "unsigned").
+outside_integer_type(value, type) :-
+  integer_number(_, value),
+  dtype(type, "s", _),
+  exact_limit(type, limit),
+  value < -limit - 1.
+
+// Two operands of a merging call as they meet: each's type, either way
+// round, with the call that makes it so, and whether it is the left one
+// (1), which `Nx.Type.merge/2` keeps of two floats of one precedence. A
+// number meeting a tensor weakly meets as no type.
+.decl meets(context: Context, site: symbol, position: number, own: symbol, own_origin: symbol, other: symbol, other_origin: symbol, leads: number)
+meets(context, site, first, left, left_origin, right, right_origin, 1) :-
+  merge_positions(site, first, second, 1),
+  argument_dtype(context, site, first, left, left_origin),
+  argument_dtype(context, site, second, right, right_origin).
+meets(context, site, second, right, right_origin, left, left_origin, 0) :-
+  merge_positions(site, first, second, 1),
+  argument_dtype(context, site, first, left, left_origin),
+  argument_dtype(context, site, second, right, right_origin).
+meets(context, site, first, left, left_origin, right, right_origin, 1) :-
+  merge_positions(site, first, second, 0),
+  argument_strict_type(context, site, first, left, left_origin),
+  argument_strict_type(context, site, second, right, right_origin).
+meets(context, site, second, right, right_origin, left, left_origin, 0) :-
+  merge_positions(site, first, second, 0),
+  argument_strict_type(context, site, first, left, left_origin),
+  argument_strict_type(context, site, second, right, right_origin).
+meets(context, site, 0, own, own_origin, bounds, bound_origin, 1) :-
+  dtype_call(site, "clip"),
+  argument_strict_type(context, site, 0, own, own_origin),
+  argument_strict_type(context, site, 1, low, bound_origin),
+  argument_strict_type(context, site, 2, high, _),
+  type_merged(low, high, bounds).
+meets(context, site, 0, element, origin, rest, "", 1) :-
+  joined_element_type(context, site, cell, element, origin),
+  list_element(site, _, cell, _, _, next),
+  joined_type(context, site, next, rest).
+meets(context, site, 0, rest, "", element, origin, 0) :-
+  joined_element_type(context, site, cell, element, origin),
+  list_element(site, _, cell, _, _, next),
+  joined_type(context, site, next, rest).
+
+// An operand's type and the other's as each type they can be, left or
+// right (`leads`), and the merged type: two operands of the configured
+// type have one type, which meets itself.
+.decl meeting_instance(own: symbol, other: symbol, leads: number, from: symbol, to: symbol)
+meeting_instance(own, other, 1, own, merged) :- concrete_merged(own, other, merged).
+meeting_instance(own, other, 0, own, merged) :- concrete_merged(other, own, merged).
+meeting_instance("configured", other, 1, from, merged) :-
+  float_type(from),
+  concrete_merged(from, other, merged).
+meeting_instance("configured", other, 0, from, merged) :-
+  float_type(from),
+  concrete_merged(other, from, merged).
+meeting_instance(own, "configured", 1, own, merged) :-
+  float_type(concrete),
+  concrete_merged(own, concrete, merged).
+meeting_instance(own, "configured", 0, own, merged) :-
+  float_type(concrete),
+  concrete_merged(concrete, own, merged).
+meeting_instance("configured", "configured", leads, concrete, concrete) :-
+  float_type(concrete),
+  leads = range(0, 2).
+
+// Where a merge's result holds less than an operand's type: a smaller
+// range or fewer significand bits among the floats, and u64 made s64.
+.decl narrows(from: symbol, to: symbol)
+narrows(from, to) :-
+  float_capacity(from, from_reach, _),
+  float_capacity(to, to_reach, _),
+  to_reach < from_reach.
+narrows(from, to) :-
+  float_capacity(from, _, from_precision),
+  float_capacity(to, _, to_precision),
+  to_precision < from_precision.
+narrows("u64", "s64").
+
+// A float type's range, by rank, and its significand bits.
+.decl float_capacity(type: symbol, reach: number, precision: number)
+float_capacity("f8_e4m3fn", 1, 4). float_capacity("f8", 2, 3). float_capacity("f16", 3, 11).
+float_capacity("bf16", 4, 8). float_capacity("f32", 4, 24). float_capacity("f64", 5, 53).
+float_capacity("c64", 4, 24). float_capacity("c128", 5, 53).
+
+// The type a sum adds up in: its operand's, or a dot product's.
+.decl summed_type(context: Context, site: symbol, type: symbol)
+summed_type(context, site, type) :-
+  dtype_call(site, "sum"),
+  !dtype_call(site, "contract"),
+  argument_dtype(context, site, 0, type, _).
+summed_type(context, site, type) :-
+  dtype_call(site, "contract"),
+  call_type(context, site, type, _).
+
+// How many elements a sum adds into one: all of them, or at least those
+// along an axis it reduces; a dot product's contracted axis.
+.decl summed_count(context: Context, site: symbol, size: Size)
+summed_count(context, site, size) :-
+  dtype_call(site, "sum"),
+  !dtype_call(site, "contract"),
+  option_absent(site, "axes"),
+  instance(context, site, [first, _, _], _),
+  axes_product(first, size).
+summed_count(context, site, size) :-
+  dtype_call(site, "sum"),
+  option(site, "axes", text, start),
+  instance(context, site, [first, _, _], _),
+  term_axes_element(first, text, start, _, axis),
+  axes_axis(first, axis, size, _).
+summed_count(context, site, size) :-
+  dtype_call(site, "contract"),
+  accumulated_length(context, site, size).
+
+// ── Sizes against a type ──────────────────────────────────────────
+
+// A count of ones more than a type holds: written past its limit, or a
+// size the code reads or does not know, against a narrow type.
+.decl count_outgrows(size: Size, type: symbol)
+count_outgrows([length, nil], type) :-
+  outgrow_demand([length, nil], type),
+  exact_limit(type, limit),
+  length > limit.
+count_outgrows([coefficient, factors], type) :-
+  outgrow_demand([coefficient, factors], type),
+  factors != nil,
+  coefficient > 0,
+  type_trait(type, "narrow").
+count_outgrows([0, nil], type) :-
+  outgrow_demand([0, nil], type),
+  type_trait(type, "narrow").
+
+// A run of whole numbers from zero, `size` long, a type does not hold: its
+// last, `size - 1`, is past the type's limit, or a size the code reads is
+// against a narrow limit.
+.decl sequence_outgrows(size: Size, type: symbol)
+sequence_outgrows([length, nil], type) :-
+  outgrow_demand([length, nil], type),
+  exact_limit(type, limit),
+  length - 1 > limit.
+sequence_outgrows([coefficient, factors], type) :-
+  outgrow_demand([coefficient, factors], type),
+  factors != nil,
+  coefficient > 0,
+  exact_limit(type, limit),
+  limit <= 65535.
+
+// More elements summed than a float type's largest value, so that a sum
+// of values near 1 passes it.
+.decl sum_outgrows(size: Size, type: symbol)
+sum_outgrows([length, nil], type) :-
+  outgrow_demand([length, nil], type),
+  float_range(type, _, overflow, _),
+  overflow > 0.0,
+  to_float(length) >= overflow.
+sum_outgrows([coefficient, factors], type) :-
+  outgrow_demand([coefficient, factors], type),
+  factors != nil,
+  coefficient > 0,
+  float_range(type, _, overflow, _),
+  overflow > 0.0.
+
+// The sizes compared with a type, which are spelled.
+.decl outgrow_demand(size: Size, type: symbol)
+outgrow_demand(size, type) :-
+  accumulated_length(context, site, size),
+  accumulated_type(context, site, type, _).
+outgrow_demand(size, type) :-
+  index_count(context, site, size),
+  call_type(context, site, type, _).
+outgrow_demand(size, concrete) :-
+  counts_in_type(_, _, type, size, _),
+  type_instance(type, concrete).
+outgrow_demand(size, concrete) :-
+  summed_count(context, site, size),
+  summed_type(context, site, type),
+  type_instance(type, concrete).
+size_demand(size) :- outgrow_demand(size, _).
+
+// ══ Exact types ═════════════════════════════════════════════════════
+
+// Nx's types by name, family and size in bits.
+.decl dtype(name: symbol, family: symbol, size: number)
+dtype(cat(family, to_string(size)), family, size) :- nx_type(family, size, _).
+dtype("f8_e4m3fn", "f8_e4m3fn", 8).
+
+// How the code spells a type (`:f32`, `{:f, 32}`), the FP8 E4M3FN type
+// among them, whose name is not its family and size.
+.decl dtype_spelled(spelled: symbol, name: symbol)
+dtype_spelled(spelled, name) :- type_spelling(spelled, name, _).
+dtype_spelled(":f8_e4m3fn", "f8_e4m3fn").
+dtype_spelled("{:f8_e4m3fn, 8}", "f8_e4m3fn").
+
+// A type as each type it can be: a type is itself, and the configured
+// type each float type the code may run at.
+.decl type_instance(type: symbol, concrete: symbol)
+type_instance(type, type) :- dtype(type, _, _).
+type_instance("configured", concrete) :- float_type(concrete).
+
+// The largest whole number up to which a type holds every whole number
+// from zero: an integer type's largest value (as far as a written number
+// reaches), 2 to the power of a float's significand bits.
+.decl exact_limit(type: symbol, limit: number)
+exact_limit("u2", 3). exact_limit("u4", 15). exact_limit("u8", 255). exact_limit("u16", 65535).
+exact_limit("u32", 2147483647). exact_limit("s2", 1). exact_limit("s4", 7). exact_limit("s8", 127).
+exact_limit("s16", 32767). exact_limit("s32", 2147483647).
+exact_limit("f8", 8). exact_limit("f8_e4m3fn", 16). exact_limit("bf16", 256). exact_limit("f16", 2048).
+exact_limit("f32", 16777216). exact_limit("c64", 16777216).
+
+// A float type's largest finite value (as far as an f32 reaches), the
+// magnitude from which it rounds a number to infinity, and the one below
+// which to zero, 0.0 where those are past an f32's.
+.decl float_range(type: symbol, largest: float, overflow: float, underflow: float)
+float_range("f16", 65504.0, 65520.0, to_float("2.98e-8")).
+float_range("f8", 57344.0, 61440.0, to_float("7.63e-6")).
+float_range("bf16", to_float("3.3895314e38"), 0.0, 0.0).
+float_range("f32", to_float("3.4e38"), 0.0, 0.0).
+float_range("f64", to_float("3.4e38"), 0.0, 0.0).
+
+// `Nx.Type.merge/2` over every pair of types: one family keeps the larger
+// size; an unsigned meeting a signed type, or a float a complex one,
+// doubles in size, as far as `cap`; otherwise the family of higher
+// precedence wins, the left one of two of one precedence.
+.decl concrete_merged(left: symbol, right: symbol, merged: symbol)
+concrete_merged(left, right, merged) :-
+  dtype(left, family, left_size),
+  dtype(right, family, right_size),
+  dtype(merged, family, max(left_size, right_size)).
+concrete_merged(left, right, merged) :-
+  dtype(left, left_family, left_size),
+  dtype(right, right_family, right_size),
+  promoting_pair(left_family, right_family, cap),
+  dtype(merged, right_family, max(min(left_size * 2, cap), right_size)).
+concrete_merged(left, right, merged) :-
+  dtype(left, left_family, left_size),
+  dtype(right, right_family, right_size),
+  promoting_pair(right_family, left_family, cap),
+  dtype(merged, left_family, max(min(right_size * 2, cap), left_size)).
+concrete_merged(left, right, left) :-
+  dtype(left, left_family, _),
+  dtype(right, right_family, _),
+  left_family != right_family,
+  family_rank(left_family, left_rank),
+  family_rank(right_family, right_rank),
+  left_rank >= right_rank,
+  !promoting_pair(right_family, left_family, _).
+concrete_merged(left, right, right) :-
+  dtype(left, left_family, _),
+  dtype(right, right_family, _),
+  family_rank(left_family, left_rank),
+  family_rank(right_family, right_rank),
+  left_rank < right_rank,
+  !promoting_pair(left_family, right_family, _).
+
+.decl promoting_pair(low: symbol, high: symbol, cap: number)
+promoting_pair("u", "s", 64). promoting_pair("f", "c", 128).
+
+.decl family_rank(family: symbol, rank: number)
+family_rank("u", 0). family_rank("s", 1). family_rank("bf", 2). family_rank("f", 3).
+family_rank("f8_e4m3fn", 3). family_rank("c", 4).
+
+// Merges with the configured type too: it merges as each float type it
+// can be, and stays configured where that type wins.
+.decl type_merged(left: symbol, right: symbol, merged: symbol)
+type_merged(left, right, merged) :- concrete_merged(left, right, merged).
+type_merged("configured", right, kept) :-
+  float_type(concrete),
+  concrete_merged(concrete, right, merged),
+  kept_configured(concrete, merged, kept).
+type_merged(left, "configured", kept) :-
+  float_type(concrete),
+  concrete_merged(left, concrete, merged),
+  kept_configured(concrete, merged, kept).
+type_merged("configured", "configured", "configured") :- float_type(_).
+
+// A merge's result, named configured where it is the configured type.
+.decl kept_configured(concrete: symbol, merged: symbol, kept: symbol)
+kept_configured(concrete, concrete, "configured") :- float_type(concrete).
+kept_configured(concrete, merged, merged) :-
+  float_type(concrete),
+  dtype(merged, _, _),
+  merged != concrete.
+
+// `Nx.Type.to_floating/1`.
+.decl floating_of(type: symbol, floating: symbol)
+floating_of(type, type) :- type_trait(type, "floating").
+floating_of(type, type) :- type_trait(type, "complex").
+floating_of(type, "f32") :- type_trait(type, "integer").
+
+// `Nx.Type.to_aggregate/1`.
+.decl aggregate_of(type: symbol, aggregate: symbol)
+aggregate_of("u64", "s64"). aggregate_of("s64", "s64").
+aggregate_of(type, "u32") :- dtype(type, "u", size), size < 64.
+aggregate_of(type, "s32") :- dtype(type, "s", size), size < 64.
+aggregate_of(type, type) :- floating_of(type, type).
+
+// ── Numbers ────────────────────────────────────────────────────────
+
+// A number an operand of a typed call is: as the code writes it, a size
+// in digits, or "integer" for a whole number of no known value.
+.decl argument_number(context: Context, site: symbol, position: number, number: symbol)
+argument_number(context, site, position, spelled) :-
+  typed_site(context, site),
+  dtype_operand(site, position),
+  argument_value(context, site, position, $Term(text, start)),
+  term_scalar(text, start),
+  term_spelling(text, start, spelled).
+argument_number(context, site, position, to_string(value)) :-
+  typed_site(context, site),
+  dtype_operand(site, position),
+  argument_value(context, site, position, $Integer([value, nil])),
+  value > 0.
+argument_number(context, site, position, "integer") :-
+  typed_site(context, site),
+  dtype_operand(site, position),
+  argument_value(context, site, position, $Integer([coefficient, factors])),
+  factors != nil,
+  coefficient > 0.
+argument_number(context, site, position, "integer") :-
+  typed_site(context, site),
+  dtype_operand(site, position),
+  argument_value(context, site, position, $Integer([0, nil])).
+
+.decl number_demand(number: symbol)
+number_demand(number) :- argument_number(_, _, _, number).
+
+// A whole number written, and its value.
+.decl integer_number(number: symbol, value: number)
+integer_number(number, to_number(number)) :-
+  number_demand(number),
+  match("-?[0-9]{1,9}", number).
+
+// A written number's magnitude as a float, for the spellings Elixir gives
+// a number within f32's normal range.
+.decl number_magnitude(number: symbol, magnitude: float)
+number_magnitude(number, to_float(number)) :-
+  number_demand(number),
+  match("[0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7])", number).
+number_magnitude(number, to_float(substr(number, 1, strlen(number) - 1))) :-
+  number_demand(number),
+  match("-([0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7]))", number).
+
+// The tensor Nx makes of a number: s32 for a whole one, f32 for a float.
+.decl number_type(number: symbol, type: symbol)
+number_type(number, "s32") :- integer_number(number, _).
+number_type("integer", "s32") :- number_demand("integer").
+number_type(number, "f32") :- number_demand(number), match("-?[0-9]+\\.[0-9]+(e-?[0-9]+)?", number).
+
+// `Nx.Type.merge_number/2`: a number meeting a tensor. Any number keeps a
+// float's type but FP8 E4M3FN's, which becomes f32, as an integer does
+// for a float number; a whole number keeps an integer type it fits in,
+// and widens it where it does not.
+.decl number_merged(type: symbol, number: symbol, merged: symbol)
+number_merged(type, number, type) :-
+  number_demand(number),
+  floating_of(type, type),
+  type != "f8_e4m3fn".
+number_merged("f8_e4m3fn", number, "f32") :- number_demand(number).
+number_merged(type, number, "f32") :-
+  number_type(number, "f32"),
+  type_trait(type, "integer").
+number_merged(type, number, merged) :-
+  integer_number(number, value),
+  value >= 0,
+  dtype(type, "u", size),
+  bits = min width : { bit_width(width, largest, _), value <= largest },
+  dtype(merged, "u", max(bits, size)).
+number_merged(type, number, merged) :-
+  integer_number(number, value),
+  value < 0,
+  dtype(type, "u", size),
+  magnitude = -value - 1,
+  bits = min width : { bit_width(width, _, largest), magnitude <= largest },
+  dtype(merged, "s", max(bits, min(size * 2, 64))).
+number_merged(type, number, merged) :-
+  integer_number(number, value),
+  dtype(type, "s", size),
+  magnitude = max(value, -value - 1),
+  bits = min width : { bit_width(width, _, largest), magnitude <= largest },
+  dtype(merged, "s", max(bits, size)).
+
+// The fewest bits an unsigned or a signed integer holds a value in, as
+// `Nx.Type.merge_number/2` counts them.
+.decl bit_width(width: number, unsigned_largest: number, signed_largest: number)
+bit_width(1, 1, 1). bit_width(8, 255, 127). bit_width(16, 65535, 32767).
+bit_width(32, 2147483647, 2147483647).
+
+// ── What a value's type is ─────────────────────────────────────────
+
+// The values whose types are asked: the operands of the typed calls,
+// then what they are made of: the returns of a function a call runs, and
+// the argument a parameter of a call's own context is handed.
+.decl dtype_demand(context: Context, function: symbol, kind: symbol, source: symbol)
+dtype_demand(context, function, kind, source) :-
+  typed_argument(context, _, _, function, kind, source).
+dtype_demand(context, function, kind, source) :-
+  typed_site(context, site),
+  type_argument(site, function, kind, source).
+dtype_demand(context, function, kind, source) :-
+  typed_site(context, site),
+  list_element(site, function, _, kind, source, _).
+dtype_demand(callee_context, callee, kind, source) :-
+  dtype_demand(context, _, "result", site),
+  invocation(context, site, callee, callee_context),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at).
+dtype_demand(caller, caller_function, kind, source) :-
+  dtype_demand($Canonical(function, arguments), function, "param", parameter),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+dtype_demand(caller, caller_function, kind, source) :-
+  dtype_demand($Called(site, caller), callee, "param", parameter),
+  program_call(site, caller_function, callee),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+
+// The Nx calls whose types are asked in a context: those a check reads,
+// and those a value asked of is the result of.
+.decl typed_site(context: Context, site: symbol)
+typed_site(context, site) :- type_checked(site), site_active(context, site).
+typed_site(context, site) :- dtype_demand(context, _, "result", site), dtype_rule(site, _).
+
+// The calls the checks read the types of: those they name, and the
+// merging calls.
+.decl type_checked(site: symbol)
+type_checked(site) :-
+  dtype_call(site, role),
+  role != "rising",
+  role != "indexes",
+  role != "operand",
+  role != "second_operand".
+type_checked(site) :- dtype_rule(site, class), class_trait(class, "checked").
+
+// The operands a typed call's type follows from, or a check reads.
+.decl dtype_operand(site: symbol, position: number)
+dtype_operand(site, first) :- merge_positions(site, first, _, _).
+dtype_operand(site, second) :- merge_positions(site, _, second, _).
+dtype_operand(site, 0) :- dtype_rule(site, class), class_trait(class, "unary").
+dtype_operand(site, 0) :- dtype_call(site, "operand").
+dtype_operand(site, 1) :- dtype_call(site, "second_operand").
+dtype_operand(site, position) :- dtype_rule(site, "clip"), position = range(0, 3).
+
+.decl typed_argument(context: Context, site: symbol, position: number, function: symbol, kind: symbol, source: symbol)
+typed_argument(context, site, position, function, kind, source) :-
+  typed_site(context, site),
+  dtype_operand(site, position),
+  flow_argument(site, function, position, kind, source).
+
+// Where a call's type comes from, as a source: its `type:` option built as
+// a pair, or its type argument.
+.decl type_argument(site: symbol, function: symbol, kind: symbol, source: symbol)
+type_argument(site, function, kind, source) :-
+  option_pair(site, "type", kind, source),
+  site_function(site, function).
+type_argument(site, function, kind, source) :-
+  type_position(site, position),
+  flow_argument(site, function, position, kind, source).
+
+// The types a value in a context can be, with the call that makes it so.
+.decl value_dtype(context: Context, function: symbol, kind: symbol, source: symbol, type: symbol, origin: symbol)
+value_dtype(context, function, "result", site, type, origin) :-
+  call_type(context, site, type, origin),
+  dtype_demand(context, function, "result", site).
+
+// What a call returns: what the function it runs returns there.
+value_dtype(context, function, "result", site, type, origin) :-
+  value_dtype(callee_context, callee, kind, source, type, origin),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  dtype_demand(context, function, "result", site).
+
+// A parameter of a canonical context the program enters only through its
+// calls, and of a call's own context: the arguments the calls hand it.
+value_dtype($Canonical(function, arguments), function, "param", to_string(position), type, origin) :-
+  value_dtype(caller, caller_function, kind, source, type, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  dtype_demand($Canonical(function, arguments), function, "param", to_string(position)).
+value_dtype($Called(site, caller), callee, "param", to_string(position), type, origin) :-
+  value_dtype(caller, caller_function, kind, source, type, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  dtype_demand($Called(site, caller), callee, "param", to_string(position)).
+
+// An operand's type, as a tensor.
+.decl argument_dtype(context: Context, site: symbol, position: number, type: symbol, origin: symbol)
+argument_dtype(context, site, position, type, origin) :-
+  value_dtype(context, function, kind, source, type, origin),
+  typed_argument(context, site, position, function, kind, source).
+
+// An operand's type where Nx makes a number a tensor first.
+.decl argument_strict_type(context: Context, site: symbol, position: number, type: symbol, origin: symbol)
+argument_strict_type(context, site, position, type, origin) :-
+  argument_dtype(context, site, position, type, origin).
+argument_strict_type(context, site, position, type, site) :-
+  argument_number(context, site, position, number),
+  number_type(number, type).
+
+// ── What an Nx call's type is ──────────────────────────────────────
+
+// The type the Nx call at `site` returns in a context.
+.decl call_type(context: Context, site: symbol, type: symbol, origin: symbol)
+
+// The Nx call at `site` has type rule `class`.
+.decl dtype_rule(site: symbol, class: symbol)
+dtype_rule(site, class) :-
+  operation_site(site, operation, arity),
+  dtype_class(operation, class),
+  !arity_class(operation, arity, _).
+dtype_rule(site, class) :- operation_site(site, operation, arity), arity_class(operation, arity, class).
+dtype_rule(site, "typed") :- remote_call(site, _, "Nx.Constants", _, _).
+dtype_rule(site, "typed") :- dtype_call(site, "fill"), option_given(site, "type").
+dtype_rule(site, "merge") :- dtype_call(site, "fill"), option_absent(site, "type").
+
+// The rule of a function at an arity other than its usual one: a
+// logarithm to a base, a unary minus or plus.
+.decl arity_class(operation: symbol, arity: number, class: symbol)
+arity_class("Nx.log", 2, "floating_with_f32").
+arity_class("Nx.Defn.Kernel.-", 1, "move"). arity_class("Nx.Defn.Kernel.+", 1, "move").
+
+// Each Nx function's type rule: `merge` for a weak merge of two operands,
+// `strict_merge` where Nx makes numbers tensors first, `floating_merge`
+// for a division, `move` to keep the operand's type, `floating`,
+// `aggregate`, `compare` and `typed` as `Nx.Type` has them, `clip` and
+// `join` for their operands, and `floating_with_f32` for the calls that
+// divide by or merge an f32 of their own. A function with none gives a
+// value of no known type.
+.decl dtype_class(operation: symbol, class: symbol)
+dtype_class(cat("Nx.", name), "merge") :- integer_binary(name).
+dtype_class(cat("Nx.Defn.Kernel.", name), "merge") :- kernel_integer_binary(name).
+dtype_class(cat("Nx.", name), "floating") :-
+  floating_function(name),
+  name != "divide", name != "atan2", name != "log2", name != "log10".
+dtype_class(operation, "move") :-
+  type_class(operation, "move"),
+  operation != "Nx.sum",
+  operation != "Nx.product".
+dtype_class(operation, "compare") :- sign_class(operation, "compare").
+dtype_class(cat("Nx.", name), "typed") :- typed_function(name), !match("Random\\..*", name).
+dtype_class(cat("Nx.", name), "typed") :- type_shorthand(name).
+dtype_class("Nx.add", "merge"). dtype_class("Nx.subtract", "merge"). dtype_class("Nx.multiply", "merge").
+dtype_class("Nx.max", "merge"). dtype_class("Nx.min", "merge"). dtype_class("Nx.remainder", "merge").
+dtype_class("Nx.pow", "merge"). dtype_class("Nx.quotient", "merge"). dtype_class("Nx.pad", "merge").
+dtype_class("Nx.Defn.Kernel.+", "merge"). dtype_class("Nx.Defn.Kernel.-", "merge").
+dtype_class("Nx.Defn.Kernel.*", "merge"). dtype_class("Nx.Defn.Kernel.max", "merge").
+dtype_class("Nx.Defn.Kernel.min", "merge"). dtype_class("Nx.Defn.Kernel.rem", "merge").
+dtype_class("Nx.Defn.Kernel.**", "merge"). dtype_class("Nx.Defn.Kernel.div", "merge").
+dtype_class("Nx.dot", "strict_merge"). dtype_class("Nx.outer", "strict_merge").
+dtype_class("Nx.select", "strict_merge"). dtype_class("Nx.put_slice", "strict_merge").
+dtype_class("Nx.divide", "floating_merge"). dtype_class("Nx.Defn.Kernel./", "floating_merge").
+dtype_class("Nx.atan2", "floating_merge").
+dtype_class("Nx.window_mean", "floating"). dtype_class("Nx.LinAlg.norm", "floating").
+dtype_class("Nx.LinAlg.determinant", "floating").
+dtype_class("Nx.log2", "floating_with_f32"). dtype_class("Nx.log10", "floating_with_f32").
+dtype_class("Nx.LinAlg.invert", "floating_with_f32").
+dtype_class("Nx.window_sum", "move"). dtype_class("Nx.window_product", "move").
+dtype_class("Nx.window_max", "move"). dtype_class("Nx.window_min", "move"). dtype_class("Nx.diff", "move").
+dtype_class("Nx.type", "move"). dtype_class("Nx.tril", "move"). dtype_class("Nx.triu", "move").
+dtype_class("Nx.conjugate", "move").
+dtype_class("Nx.sum", "aggregate"). dtype_class("Nx.product", "aggregate").
+dtype_class("Nx.all", "compare"). dtype_class("Nx.any", "compare"). dtype_class("Nx.all_close", "compare").
+dtype_class("Nx.linspace", "typed"). dtype_class("Nx.argmax", "typed"). dtype_class("Nx.argmin", "typed").
+dtype_class("Nx.argsort", "typed").
+dtype_class("Nx.clip", "clip").
+dtype_class("Nx.concatenate", "join"). dtype_class("Nx.stack", "join").
+
+// What a class of type rule does: "weak" merges with weak numbers, "keeps"
+// the type it merges to, is "checked" by the checks, or reads one operand
+// ("unary").
+.decl class_trait(class: symbol, trait: symbol)
+class_trait("merge", "weak"). class_trait("floating_merge", "weak").
+class_trait("merge", "keeps"). class_trait("strict_merge", "keeps"). class_trait("clip", "keeps").
+class_trait("merge", "checked"). class_trait("strict_merge", "checked").
+class_trait("floating_merge", "checked"). class_trait("clip", "checked"). class_trait("join", "checked").
+class_trait("floating_with_f32", "checked").
+class_trait("move", "unary"). class_trait("floating", "unary"). class_trait("floating_with_f32", "unary").
+class_trait("aggregate", "unary").
+
+// The two operands a merging call merges, and whether a number there is
+// weak (1) or made a tensor first (0).
+.decl merge_positions(site: symbol, first: number, second: number, weak: number)
+merge_positions(site, 0, 1, 1) :- dtype_rule(site, class), class_trait(class, "weak").
+merge_positions(site, first, second, 0) :-
+  dtype_rule(site, "strict_merge"),
+  sign_operands(site, first, second, _).
+
+// The types two merging operands meet at: each's type, or the number one
+// is, and the merged type.
+.decl operands_meet(context: Context, site: symbol, left: symbol, right: symbol, merged: symbol)
+operands_meet(context, site, left, right, merged) :-
+  argument_dtype(context, site, first, left, _),
+  merge_positions(site, first, second, 1),
+  argument_dtype(context, site, second, right, _),
+  type_merged(left, right, merged).
+.plan 1:(3,2,1,4)
+operands_meet(context, site, left, number, merged) :-
+  argument_dtype(context, site, first, left, _),
+  merge_positions(site, first, second, 1),
+  argument_number(context, site, second, number),
+  number_merged(left, number, merged).
+operands_meet(context, site, number, right, merged) :-
+  argument_dtype(context, site, second, right, _),
+  merge_positions(site, first, second, 1),
+  argument_number(context, site, first, number),
+  number_merged(right, number, merged).
+operands_meet(context, site, left, right, merged) :-
+  argument_strict_type(context, site, first, left, _),
+  merge_positions(site, first, second, 0),
+  argument_strict_type(context, site, second, right, _),
+  type_merged(left, right, merged).
+.plan 1:(3,2,1,4)
+operands_meet(context, site, own, bounds, merged) :-
+  argument_strict_type(context, site, 0, own, _),
+  dtype_rule(site, "clip"),
+  argument_strict_type(context, site, 1, low, _),
+  argument_strict_type(context, site, 2, high, _),
+  type_merged(low, high, bounds),
+  type_merged(own, bounds, merged).
+.plan 1:(3,2,1,4,5,6), 2:(4,2,1,3,5,6)
+
+// A merge keeps the type it meets at, from an operand that has it, or
+// from the call where no operand does; a division makes it a float.
+call_type(context, site, merged, origin) :-
+  operands_meet(context, site, _, _, merged),
+  meeting_position(site, position),
+  argument_strict_type(context, site, position, merged, origin).
+.plan 1:(3,2,1)
+call_type(context, site, merged, site) :-
+  operands_meet(context, site, left, right, merged),
+  merged != left,
+  merged != right,
+  dtype_rule(site, class),
+  class_trait(class, "keeps").
+call_type(context, site, floating, site) :-
+  operands_meet(context, site, _, _, merged),
+  dtype_rule(site, "floating_merge"),
+  floating_of(merged, floating).
+
+// The operands whose origin a merge's result takes.
+.decl meeting_position(site: symbol, position: number)
+meeting_position(site, first) :-
+  dtype_rule(site, class),
+  class_trait(class, "keeps"),
+  merge_positions(site, first, _, _).
+meeting_position(site, second) :-
+  dtype_rule(site, class),
+  class_trait(class, "keeps"),
+  merge_positions(site, _, second, _).
+meeting_position(site, 0) :- dtype_rule(site, "clip").
+
+// `move`, `aggregate`: the operand's type, or its aggregate.
+call_type(context, site, type, origin) :-
+  argument_strict_type(context, site, 0, type, origin),
+  dtype_rule(site, "move").
+call_type(context, site, aggregate, origin) :-
+  argument_strict_type(context, site, 0, type, origin),
+  dtype_rule(site, "aggregate"),
+  aggregate_of(type, aggregate).
+
+// `floating`: a float operand's type, and f32 from an integer.
+call_type(context, site, type, origin) :-
+  argument_strict_type(context, site, 0, type, origin),
+  dtype_rule(site, "floating"),
+  floating_of(type, type).
+call_type(context, site, floating, site) :-
+  argument_strict_type(context, site, 0, type, _),
+  dtype_rule(site, "floating"),
+  floating_of(type, floating),
+  floating != type.
+
+// `floating_with_f32`: the operand's float type merged with f32.
+call_type(context, site, merged, site) :-
+  argument_strict_type(context, site, 0, type, _),
+  dtype_rule(site, "floating_with_f32"),
+  floating_of(type, floating),
+  type_merged(floating, "f32", merged).
+
+// `compare`: u8.
+call_type(context, site, "u8", site) :-
+  typed_site(context, site),
+  dtype_rule(site, "compare").
+
+// `typed`: the type it is given, written, passed as `Nx.type/1`'s result
+// or configured; where it is given none, its default.
+call_type(context, site, type, site) :-
+  typed_site(context, site),
+  dtype_rule(site, "typed"),
+  option(site, "type", text, start),
+  term_spelling(text, start, spelled),
+  dtype_spelled(spelled, type).
+call_type(context, site, type, site) :-
+  typed_site(context, site),
+  dtype_rule(site, "typed"),
+  type_argument(site, function, kind, source),
+  value_of(context, function, kind, source, $Term(text, start)),
+  term_spelling(text, start, spelled),
+  dtype_spelled(spelled, type).
+call_type(context, site, type, origin) :-
+  value_dtype(context, function, kind, source, type, origin),
+  type_argument(site, function, kind, source),
+  dtype_rule(site, "typed"),
+  typed_site(context, site).
+call_type(context, site, "configured", site) :-
+  typed_site(context, site),
+  dtype_rule(site, "typed"),
+  float_type(_),
+  type_argument(site, function, kind, source),
+  value_of(context, function, kind, source, $Opaque(_)).
+call_type(context, site, type, site) :-
+  typed_site(context, site),
+  operation_site(site, operation, _),
+  default_dtype(operation, type),
+  option_absent(site, "type").
+call_type(context, site, name, site) :-
+  typed_site(context, site),
+  operation_site(site, operation, 1),
+  type_shorthand(name),
+  operation = cat("Nx.", name).
+call_type(context, site, "f32", site) :-
+  typed_site(context, site),
+  remote_call(site, _, "Nx.Constants", _, 0).
+call_type(context, site, type, site) :-
+  typed_site(context, site),
+  operation_site(site, "Nx.tensor", _),
+  option_absent(site, "type"),
+  argument_value(context, site, 0, $Term(text, start)),
+  term_list(text, start),
+  term_spelling(text, start, spelled),
+  list_dtype(spelled, type).
+call_type(context, site, type, origin) :-
+  argument_strict_type(context, site, 0, type, origin),
+  operation_site(site, "Nx.tensor", _),
+  option_absent(site, "type").
+
+// The type Nx infers for a written list of numbers.
+.decl list_dtype(spelled: symbol, type: symbol) inline
+list_dtype(spelled, "f32") :- list_class(spelled, "float").
+list_dtype(spelled, "s32") :- list_class(spelled, "integer").
+
+// The type a typed call makes where it is given none.
+.decl default_dtype(operation: symbol, type: symbol)
+default_dtype("Nx.iota", "s32"). default_dtype("Nx.eye", "s32"). default_dtype("Nx.linspace", "f32").
+default_dtype("Nx.argmax", "s32"). default_dtype("Nx.argmin", "s32"). default_dtype("Nx.argsort", "s32").
+
+// `join`: the elements of a list the joining function builds, merged from
+// the last, as `Enum.reduce/2` of `Nx.Type.merge/2` over the types
+// reversed does.
+.decl joined_cell(site: symbol, function: symbol, cell: symbol)
+joined_cell(site, function, cell) :-
+  dtype_rule(site, "join"),
+  flow_argument(site, function, 0, "object", cell),
+  flow_object(function, cell, "list", _).
+joined_cell(site, function, next) :-
+  joined_cell(site, function, cell),
+  flow_field(function, cell, "tail", "object", next),
+  flow_object(function, next, "list", _).
+
+// A cell of such a list: its element, and the cell after it, "" for the
+// last.
+.decl list_element(site: symbol, function: symbol, cell: symbol, kind: symbol, source: symbol, next: symbol)
+list_element(site, function, cell, kind, source, next) :-
+  joined_cell(site, function, cell),
+  flow_field(function, cell, "head", kind, source),
+  flow_field(function, cell, "tail", "object", next),
+  joined_cell(site, function, next).
+list_element(site, function, cell, kind, source, "") :-
+  joined_cell(site, function, cell),
+  flow_field(function, cell, "head", kind, source),
+  flow_field(function, cell, "tail", "literal", "[]").
+
+// An element's type, a number made a tensor.
+.decl joined_element_type(context: Context, site: symbol, cell: symbol, type: symbol, origin: symbol)
+joined_element_type(context, site, cell, type, origin) :-
+  value_dtype(context, function, kind, source, type, origin),
+  list_element(site, function, cell, kind, source, _),
+  typed_site(context, site).
+joined_element_type(context, site, cell, type, site) :-
+  typed_site(context, site),
+  list_element(site, function, cell, kind, source, _),
+  value_of(context, function, kind, source, $Term(text, start)),
+  term_spelling(text, start, spelled),
+  number_type(spelled, type).
+
+// The merged type of the elements from a cell on.
+.decl joined_type(context: Context, site: symbol, cell: symbol, type: symbol)
+joined_type(context, site, cell, type) :-
+  joined_element_type(context, site, cell, type, _),
+  list_element(site, _, cell, _, _, "").
+joined_type(context, site, cell, merged) :-
+  joined_element_type(context, site, cell, head, _),
+  list_element(site, _, cell, _, _, next),
+  joined_type(context, site, next, rest),
+  type_merged(head, rest, merged).
+.plan 1:(3,2,1,4)
+
+call_type(context, site, type, site) :-
+  joined_type(context, site, cell, type),
+  joined_cell(site, function, cell),
+  flow_argument(site, function, 0, "object", cell).

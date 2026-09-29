@@ -1,3 +1,417 @@
 // Option keys and values Nx rejects or reads differently than the code means.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// Every Nx function with options checks their keys against a fixed set
+// (`keyword!/2` or `Keyword.validate!/2`) and raises for a key it does not
+// take, and for options that are not a keyword list. The axis options have
+// a form (`:axes` a list, `:axis` one axis), and some options take only a
+// few atoms. A call is checked where its options are written: in a literal
+// list, in the pairs of a list the code builds, or in a literal list a
+// caller hands down as the options. A value is read through a pair only
+// where the pair's value has one source, so a value the code tests the type
+// of before it builds the pair (`if is_list(axes), do: axes, else: [axes]`)
+// is not taken for the value that reaches the call.
+//
+// Nx raises for these options, so the core's rules read nothing from them:
+// a call given a key its function does not take, or a list that is not a
+// keyword list, has options not known (`options_open`), and no option is
+// absent from it.
+
+// ── Findings ───────────────────────────────────────────────────────
+
+call_error(context, site, "unknown_option", key, "") :- unknown_option(context, site, key).
+call_error(context, site, "options_not_keyword", list, "") :- positional_options(context, site, list).
+call_error(context, site, "option_form", cat(key, ": ", spelled), "") :-
+  option_of_wrong_form(context, site, key, spelled).
+call_error(context, site, "option_value", cat(key, ": ", atom), "") :-
+  rejected_option_value(context, site, key, atom).
+call_error(context, site, "option_value", atom, "") :- unknown_padding_type(context, site, atom).
+
+// ── What goes wrong ────────────────────────────────────────────────
+
+// An option key the called function does not take: Nx checks every key a
+// function with options is given, and raises for one it does not know.
+.decl unknown_option(context: Context, site: symbol, key: symbol)
+unknown_option(context, site, key) :-
+  gets_option(context, site, key),
+  option_function(site, operation),
+  takes_no_option(operation, key).
+
+// Options that are a list of something other than `key: value` pairs
+// (`Nx.transpose(t, [1, 0])`), which Nx raises for.
+.decl positional_options(context: Context, site: symbol, list: symbol)
+positional_options(context, site, list) :-
+  gets_positional_options(context, site, list),
+  option_function(site, _).
+
+// An axis option in a form Nx does not take: `:axes` as one axis rather
+// than a list of them, `:axis` as a list.
+.decl option_of_wrong_form(context: Context, site: symbol, key: symbol, spelled: symbol)
+option_of_wrong_form(context, site, key, spelled) :-
+  gets_option_in_form(context, site, key, form, spelled),
+  option_function(site, operation),
+  takes_option(operation, key),
+  rejected_form(key, form).
+
+// An option given an atom the function does not take for it
+// (`direction: :descending`), or nil or false for one it requires.
+.decl rejected_option_value(context: Context, site: symbol, key: symbol, atom: symbol)
+rejected_option_value(context, site, key, atom) :-
+  gets_option_atom(context, site, key, atom),
+  option_function(site, operation),
+  rejects_atom(operation, key, atom).
+
+// `Nx.pad_outer/3` given an atom that is none of its padding types.
+.decl unknown_padding_type(context: Context, site: symbol, atom: symbol)
+unknown_padding_type(context, site, atom) :-
+  pads_outer_with(context, site, atom),
+  !padding_type(atom).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A call of a function that checks its options' keys, by the function's
+// name.
+.decl option_function(site: symbol, operation: symbol)
+option_function(site, operation) :- called_name(site, operation, _), option_keys(operation, _).
+
+// The keys a function with options takes, spelled between spaces, as its
+// `keyword!/2` or `Keyword.validate!/2` lists them. A function that hands
+// its options on without checking them (`Nx.reshape/3`), or checks them on
+// some paths only (`Nx.devectorize/2` of a tensor with no vectorized axes,
+// `Nx.reshape_vectors/2` of one tensor), is not here.
+.decl option_keys(operation: symbol, keys: symbol)
+option_keys("Nx.tensor", " type names backend ").
+option_keys("Nx.template", " names ").
+option_keys("Nx.iota", " axis names backend vectorized_axes type ").
+option_keys("Nx.eye", " names backend vectorized_axes type ").
+option_keys("Nx.tril", " k ").
+option_keys("Nx.triu", " k ").
+option_keys("Nx.tri", " k ").
+option_keys("Nx.take_diagonal", " offset ").
+option_keys("Nx.make_diagonal", " offset ").
+option_keys("Nx.put_diagonal", " offset ").
+option_keys("Nx.from_binary", " backend ").
+option_keys("Nx.to_binary", " limit ").
+option_keys("Nx.to_flat_list", " limit ").
+option_keys("Nx.to_batched", " leftover ").
+option_keys("Nx.flatten", " axes ").
+option_keys("Nx.squeeze", " axes ").
+option_keys("Nx.split", " axis ").
+option_keys("Nx.broadcast", " axes names ").
+option_keys("Nx.revectorize", " target_shape target_names ").
+option_keys("Nx.window_scatter_max", " padding strides ").
+option_keys("Nx.window_scatter_min", " padding strides ").
+option_keys("Nx.indexed_add", " axes ").
+option_keys("Nx.indexed_put", " axes ").
+option_keys("Nx.all_close", " equal_nan rtol atol ").
+option_keys("Nx.weighted_mean", " axes keep_axes ").
+option_keys("Nx.median", " axis keep_axis ").
+option_keys("Nx.mode", " axis keep_axis ").
+option_keys("Nx.sum", " axes keep_axes ").
+option_keys("Nx.product", " axes keep_axes ").
+option_keys("Nx.reduce_max", " axes keep_axes ").
+option_keys("Nx.reduce_min", " axes keep_axes ").
+option_keys("Nx.all", " axes keep_axes ").
+option_keys("Nx.any", " axes keep_axes ").
+option_keys("Nx.mean", " axes keep_axes ").
+option_keys("Nx.argmax", " axis tie_break keep_axis type ").
+option_keys("Nx.argmin", " axis tie_break keep_axis type ").
+option_keys("Nx.window_sum", " window_dilations padding strides ").
+option_keys("Nx.window_mean", " window_dilations padding strides ").
+option_keys("Nx.window_max", " window_dilations padding strides ").
+option_keys("Nx.window_min", " window_dilations padding strides ").
+option_keys("Nx.window_product", " window_dilations padding strides ").
+option_keys("Nx.window_reduce", " window_dilations strides padding ").
+option_keys("Nx.cumulative_sum", " axis reverse ").
+option_keys("Nx.cumulative_product", " axis reverse ").
+option_keys("Nx.cumulative_min", " axis reverse ").
+option_keys("Nx.cumulative_max", " axis reverse ").
+option_keys("Nx.diff", " order axis ").
+option_keys("Nx.reduce", " axes type keep_axes ").
+option_keys("Nx.transpose", " axes ").
+option_keys("Nx.reverse", " axes ").
+option_keys("Nx.conv", " input_permutation kernel_permutation output_permutation padding strides input_dilation kernel_dilation feature_group_size batch_group_size ").
+option_keys("Nx.slice", " strides ").
+option_keys("Nx.slice_along_axis", " strides axis ").
+option_keys("Nx.take", " axis ").
+option_keys("Nx.take_along_axis", " axis ").
+option_keys("Nx.gather", " axes ").
+option_keys("Nx.concatenate", " axis ").
+option_keys("Nx.stack", " axis name ").
+option_keys("Nx.sort", " axis direction stable ").
+option_keys("Nx.argsort", " axis direction stable type ").
+option_keys("Nx.top_k", " k ").
+option_keys("Nx.variance", " axes ddof keep_axes ").
+option_keys("Nx.standard_deviation", " axes ddof keep_axes ").
+option_keys("Nx.covariance", " ddof ").
+option_keys("Nx.fft", " length axis eps ").
+option_keys("Nx.ifft", " length axis eps ").
+option_keys("Nx.rfft", " length axis eps ").
+option_keys("Nx.irfft", " length axis eps ").
+option_keys("Nx.fft2", " lengths axes eps ").
+option_keys("Nx.ifft2", " lengths axes eps ").
+option_keys("Nx.linspace", " n name type endpoint ").
+option_keys("Nx.fill", " type ").
+option_keys("Nx.logsumexp", " axes exp_scaling_factor keep_axes ").
+option_keys("Nx.LinAlg.norm", " ord axes keep_axes ").
+option_keys("Nx.LinAlg.triangular_solve", " lower left_side transform_a ").
+option_keys("Nx.LinAlg.qr", " mode eps ").
+option_keys("Nx.LinAlg.pinv", " eps ").
+option_keys("Nx.LinAlg.eigh", " max_iter eps ").
+option_keys("Nx.LinAlg.svd", " max_iter full_matrices? ").
+option_keys("Nx.LinAlg.matrix_rank", " eps ").
+option_keys("Nx.LinAlg.least_squares", " eps ").
+option_keys("Nx.Random.split", " parts ").
+option_keys("Nx.Random.randint", " names type shape ").
+option_keys("Nx.Random.randint_split", " names type shape ").
+option_keys("Nx.Random.uniform", " names type shape ").
+option_keys("Nx.Random.uniform_split", " names type shape ").
+option_keys("Nx.Random.normal", " names type shape ").
+option_keys("Nx.Random.normal_split", " names type shape ").
+option_keys("Nx.Random.multivariate_normal", " names type shape method ").
+option_keys("Nx.Random.multivariate_normal_split", " names type shape method ").
+option_keys("Nx.Random.shuffle", " axis independent ").
+option_keys("Nx.Random.choice", " axis samples replace ").
+option_keys("Nx.Random.gumbel", " shape type ").
+option_keys("Nx.Random.gumbel_split", " shape type ").
+option_keys("Nx.Constants.nan", " backend ").
+option_keys("Nx.Constants.infinity", " backend ").
+option_keys("Nx.Constants.neg_infinity", " backend ").
+option_keys("Nx.Constants.max_finite", " backend ").
+option_keys("Nx.Constants.max", " backend ").
+option_keys("Nx.Constants.min_finite", " backend ").
+option_keys("Nx.Constants.min", " backend ").
+option_keys("Nx.Constants.smallest_positive_normal", " backend ").
+option_keys("Nx.Constants.epsilon", " backend ").
+option_keys("Nx.Constants.pi", " backend ").
+option_keys("Nx.Constants.e", " backend ").
+option_keys("Nx.Constants.euler_gamma", " backend ").
+option_keys("Nx.Constants.i", " names backend ").
+
+// Where more of the functions above take their options, by arity: their
+// last argument.
+options_at("Nx.from_binary", 3, 2).
+options_at("Nx.to_binary", 2, 1).
+options_at("Nx.to_flat_list", 2, 1).
+options_at("Nx.to_batched", 3, 2).
+options_at("Nx.revectorize", 3, 2).
+options_at("Nx.covariance", 2, 1).
+options_at("Nx.covariance", 3, 2).
+options_at("Nx.LinAlg.qr", 2, 1).
+options_at("Nx.LinAlg.eigh", 2, 1).
+options_at("Nx.LinAlg.svd", 2, 1).
+options_at("Nx.LinAlg.matrix_rank", 2, 1).
+options_at("Nx.Random.randint", 4, 3).
+options_at("Nx.Random.uniform", 2, 1).
+options_at("Nx.Random.uniform", 4, 3).
+options_at("Nx.Random.normal", 2, 1).
+options_at("Nx.Random.normal", 4, 3).
+options_at("Nx.Random.multivariate_normal", 4, 3).
+options_at("Nx.Random.multivariate_normal_split", 4, 3).
+options_at("Nx.Random.shuffle", 3, 2).
+options_at("Nx.Random.choice", 3, 2).
+options_at("Nx.Random.choice", 4, 3).
+options_at("Nx.Random.gumbel", 2, 1).
+
+// A constant's options, its second argument.
+options_source(site, function, kind, source) :-
+  remote_call(site, _, "Nx.Constants", _, 2),
+  flow_argument(site, function, 1, kind, source).
+
+// The key is not one the function takes.
+.decl takes_no_option(operation: symbol, key: symbol) inline
+takes_no_option(operation, key) :-
+  option_keys(operation, keys),
+  !contains(cat(" ", key, " "), keys).
+
+// The key is one the function takes.
+.decl takes_option(operation: symbol, key: symbol) inline
+takes_option(operation, key) :-
+  option_keys(operation, keys),
+  contains(cat(" ", key, " "), keys).
+
+// Options Nx raises for have none the rules can read. Only what the code
+// writes at the call decides this, not what a solve finds a value to be:
+// the values are derived from what `options_open` leaves.
+options_open(site) :-
+  option_given(site, key),
+  option_function(site, operation),
+  takes_no_option(operation, key).
+options_open(site) :-
+  written_positional_options(site, _),
+  option_function(site, _).
+
+// Options written at the call as a literal list with an element that is
+// no `key: value` pair.
+.decl written_positional_options(site: symbol, text: symbol)
+written_positional_options(site, text) :-
+  options_source(site, _, "literal", text),
+  term_list(text, 0),
+  term_child(text, 0, _, _).
+
+// Options that are a list with an element that is no pair, in a context:
+// written at the call, or handed down from a caller.
+.decl gets_positional_options(context: Context, site: symbol, list: symbol)
+gets_positional_options(context, site, text) :-
+  written_positional_options(site, text),
+  site_active(context, site).
+gets_positional_options(context, site, spelled) :-
+  handed_options(context, site, text, start),
+  term_child(text, start, _, _),
+  term_spelling(text, start, spelled).
+
+// A literal list a caller hands down as the call's options, in a context:
+// the value of a parameter, a field read or a call's result.
+.decl handed_options(context: Context, site: symbol, text: symbol, start: number)
+handed_options(context, site, text, start) :-
+  options_source(site, function, kind, source),
+  kind != "literal",
+  kind != "object",
+  site_active(context, site),
+  value_of(context, function, kind, source, $Term(text, start)),
+  term_list(text, start).
+
+// An option key a call is given in a context: written at the call (the
+// core's `option_given`), or in a list a caller hands down.
+.decl gets_option(context: Context, site: symbol, key: symbol)
+gets_option(context, site, key) :- option_given(site, key), site_active(context, site).
+gets_option(context, site, key) :-
+  handed_options(context, site, text, start),
+  term_keyword(text, start, key, _).
+
+// An option whose value some check reads.
+.decl checked_option(key: symbol)
+checked_option(key) :- rejected_form(key, _).
+checked_option(key) :- option_atoms(_, key, _).
+checked_option(key) :- requires_option(_, key).
+
+// A checked option's value in a context, where it is a literal term:
+// written at the call, in a list a caller hands down, or what a pair the
+// code builds holds.
+.decl option_term(context: Context, site: symbol, key: symbol, text: symbol, start: number)
+option_term(context, site, key, text, start) :-
+  checked_option(key),
+  option(site, key, text, start),
+  site_active(context, site).
+option_term(context, site, key, text, start) :-
+  handed_options(context, site, text, list),
+  term_keyword(text, list, key, start),
+  checked_option(key).
+option_term(context, site, key, text, start) :-
+  option_pair_value(context, site, key, $Term(text, start)).
+
+// What a checked option's pair holds in a context, where the pair's value
+// has one source in the function building it.
+.decl option_pair_value(context: Context, site: symbol, key: symbol, value: Value)
+option_pair_value(context, site, key, value) :-
+  sole_option_source(site, key, kind, source),
+  site_active(context, site),
+  site_function(site, function),
+  value_of(context, function, kind, source, value).
+
+// A checked option's pair whose value has one source: the option is given
+// once, and its value is not merged from branches.
+.decl sole_option_source(site: symbol, key: symbol, kind: symbol, source: symbol)
+sole_option_source(site, key, kind, source) :-
+  checked_option(key),
+  option_pair(site, key, kind, source),
+  1 = count : { option_pair(site, key, _, _) }.
+
+// A checked option's value in a context, where it is an atom.
+.decl gets_option_atom(context: Context, site: symbol, key: symbol, atom: symbol)
+gets_option_atom(context, site, key, atom) :-
+  option_term(context, site, key, text, start),
+  term_atom(text, start, atom).
+
+// The form of a checked option's value in a context, and how the finding
+// spells it: a literal term's form, an integer, or a list or tuple the
+// code builds at the pair.
+.decl gets_option_in_form(context: Context, site: symbol, key: symbol, form: symbol, spelled: symbol)
+gets_option_in_form(context, site, key, form, spelled) :-
+  option_term(context, site, key, text, start),
+  term_form(text, start, form),
+  term_spelling(text, start, spelled).
+gets_option_in_form(context, site, key, "integer", to_string(known)) :-
+  option_pair_value(context, site, key, $Integer([known, nil])),
+  known > 0.
+gets_option_in_form(context, site, key, "integer", "an integer") :-
+  option_pair_value(context, site, key, $Integer([_, [_, _]])).
+gets_option_in_form(context, site, key, "integer", "an integer") :-
+  option_pair_value(context, site, key, $Integer([coefficient, nil])),
+  coefficient <= 0.
+gets_option_in_form(context, site, key, form, cat("a ", form)) :-
+  sole_option_source(site, key, "object", object),
+  site_function(site, function),
+  flow_object(function, object, form, _),
+  site_active(context, site).
+
+// The form of a literal term, as an option's form is checked.
+.decl term_form(text: symbol, start: number, form: symbol)
+term_form(text, start, "list") :- term_list(text, start).
+term_form(text, start, "list") :- charlist(text, start, _).
+term_form(text, start, "tuple") :- term_tuple(text, start).
+term_form(text, start, "integer") :- term_integer(text, start, _).
+term_form(text, start, "float") :- term_float(text, start).
+term_form(text, start, "atom") :- term_atom(text, start, atom), atom != "nil".
+
+// The forms an axis option cannot have: Nx normalizes `:axes` as a list
+// of axes or nil (`Nx.Shape.normalize_axes/4`), and `:axis` as one axis.
+.decl rejected_form(key: symbol, form: symbol)
+rejected_form("axes", "integer"). rejected_form("axes", "float").
+rejected_form("axes", "tuple"). rejected_form("axes", "atom").
+rejected_form("axis", "list"). rejected_form("axis", "tuple").
+
+// The atoms an option takes, spelled between spaces, where Nx raises for
+// any other atom.
+.decl option_atoms(operation: symbol, key: symbol, atoms: symbol)
+option_atoms("Nx.sort", "direction", " :asc :desc ").
+option_atoms("Nx.argsort", "direction", " :asc :desc ").
+option_atoms("Nx.argmax", "tie_break", " :high :low ").
+option_atoms("Nx.argmin", "tie_break", " :high :low ").
+option_atoms(operation, "padding", " :valid :same ") :- padded_window(operation).
+option_atoms("Nx.fft", "length", " :power_of_two nil ").
+option_atoms("Nx.ifft", "length", " :power_of_two nil ").
+option_atoms("Nx.rfft", "length", " :power_of_two nil ").
+option_atoms("Nx.irfft", "length", " nil ").
+option_atoms("Nx.LinAlg.qr", "mode", " :reduced :complete ").
+option_atoms("Nx.LinAlg.triangular_solve", "transform_a", " :none :transpose :conjugate ").
+option_atoms("Nx.Random.multivariate_normal", "method", " :svd :eigh :cholesky ").
+option_atoms("Nx.Random.multivariate_normal_split", "method", " :svd :eigh :cholesky ").
+
+// The functions whose `:padding` is `:valid`, `:same` or a list of pairs
+// (`Nx.Shape`'s padding configuration).
+.decl padded_window(operation: symbol)
+padded_window("Nx.conv"). padded_window("Nx.window_sum"). padded_window("Nx.window_mean").
+padded_window("Nx.window_max"). padded_window("Nx.window_min"). padded_window("Nx.window_product").
+padded_window("Nx.window_reduce"). padded_window("Nx.window_scatter_max").
+padded_window("Nx.window_scatter_min").
+
+// An option Nx requires, raising "missing option" for nil or false.
+.decl requires_option(operation: symbol, key: symbol)
+requires_option("Nx.LinAlg.svd", "max_iter").
+requires_option("Nx.LinAlg.eigh", "max_iter").
+
+// The atoms `||` takes for no value.
+.decl falsy(atom: symbol)
+falsy("nil"). falsy("false").
+
+// The atom is not one the option takes.
+.decl rejects_atom(operation: symbol, key: symbol, atom: symbol) inline
+rejects_atom(operation, key, atom) :-
+  option_atoms(operation, key, atoms),
+  !contains(cat(" ", atom, " "), atoms).
+rejects_atom(operation, key, atom) :-
+  requires_option(operation, key),
+  falsy(atom).
+
+// `Nx.pad_outer/3`'s padding type in a context, where it is an atom.
+.decl pads_outer_with(context: Context, site: symbol, atom: symbol)
+pads_outer_with(context, site, atom) :-
+  operation_site(site, "Nx.pad_outer", 3),
+  argument_value(context, site, 1, $Term(text, start)),
+  term_atom(text, start, atom).
+
+// The padding types of `Nx.pad_outer/3`.
+.decl padding_type(atom: symbol)
+padding_type(":cyclic"). padding_type(":mirror"). padding_type(":replicate"). padding_type(":reflect").

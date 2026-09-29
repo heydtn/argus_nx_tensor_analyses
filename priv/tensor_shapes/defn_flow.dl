@@ -1,3 +1,587 @@
 // What `defn`'s control flow and static arguments reject: predicates, branches, `while` state, values used as integers.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// `defn` compiles a `cond` or `if` to `Nx.Defn.Expr.defn_cond/2`, handed a
+// list of `{meta, {predicate, branch}}` whose branches are closures, and a
+// `while` to `Nx.Defn.Kernel.__while__/6`, handed the initial state and a
+// closure over `which` and the state, which gives the condition for
+// `:condition` and the next state for `:body`. Nx builds every branch and
+// the loop's body once, while it builds the expression, and checks what
+// they give against one another there.
+//
+// A public `defn` is entered through its wrapper, which runs the body
+// (`__defn:name__`) under `Nx.Defn.jit_apply/2` when called from outside a
+// `defn`. There `defn` makes every argument a tensor but a list or a
+// function, and such a tensor is no number while the expression is built.
+// The rules about what a `defn` makes of its arguments read its body over
+// its own parameters (`entry_body`), and follow the tensors the body
+// computes from them through its Nx calls (`traced_source`), within the
+// body: a branch or a loop body nested in a closure is not followed.
+//
+// Each rule below reports one kind of `call_error`, named in its head.
+
+// ══ Predicates ══════════════════════════════════════════════════════
+//
+// A finding about a `cond` or `if` is placed at the clause it is about,
+// the tuple the function builds of its predicate and branch: the call to
+// `defn_cond/2` carries no line of its own.
+
+// A `cond`, `if` or `while` decides on a tensor that is not a scalar, as
+// `if x > 0` of a vector does, and Nx raises.
+call_error(context, place, "predicate_shape", spelled, "") :-
+  decides_on(context, place, $Tensor([_, axes])),
+  axes != nil,
+  sizes_spelled(axes, spelled).
+spelling_demand(axes) :- decides_on(_, _, $Tensor([_, axes])), axes != nil.
+
+// A `cond` or `if` decides on nil, an atom or a list, which is no tensor:
+// `if opts[:training]` where the options lack the key. Nx raises.
+call_error(context, place, "predicate_value", spelled, "") :-
+  decides_on(context, place, $Term(text, start)),
+  ( term_atom(text, start, _), !term_scalar(text, start) ; term_list(text, start) ),
+  term_spelling(text, start, spelled).
+call_error(context, pair, "predicate_value", "nil", "") :-
+  clause_predicate(_, function, pair, _, kind, source),
+  misses_key(context, function, kind, source).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A predicate a `cond`, `if` or `while` decides on, where it is placed: a
+// clause's, and what a `while`'s condition gives on its initial state.
+.decl decides_on(context: Context, place: symbol, predicate: Value)
+decides_on(context, pair, predicate) :-
+  clause_predicate(site, function, pair, _, kind, source),
+  site_active(context, site),
+  value_of(context, function, kind, source, predicate).
+decides_on(context, site, predicate) :-
+  loop_run(site, call, ":condition"),
+  result_value(context, call, predicate).
+
+// A lookup of a key that the keyword list the code writes lacks, and no
+// `keyword!/2` or `assert_keys/2` names, which gives nil.
+.decl misses_key(context: Context, function: symbol, kind: symbol, source: symbol)
+misses_key(context, function, "result", site) :-
+  lookup(context, site, $Term(text, start), key),
+  term_list(text, start),
+  !term_keyword(text, start, key, _),
+  !declared_key(key),
+  !declared_key("*"),
+  remote_call(site, function, _, _, 2).
+
+// A key a `keyword!/2` or `assert_keys/2` names, requiring it or giving
+// it a default, and "*" where one names keys the rules cannot read: the
+// rules hand on the options these are given, so a lookup of such a key
+// may find it there.
+.decl declared_key(key: symbol)
+declared_key(key) :-
+  remote_call(call, function, "Nx.Defn.Kernel", name, 2),
+  ( name = "keyword!" ; name = "assert_keys" ),
+  flow_argument(call, function, 1, "literal", text),
+  term_keyword(text, 0, key, _).
+declared_key(substr(atom, 1, strlen(atom) - 1)) :-
+  remote_call(call, function, "Nx.Defn.Kernel", name, 2),
+  ( name = "keyword!" ; name = "assert_keys" ),
+  flow_argument(call, function, 1, "literal", text),
+  term_element_atom(text, 0, _, atom).
+declared_key("*") :-
+  remote_call(call, function, "Nx.Defn.Kernel", name, 2),
+  ( name = "keyword!" ; name = "assert_keys" ),
+  flow_argument(call, function, 1, kind, _),
+  kind != "literal".
+
+// ══ Branches ════════════════════════════════════════════════════════
+
+// Two branches of a `cond` or `if` give tensors whose shapes do not
+// broadcast together, and Nx raises merging them.
+call_error(context, pair, "branch_shapes", cat("cannot broadcast tensor of dimensions ", later_spelled, " to ", earlier_spelled), "") :-
+  branch_meeting(context, pair, earlier, later),
+  broadcast_axis(later, earlier, _, later_size, _, earlier_size, _),
+  broadcast_conflict(later_size, earlier_size),
+  sizes_spelled(later, later_spelled),
+  sizes_spelled(earlier, earlier_spelled).
+
+// Two branches give tensors of known shapes that broadcast to one neither
+// has, which Nx gives without a word: `{3}` and `{3, 1}` make `{3, 3}`.
+call_error(context, pair, "branch_broadcast", cat(earlier_spelled, " and ", later_spelled, " broadcast to ", merged_spelled), "") :-
+  branch_meeting(context, pair, earlier, later),
+  axes_sized(earlier),
+  axes_sized(later),
+  broadcast(later, earlier, merged),
+  merged != earlier,
+  merged != later,
+  sizes_spelled(earlier, earlier_spelled),
+  sizes_spelled(later, later_spelled),
+  sizes_spelled(merged, merged_spelled).
+spelling_demand(merged) :- branch_meeting(_, _, earlier, later), broadcast(later, earlier, merged).
+
+// Two branches give values of different structures, a tuple and a
+// tensor or tuples of different sizes, and Nx raises.
+call_error(context, pair, "branch_structure", cat(earlier, " and ", later), "") :-
+  branch_form(context, site, one, earlier),
+  branch_form(context, site, other, later),
+  one < other,
+  earlier != later,
+  branch_closure(site, other, pair, _).
+
+// A `cond`'s last clause decides on a tensor its public `defn` computes
+// from its inputs, so no clause always holds, and Nx raises.
+call_error(context, pair, "cond_fallthrough", "", "") :-
+  entry_body(body, context),
+  clause_predicate(_, body, pair, "last", kind, source),
+  traced_source(body, kind, source).
+
+// A branch of an `if` or `cond` raises, and a clause decides on a tensor
+// its public `defn` computes from its inputs: Nx builds every branch of
+// such a `cond`, so the raise runs whatever the data.
+call_error(context, pair, "traced_raise", "", "") :-
+  entry_body(body, context),
+  clause_predicate(site, body, _, _, kind, source),
+  traced_source(body, kind, source),
+  branch_closure(site, _, pair, callee),
+  raises_always(callee).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A clause of the list a function hands `defn_cond/2`: its place, the
+// list's cell and the clause's `{predicate, branch}` pair.
+.decl clause(site: symbol, function: symbol, index: number, cell: symbol, pair: symbol)
+clause(site, function, 0, cell, pair) :-
+  runs_branches(site),
+  flow_argument(site, function, 1, "object", cell),
+  flow_field(function, cell, "head", "object", entry),
+  flow_field(function, entry, "{1}", "object", pair).
+clause(site, function, index + 1, next, pair) :-
+  clause(site, function, index, cell, _),
+  index < 64,
+  flow_field(function, cell, "tail", "object", next),
+  flow_field(function, next, "head", "object", entry),
+  flow_field(function, entry, "{1}", "object", pair).
+
+// Where a clause's predicate comes from in the function, and whether it
+// is the last clause's ("last") or an earlier one's.
+.decl clause_predicate(site: symbol, function: symbol, pair: symbol, order: symbol, kind: symbol, source: symbol)
+clause_predicate(site, function, pair, "last", kind, source) :-
+  clause(site, function, _, cell, pair),
+  flow_field(function, cell, "tail", "literal", "[]"),
+  flow_field(function, pair, "{0}", kind, source).
+clause_predicate(site, function, pair, "earlier", kind, source) :-
+  clause(site, function, _, cell, pair),
+  flow_field(function, cell, "tail", "object", _),
+  flow_field(function, pair, "{0}", kind, source).
+
+// The closure a clause runs for its branch.
+.decl branch_closure(site: symbol, index: number, pair: symbol, callee: symbol)
+branch_closure(site, index, pair, callee) :-
+  clause(site, function, index, _, pair),
+  flow_field(function, pair, "{1}", "object", closure),
+  flow_closure(closure, callee).
+
+// What a branch gives at the call, in the names of the call's context.
+.decl branch_result(context: Context, site: symbol, index: number, value: Value)
+branch_result(context, site, index, renamed) :-
+  branch_closure(site, index, _, callee),
+  canonical_call(context, site, callee, arguments, mapping),
+  return_value($Canonical(callee, arguments), callee, value),
+  renamed_value(mapping, value, renamed).
+branch_result(context, site, index, value) :-
+  branch_closure(site, index, _, callee),
+  invocation(context, site, callee, $Called(site, context)),
+  return_value($Called(site, context), callee, value).
+
+// A tensor's axes a branch gives, itself (`element` "") or as an element
+// of a tuple it builds (`{i}`), a number's none. An element is read in
+// the names of the context the branch runs in.
+.decl branch_axes(context: Context, site: symbol, index: number, element: symbol, axes: Axes)
+branch_axes(context, site, index, "", axes) :-
+  branch_result(context, site, index, value),
+  value_axes(value, axes).
+branch_axes(context, site, index, selector, axes) :-
+  branch_closure(site, index, _, callee),
+  invocation(context, site, callee, callee_context),
+  flow_return(callee, at, "object", tuple),
+  feasible(callee_context, at),
+  flow_object(callee, tuple, "tuple", _),
+  flow_field(callee, tuple, selector, kind, source),
+  value_of(callee_context, callee, kind, source, value),
+  value_axes(value, axes).
+axes_needed(axes) :- branch_axes(_, _, _, _, axes).
+spelling_demand(axes) :- branch_axes(_, _, _, _, axes).
+
+// A value as a tensor's axes: a tensor's, and none for a number.
+.decl value_axes(value: Value, axes: Axes) inline
+value_axes(value, axes) :- value = $Tensor([_, axes]).
+value_axes(value, nil) :- value = $Integer(_).
+value_axes(value, nil) :- value = $Term(text, start), term_scalar(text, start).
+
+// What two branches give in one place, the earlier clause's first, and
+// the later clause, where a finding between them is placed.
+.decl branch_meeting(context: Context, pair: symbol, earlier: Axes, later: Axes)
+branch_meeting(context, pair, earlier, later) :-
+  branch_axes(context, site, one, element, earlier),
+  branch_axes(context, site, other, element, later),
+  one < other,
+  branch_closure(site, other, pair, _).
+broadcast_demand(later, earlier) :- branch_meeting(_, _, earlier, later).
+
+// A branch's value as a structure: "a tensor", or "a tuple of 2".
+.decl branch_form(context: Context, site: symbol, index: number, form: symbol)
+branch_form(context, site, index, "a tensor") :- branch_axes(context, site, index, "", _).
+branch_form(context, site, index, cat("a tuple of ", to_string(arity))) :-
+  branch_result(context, site, index, $Object(_, tuple, _)),
+  flow_object(_, tuple, "tuple", arity).
+
+// A branch that raises on every path: each of its returns is a call to
+// `:erlang.error/1,2,3`, which `raise` compiles to.
+.decl raises_always(function: symbol)
+raises_always(callee) :-
+  branch_closure(_, _, _, callee),
+  flow_return(callee, at, _, _),
+  remote_call(at, _, ":erlang", "error", _),
+  !returns_normally(callee).
+
+.decl returns_normally(function: symbol)
+returns_normally(callee) :-
+  branch_closure(_, _, _, callee),
+  flow_return(callee, at, _, _),
+  !remote_call(at, _, ":erlang", "error", _).
+
+// ══ While ═══════════════════════════════════════════════════════════
+
+// A `while`'s body gives a leaf of its state another shape than it starts
+// with, and Nx raises.
+call_error(context, site, "while_shape", cat(place, " starts as ", initial_spelled, " and the body makes it ", body_spelled), "") :-
+  loop_state_axes(context, site, "initial", place, initial),
+  loop_state_axes(context, site, "body", place, body),
+  agree_conflict(initial, body, -1),
+  sizes_spelled(initial, initial_spelled),
+  sizes_spelled(body, body_spelled).
+
+// A `while`'s body makes a float of a leaf of its state that starts as an
+// integer the code writes or a size, as `acc = 0` does with a body adding
+// a mean, and Nx raises.
+call_error(context, site, "while_type", cat(place, " starts as an integer and the body makes it a ", class), "") :-
+  loop_state(context, site, "initial", place, initial),
+  ( initial = $Term(text, start), term_integer(text, start, _) ; initial = $Integer(_) ),
+  loop_body_leaf(context, site, place, body_context, body_function, kind, source),
+  value_class(body_context, body_function, kind, source, class, _),
+  class != "integer".
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// The runs of a `while`'s closure over a condition (not a generator) the
+// rules make: its body at the call itself, whose result is the loop's,
+// and its condition at a call of its own, named for the call.
+.decl loop_run(site: symbol, call: symbol, which: symbol)
+loop_run(site, site, ":body") :-
+  operation_site(site, "Nx.Defn.Kernel.__while__", 6),
+  flow_argument(site, _, 3, "literal", ":none").
+loop_run(site, cat(site, " condition"), ":condition") :- loop_run(site, site, ":body").
+literal_text(which) :- loop_run(_, _, which).
+
+// The closure a `while` runs, in the context of the call.
+.decl loop_closure(context: Context, site: symbol, callee: symbol, closure: Value)
+loop_closure(context, site, callee, $Object(object_context, closure, mapping)) :-
+  operation_site(site, "Nx.Defn.Kernel.__while__", 6),
+  argument_value(context, site, 4, $Object(object_context, closure, mapping)),
+  flow_closure(closure, callee).
+
+// Each run hands the closure `which`, the initial state, then what it
+// captured, which a closure's function takes after its arguments: Nx
+// builds the body once, from tensors of the initial state's shapes.
+call_made(context, call, callee) :-
+  loop_run(site, call, _),
+  loop_closure(context, site, callee, _).
+call_argument(context, call, callee, 0, $Term(which, 0)) :-
+  loop_run(site, call, which),
+  loop_closure(context, site, callee, _).
+call_argument(context, call, callee, 1, state) :-
+  loop_run(site, call, _),
+  loop_closure(context, site, callee, _),
+  argument_value(context, site, 2, state).
+call_argument(context, call, callee, 2 + position, captured) :-
+  loop_run(site, call, _),
+  loop_closure(context, site, callee, $Object(object_context, closure, mapping)),
+  flow_field(_, closure, selector, _, _),
+  selector_position(selector, position),
+  field_value($Object(object_context, closure, mapping), selector, captured).
+field_demand($Object(object_context, closure, mapping), selector) :-
+  loop_closure(_, _, _, $Object(object_context, closure, mapping)),
+  flow_field(_, closure, selector, _, _).
+
+// A `while` over a generator hands its closure a tuple the rules do not
+// build, so its body is not run: the loop gives a tensor of its initial
+// state's shape, as Nx requires of the body.
+result_value(context, site, initial) :-
+  operation_site(site, "Nx.Defn.Kernel.__while__", 6),
+  flow_argument(site, _, 3, "object", _),
+  argument_value(context, site, 2, initial),
+  ( initial = $Tensor(_) ; initial = $Opaque(_) ).
+
+// A leaf of a `while`'s state as it starts (`initial`) and as the body
+// gives it (`body`), in the names of the call's context, where a reader
+// places it: the state, or an element of a tuple.
+.decl loop_state(context: Context, site: symbol, role: symbol, place: symbol, value: Value)
+loop_state(context, site, "initial", "the state", initial) :-
+  loop_run(site, site, _),
+  argument_value(context, site, 2, initial).
+loop_state(context, site, "body", "the state", state) :-
+  loop_run(site, site, _),
+  result_value(context, site, state).
+loop_state(context, site, role, cat("element ", to_string(position), " of the state"), element) :-
+  loop_state(context, site, role, "the state", $Object(object_context, tuple, mapping)),
+  flow_object(_, tuple, "tuple", _),
+  flow_field(_, tuple, selector, _, _),
+  selector_position(selector, position),
+  field_value($Object(object_context, tuple, mapping), selector, element).
+loop_state(context, site, role, cat("element ", to_string(position), " of the state"), element) :-
+  loop_state(context, site, role, "the state", $Term(text, start)),
+  term_tuple(text, start),
+  term_child(text, start, position, child),
+  term_value(text, child, element).
+field_demand($Object(object_context, tuple, mapping), selector) :-
+  loop_state(_, _, _, "the state", $Object(object_context, tuple, mapping)),
+  flow_object(_, tuple, "tuple", _),
+  flow_field(_, tuple, selector, _, _).
+
+.decl loop_state_axes(context: Context, site: symbol, role: symbol, place: symbol, axes: Axes)
+loop_state_axes(context, site, role, place, axes) :-
+  loop_state(context, site, role, place, value),
+  value_axes(value, axes).
+agree_demand(initial, body, -1) :-
+  loop_state_axes(context, site, "initial", place, initial),
+  loop_state_axes(context, site, "body", place, body).
+axes_needed(axes) :- loop_state_axes(_, _, _, _, axes).
+spelling_demand(axes) :- loop_state_axes(_, _, _, _, axes).
+
+// A leaf of the state the body gives, by its source and the context the
+// body runs in, whose type is asked of.
+.decl loop_body_leaf(context: Context, site: symbol, place: symbol, body_context: Context, function: symbol, kind: symbol, source: symbol)
+loop_body_leaf(context, site, "the state", callee_context, callee, kind, source) :-
+  loop_run(site, site, _),
+  invocation(context, site, callee, callee_context),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at).
+loop_body_leaf(context, site, cat("element ", to_string(position), " of the state"), callee_context, callee, kind, source) :-
+  loop_body_leaf(context, site, "the state", callee_context, callee, "object", tuple),
+  flow_object(callee, tuple, "tuple", _),
+  flow_field(callee, tuple, selector, kind, source),
+  selector_position(selector, position).
+sign_demand(body_context, function, kind, source) :- loop_body_leaf(_, _, _, body_context, function, kind, source).
+
+// ══ Closures Nx builds apart ════════════════════════════════════════
+
+// A closure a `while`, `Nx.reduce` or `Nx.window_reduce` runs captures a
+// tensor its public `defn` computes from its inputs, and computes with
+// it: Nx builds the closure in a scope of its own, and raises on a tensor
+// from outside it.
+call_error(context, site, "closure_captures_tensor", "", "") :-
+  entry_body(body, context),
+  captured_use(site, body, kind, source),
+  traced_source(body, kind, source).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A value a closure handed to a call in `scoped_fun` captures and
+// computes with, by its source where the closure is built: the closure
+// hands it to an Nx call that does more than ask about its shape or look
+// a key up, or gives it back.
+.decl captured_use(site: symbol, function: symbol, kind: symbol, source: symbol)
+captured_use(site, function, kind, source) :-
+  scoped_closure(site, function, closure, callee, first),
+  flow_field(function, closure, selector, kind, source),
+  selector_position(selector, position),
+  flow_argument(use, callee, _, "param", to_string(first + position)),
+  operation_site(use, operation, _),
+  !shape_query(operation),
+  !modeled_call(use).
+captured_use(site, function, kind, source) :-
+  scoped_closure(site, function, closure, callee, first),
+  flow_field(function, closure, selector, kind, source),
+  selector_position(selector, position),
+  flow_return(callee, _, "param", to_string(first + position)).
+
+// A closure a call builds an expression of apart, as it is handed, the
+// function it runs, and that function's first parameter for what the
+// closure captured, which follows the arguments.
+.decl scoped_closure(site: symbol, function: symbol, closure: symbol, callee: symbol, first: number)
+scoped_closure(site, function, closure, callee, arity - captured) :-
+  operation_site(site, operation, operation_arity),
+  scoped_fun(operation, operation_arity, position),
+  flow_argument(site, function, position, "object", closure),
+  flow_object(function, closure, "closure", captured),
+  flow_closure(closure, callee),
+  function_def(callee, _, _, arity, _).
+
+.decl scoped_fun(operation: symbol, arity: number, position: number)
+scoped_fun("Nx.Defn.Kernel.__while__", 6, 4).
+scoped_fun("Nx.reduce", 3, 2). scoped_fun("Nx.reduce", 4, 3).
+scoped_fun("Nx.window_reduce", 4, 3). scoped_fun("Nx.window_reduce", 5, 4).
+
+// ══ Values Nx makes no tensor of ════════════════════════════════════
+
+// A Kernel operator or element-wise Nx function gets an atom, as in
+// `opts[:mode] == :train`, or `x + opts[:bias]` where the options lack the
+// key. Nx makes no tensor of an atom but true and false, and raises.
+call_error(context, site, "atom_operand", spelled, "") :-
+  operator_operand(site, position),
+  argument_value(context, site, position, $Term(text, start)),
+  term_atom(text, start, spelled),
+  !term_scalar(text, start).
+call_error(context, site, "atom_operand", "nil", "") :-
+  operator_operand(site, position),
+  flow_argument(site, function, position, kind, source),
+  misses_key(context, function, kind, source),
+  site_active(context, site).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// An operand Nx makes a tensor of, of an operator or element-wise
+// function.
+.decl operator_operand(site: symbol, position: number)
+operator_operand(site, position) :-
+  operation_site(site, operation, 2),
+  broadcasts(operation),
+  position = range(0, 2).
+operator_operand(site, 0) :- operation_site(site, "Nx.Defn.Kernel.__not__", 1).
+operator_operand(site, 0) :- operation_site(site, "Nx.Defn.Kernel.__unary_minus__", 1).
+
+// ══ Arguments used as integers ══════════════════════════════════════
+
+// A public `defn` hands a tensor it computes from its inputs to an Nx
+// call where Nx needs an integer while it builds the expression: a size of
+// a shape, an axis, a slice's length, a range's bound.
+call_error(context, site, "tensor_as_integer", slot, "") :-
+  entry_body(body, context),
+  integer_part(site, body, kind, source, slot),
+  traced_source(body, kind, source).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A public `defn`'s body over its own parameters: the context its wrapper
+// runs it in when called from outside a `defn`, where `defn` makes every
+// argument a tensor but a list or a function.
+.decl entry_body(body: symbol, context: Context)
+entry_body(body, $Canonical(body, arguments)) :-
+  defn_wrapper(wrapper, body),
+  function_def(wrapper, _, _, arity, 1),
+  own_names(arity, 0, arguments).
+
+// A source of such a body that holds a tensor made of its arguments: a
+// parameter, an element of a tuple one holds, and what an Nx call computes
+// of one, but a question about its shape, which is answered while the
+// expression is built, and a call the rules model as handing an argument
+// back or looking a key up.
+.decl traced_source(body: symbol, kind: symbol, source: symbol)
+traced_source(body, "param", to_string(position)) :-
+  entry_body(body, _),
+  function_def(body, _, _, arity, _),
+  position = range(0, arity).
+traced_source(body, "load", load) :-
+  traced_source(body, kind, source),
+  flow_load(body, load, selector, kind, source),
+  selector_position(selector, _).
+traced_source(body, "result", site) :-
+  traced_source(body, kind, source),
+  flow_argument(site, body, _, kind, source),
+  operation_site(site, operation, _),
+  !shape_query(operation),
+  !modeled_call(site).
+
+// An element of a tuple a public `defn` builds that holds such a tensor,
+// which is no size.
+.decl traced_element(context: Context, tuple: symbol, selector: symbol)
+traced_element(context, tuple, selector) :-
+  entry_body(body, context),
+  flow_field(body, tuple, selector, kind, source),
+  traced_source(body, kind, source).
+
+// What an Nx call takes as an integer, or as tuples and lists of them, by
+// the source of each part in the function: the argument, and what the
+// tuples and lists it builds there hold.
+.decl integer_part(site: symbol, function: symbol, kind: symbol, source: symbol, slot: symbol)
+integer_part(site, function, kind, source, "the shape") :-
+  shape_position(site, position),
+  flow_argument(site, function, position, kind, source),
+  entry_body(function, _).
+integer_part(site, function, kind, source, "the window dimensions") :-
+  operation_site(site, operation, arity),
+  window_operation(operation, arity, position),
+  flow_argument(site, function, position, kind, source),
+  entry_body(function, _).
+integer_part(site, function, kind, source, slot) :-
+  operation_site(site, operation, arity),
+  integer_position(operation, arity, position, slot),
+  flow_argument(site, function, position, kind, source),
+  entry_body(function, _).
+integer_part(site, function, kind, source, cat("the :", key, " option")) :-
+  option_pair(site, key, kind, source),
+  integer_option(key),
+  site_function(site, function),
+  entry_body(function, _).
+integer_part(site, function, kind, source, slot) :-
+  integer_part(site, function, "object", object, slot),
+  flow_field(function, object, _, kind, source).
+
+.decl integer_position(operation: symbol, arity: number, position: number, slot: symbol)
+integer_position("Nx.slice", arity, 2, "the slice lengths") :- arity = 3 ; arity = 4.
+integer_position("Nx.slice_along_axis", arity, 2, "the slice length") :- arity = 3 ; arity = 4.
+integer_position("Nx.tile", 2, 1, "the repetitions").
+integer_position("Nx.new_axis", arity, 1, "the axis") :- arity = 2 ; arity = 3.
+integer_position("Nx.pad", 3, 2, "the padding").
+integer_position("Nx.Defn.Kernel...", 2, position, "a range's bound") :- position = range(0, 2).
+integer_position("Nx.Defn.Kernel...//", 3, position, "a range's bound") :- position = range(0, 3).
+
+.decl integer_option(key: symbol)
+integer_option("axis"). integer_option("axes"). integer_option("k"). integer_option("length").
+integer_option("lengths"). integer_option("order"). integer_option("offset"). integer_option("n").
+integer_option("parts"). integer_option("strides").
+
+// ══ Output ══════════════════════════════════════════════════════════
+
+// A `print_value` or `io_call` whose result the `defn` never uses: Nx
+// builds only what the output depends on, so it never prints or calls
+// back.
+call_error(context, site, "dropped_print", "", "") :-
+  calls_back(site),
+  !result_used(site),
+  site_active(context, site).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A call Nx makes back to the host while it runs: `runtime_raise/1` is an
+// `io_call` too.
+.decl calls_back(site: symbol)
+calls_back(site) :- remote_call(site, _, "Nx.Defn.Kernel", "print_value", _).
+calls_back(site) :- remote_call(site, _, "Nx.Defn.Kernel", "io_call", _).
+
+// Something reads the call's result.
+.decl result_used(site: symbol)
+result_used(site) :- calls_back(site), flow_argument(_, _, _, "result", site).
+result_used(site) :- calls_back(site), flow_field(_, _, _, "result", site).
+result_used(site) :- calls_back(site), flow_return(_, _, "result", site).
+result_used(site) :- calls_back(site), flow_load(_, _, _, "result", site).
+
+// ══ Kernel calls ════════════════════════════════════════════════════
+
+// `io_call/2,3` and `print_value/3` give back what they are handed.
+passes_argument("Nx.Defn.Kernel", "io_call", 2).
+passes_argument("Nx.Defn.Kernel", "io_call", 3).
+passes_argument("Nx.Defn.Kernel", "print_value", 3).
+
+// `elem/2` gives the tuple's element at the index.
+result_value(context, site, element) :-
+  element_read(site, selector),
+  argument_value(context, site, 0, tuple),
+  field_value(tuple, selector, element).
+field_demand(tuple, selector) :-
+  element_read(site, selector),
+  argument_value(_, site, 0, tuple).
+
+.decl element_read(site: symbol, selector: symbol)
+element_read(site, cat("{", to_string(index), "}")) :-
+  operation_site(site, "Nx.Defn.Kernel.elem", 2),
+  argument_literal(site, 1, text),
+  term_integer(text, 0, index),
+  index >= 0.
+selector_seen(selector) :- element_read(_, selector).

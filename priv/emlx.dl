@@ -1,0 +1,831 @@
+// What EMLX computes differently from BinaryBackend and EXLA, and tensors
+// of two backends that meet.
+//
+// EMLX runs Nx on Apple's MLX, on its CPU device or its GPU (Metal), and
+// some of Nx comes out differently there. This program finds the calls
+// where that shows, and reports two things:
+//
+//   * `tensor_emlx_divergence`: an Nx call EMLX computes differently
+//     from BinaryBackend and EXLA: a tensor made in a type EMLX does not
+//     have (f64, which it keeps as f32, and c128, which it keeps as c64);
+//     a remainder whose divisor or dividend can be negative; an integer
+//     power whose exponent can be negative; a round of a value the code's
+//     math can put exactly on a half;
+//   * `tensor_emlx_mixed_backends`: an Nx call that gets tensors of two
+//     backends that cannot meet, such as one a function compiled with
+//     EXLA returns and one made on EMLX, which Nx raises for.
+//
+// It reads the words of the tensor shapes program (`tensor_shapes.dl`,
+// included below): its values and the contexts they are followed in,
+// the signs a value can have (`can_be_negative`), where it lies against
+// ±1 (`in_region`), what kind of number it is (`argument_class`), and the
+// types tensors are made in (`given_type`). The calls this program asks
+// about join that program's demand: a power, and what a round rounds,
+// ask for their operands' signs and types as a division does.
+//
+// Which way it errs: a value the rules cannot follow gives no finding,
+// as in the tensor shapes program, with two exceptions it says where it
+// makes them: an operand that is negative only as an input may be is
+// reported at a lower certainty (`certain` 0), and a function's backend
+// is taken to be the one a compiler or `Nx.with_default_backend/2` runs
+// it on wherever it is called (`runs_under`).
+
+.include "tensor_shapes.dl"
+
+// ══ Types EMLX does not have ════════════════════════════════════════
+//
+// EMLX has no 64-bit float and no 128-bit complex type: on either device
+// it keeps an f64 tensor as f32 and a c128 one as c64, while the tensor
+// still says f64 or c128. An f64 computation there is an f32 one (0.1
+// reads back as 0.10000000149011612, and 1 + 1.0e-10 as 1.0), and a c128
+// tensor raises when read back.
+
+// A call that makes a tensor, on EMLX, of a type EMLX does not have, and
+// that the tensor shapes analysis is not already told to report.
+.decl narrowed_type(context: Context, site: symbol, name: symbol)
+narrowed_type(context, site, name) :-
+  makes_type_emlx_lacks(context, site, name),
+  !made_off_emlx(context, site),
+  !reported_as_unsupported(name).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+// A call in a context given a type EMLX does not have.
+.decl makes_type_emlx_lacks(context: Context, site: symbol, name: symbol)
+makes_type_emlx_lacks(context, site, name) :-
+  given_type(context, site, name, _),
+  lacked_by_emlx(name).
+
+.decl lacked_by_emlx(name: symbol)
+lacked_by_emlx("f64"). lacked_by_emlx("c128").
+
+// The type of every call given one is asked, as the tensor shapes
+// program asks it where the backend is said to lack some type.
+type_asked(context, site) :- type_given(site), site_active(context, site).
+
+// A call that makes its tensor on a backend other than EMLX: its
+// `backend:` option names another, it runs in a function a compiler for
+// another backend runs or `Nx.with_default_backend/2` runs on another,
+// it converts a tensor that is on another, or it is given no backend
+// and the code sets another as the default. Where a function runs on
+// EMLX too (called directly as well as through an EXLA jit), its calls
+// are taken to be off EMLX: it errs quiet there.
+.decl made_off_emlx(context: Context, site: symbol)
+made_off_emlx(context, site) :-
+  makes_type_emlx_lacks(context, site, _),
+  creates_on_default(site),
+  !default_backend("EMLX.Backend").
+made_off_emlx(context, site) :-
+  makes_type_emlx_lacks(context, site, _),
+  places_on(site, backend, _),
+  backend != "EMLX.Backend".
+made_off_emlx(context, site) :-
+  makes_type_emlx_lacks(context, site, _),
+  site_function(site, function),
+  runs_under(function, backend),
+  backend != "EMLX.Backend".
+made_off_emlx(context, site) :-
+  makes_type_emlx_lacks(context, site, _),
+  site_function(site, function),
+  flow_argument(site, function, 0, kind, source),
+  placed_on(context, function, kind, source, backend, _),
+  backend != "EMLX.Backend".
+
+// The tensor shapes analysis reports every call that makes a type the
+// backend is said to lack (its `unsupported_types` option), so a type
+// the project lists there is left to it, and not reported twice.
+.decl reported_as_unsupported(name: symbol)
+reported_as_unsupported(name) :- unsupported_type(name).
+
+// ══ Remainders of negative numbers ══════════════════════════════════
+//
+// EMLX computes a remainder as MLX's, which takes the divisor's sign (a
+// floored remainder), then subtracts the divisor where the dividend is
+// negative, to give the result the dividend's sign as Nx does. That is
+// right only where the divisor is positive and the division is not
+// exact: remainder(-7, 3) is -1, but remainder(-6, 2) is -2 rather than
+// 0, remainder(7, -2) is -1 rather than 1, and remainder(-7, -3) is 2
+// rather than -1. EMLX's compiler computes the same.
+
+// A remainder whose divisor or dividend can be negative.
+.decl negative_remainder(context: Context, site: symbol, operand: symbol, certain: number, origin: symbol)
+negative_remainder(context, site, operand, certain, origin) :-
+  takes_remainder(site),
+  remainder_operand(position, operand),
+  operand_can_be_negative(context, site, position, certain, origin).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+.decl takes_remainder(site: symbol)
+takes_remainder(site) :- operation_site(site, operation, 2), sign_class(operation, "remainder").
+
+// An argument asked about that can be negative: because of the code's
+// own math (`certain` 1), with the call whose math makes it so
+// (`origin`, "" for a written number), or only as an input the rules do
+// not follow can be (`certain` 0).
+.decl operand_can_be_negative(context: Context, site: symbol, position: number, certain: number, origin: symbol)
+operand_can_be_negative(context, site, position, 1, origin) :-
+  negative_by_math(context, site, position, origin).
+operand_can_be_negative(context, site, position, 0, "") :-
+  divergence_negative_asked(site, position),
+  argument_can_be_negative(context, site, position),
+  !negative_by_math(context, site, position, _).
+
+// Some value reaching the argument can be negative, and can lie at or
+// below -1 because of the code's own math (`in_region`): a written
+// number, or a call whose math puts it there.
+.decl negative_by_math(context: Context, site: symbol, position: number, origin: symbol)
+negative_by_math(context, site, position, origin) :-
+  divergence_negative_asked(site, position),
+  signed_argument(context, site, position, function, kind, source),
+  can_be_negative(context, function, kind, source),
+  in_region(context, function, kind, source, region, origin, cause),
+  negative_region(region),
+  made_by_math(cause, origin).
+
+// A cause of a value's region that is the code's own math: any but an
+// input's; and, for a call the region rules do not follow
+// ("unbounded"), a difference whose first operand the code's math lets
+// be zero, as an index minus a number. A difference of two inputs, or of
+// two sizes, is negative only as inputs are.
+.decl made_by_math(cause: symbol, origin: symbol)
+made_by_math(cause, origin) :-
+  negative_cause(cause, origin),
+  cause != "input",
+  cause != "unbounded".
+made_by_math("unbounded", origin) :-
+  negative_cause("unbounded", origin),
+  sign_rule(origin, "subtract"),
+  argument_can_be_zero(_, origin, 0, _, cause),
+  cause != "input".
+
+// The causes, and the calls they name, of the regions at or below -1
+// the arguments asked about can be in.
+.decl negative_cause(cause: symbol, origin: symbol)
+negative_cause(cause, origin) :-
+  divergence_negative_asked(site, position),
+  signed_argument(context, site, position, function, kind, source),
+  in_region(context, function, kind, source, region, origin, cause),
+  negative_region(region).
+
+// The operands of a remainder, by position.
+.decl remainder_operand(position: number, operand: symbol)
+remainder_operand(0, "dividend"). remainder_operand(1, "divisor").
+
+// The arguments whose negative values the rules ask about: a
+// remainder's operands and a power's exponent.
+.decl divergence_negative_asked(site: symbol, position: number)
+divergence_negative_asked(site, 0) :- takes_remainder(site).
+divergence_negative_asked(site, 1) :- takes_remainder(site).
+divergence_negative_asked(site, 1) :- takes_power(site).
+
+// The regions of the line at or below -1.
+.decl negative_region(region: symbol)
+negative_region("below"). negative_region("minus_one").
+
+// ══ Integer powers with negative exponents ══════════════════════════
+//
+// An integer raised to a negative integer power runs forever on EMLX's
+// CPU device when run eagerly, and gives 0 on its GPU and under its
+// compiler, for a base of 1 too. EXLA gives 0 (1 for a base of 1), and
+// BinaryBackend raises.
+
+// A power whose base and exponent can both be integers, and whose
+// exponent can be negative.
+.decl hanging_integer_power(context: Context, site: symbol, certain: number, origin: symbol)
+hanging_integer_power(context, site, certain, origin) :-
+  takes_power(site),
+  integer_operands(context, site),
+  operand_can_be_negative(context, site, 1, certain, origin).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+.decl takes_power(site: symbol)
+takes_power(site) :- operation_site(site, operation, 2), sign_class(operation, "power").
+
+// The power's base and exponent can both be integers, which makes its
+// result one.
+.decl integer_operands(context: Context, site: symbol)
+integer_operands(context, site) :-
+  takes_power(site),
+  argument_class(context, site, 0, "integer", _),
+  argument_class(context, site, 1, "integer", _).
+
+// A power asks for its operands' signs and types, as a division does.
+sign_site(context, site) :- takes_power(site), site_active(context, site).
+
+// ══ Rounding halves ═════════════════════════════════════════════════
+//
+// EMLX rounds a value exactly halfway between two integers to the even
+// one (0.5 to 0, 2.5 to 2), as MLX does, eager or compiled; BinaryBackend
+// and EXLA round it away from zero (to 1 and 3). They agree everywhere
+// else, so only a round of a value that can land on a half is reported:
+// most values a round meets are measurements, which fall exactly on a
+// half only by chance, and a note on every round would bury the rounds
+// whose operands the code puts on halves: an integer halved, a mean of
+// integers, an integer plus a half.
+
+// A round of a value the code's math can put exactly on a half.
+.decl rounds_half(context: Context, site: symbol, cause: symbol, origin: symbol)
+rounds_half(context, site, cause, origin) :-
+  rounds_to_nearest(site),
+  rounded_operand(site, origin),
+  lands_on_half(context, origin, cause).
+
+// ── Words ──────────────────────────────────────────────────────────
+
+.decl rounds_to_nearest(site: symbol)
+rounds_to_nearest(site) :- operation_site(site, "Nx.round", 1).
+
+// The Nx call whose result a round rounds.
+.decl rounded_operand(site: symbol, operand: symbol)
+rounded_operand(site, operand) :-
+  rounds_to_nearest(site),
+  flow_argument(site, _, 0, "result", operand),
+  operation_site(operand, _, _).
+
+// An Nx call whose result can lie exactly on a half: an integer divided
+// by a written even number, or times a written half ("halved"); an
+// integer plus or minus a written half ("half_added"); a mean of
+// integers, which lies on a half where it averages an even number of
+// them ("mean").
+.decl lands_on_half(context: Context, site: symbol, cause: symbol)
+lands_on_half(context, site, "halved") :-
+  rounded_operand(_, site),
+  sign_rule(site, "divide"),
+  written_operand(site, 1, text),
+  even_number(text),
+  argument_class(context, site, 0, "integer", _).
+lands_on_half(context, site, "halved") :-
+  rounded_operand(_, site),
+  sign_rule(site, "multiply"),
+  written_operand(site, written, text),
+  half_number(text),
+  other_operand(written, position),
+  argument_class(context, site, position, "integer", _).
+lands_on_half(context, site, "half_added") :-
+  rounded_operand(_, site),
+  ( sign_rule(site, "add") ; sign_rule(site, "subtract") ),
+  written_operand(site, written, text),
+  half_number(text),
+  other_operand(written, position),
+  argument_class(context, site, position, "integer", _).
+lands_on_half(context, site, "mean") :-
+  rounded_operand(_, site),
+  operation_site(site, "Nx.mean", _),
+  argument_class(context, site, 0, "integer", _).
+
+// What a round rounds asks for its operands' types, as a division does.
+sign_site(context, site) :- rounded_operand(_, site), site_active(context, site).
+
+// A number written as the argument at `position`.
+.decl written_operand(site: symbol, position: number, text: symbol)
+written_operand(site, position, text) :-
+  rounded_operand(_, site),
+  flow_argument(site, _, position, "literal", text).
+
+.decl other_operand(position: number, other: number)
+other_operand(0, 1). other_operand(1, 0).
+
+// A number spelled as a nonzero even integer, or as a float with such a
+// whole part and no fraction.
+.decl even_number(text: symbol) inline
+even_number(text) :-
+  match("-?[0-9]*[02468](\\.0+)?", text),
+  !match("-?0+(\\.0+)?", text).
+
+// A number spelled with a fraction of exactly one half.
+.decl half_number(text: symbol) inline
+half_number(text) :- match("-?[0-9]+\\.50*", text).
+
+// ══ Tensors of two backends ═════════════════════════════════════════
+//
+// Nx raises (`Nx.Defn.IncompatibleBackendsError`) when a call gets
+// tensors of two backends, unless one of them is Nx.BinaryBackend, which
+// any other takes in: an EXLA tensor and an EMLX tensor cannot meet. A
+// function compiled with EXLA returns EXLA tensors whatever it is
+// handed, so its results meet the project's EMLX tensors only after
+// `Nx.backend_transfer/2`.
+//
+// A tensor's backend is followed where the code chooses one: a creation
+// call's `backend:` option, a transfer or copy to a backend, what a
+// function a compiler compiled returns, and what
+// `Nx.with_default_backend/2` returns. It is followed forward from
+// those calls, as values are followed (through Nx calls, returns,
+// arguments, and the fields of containers and of terms the code builds),
+// and where it meets another tensor, that tensor's backend is asked: the
+// default backend where a creation call given none makes it. The
+// default backend is the one the code sets with `Nx.default_backend/1`,
+// and EMLX's where it sets none. A tensor whose backend is not followed
+// meets nothing (it errs quiet). The calls in a `defn`, or in a function
+// handed to a compile, build an expression, and whether they mix
+// backends is the compiler's: EMLX's and EXLA's move the arguments to
+// their own backend, and the evaluator runs the calls as eager ones do.
+// Which compiler runs a `defn` called directly is configured outside the
+// code, so they are not reported (it errs quiet there).
+
+// An Nx call run eagerly gets two tensors whose backends cannot meet.
+.decl mixed_backends(context: Context, site: symbol, backend: symbol, origin: symbol, other: symbol, other_origin: symbol)
+mixed_backends(context, site, backend, origin, other, other_origin) :-
+  operands_on(context, site, backend, origin, other, other_origin),
+  backends_conflict(backend, other),
+  site_function(site, function),
+  !runs_traced(function).
+
+// ── Where the code puts a tensor ───────────────────────────────────
+
+// A call whose result is on `backend`, and the call that chooses it
+// (`origin`): the call itself, or the compile whose function it runs.
+// Nx.BinaryBackend is never one: it meets any backend.
+.decl places_on(site: symbol, backend: symbol, origin: symbol)
+places_on(site, backend, site) :-
+  creates_tensor(site),
+  option(site, "backend", text, start),
+  backend_spelling(text, start, backend).
+places_on(site, backend, site) :-
+  creates_tensor(site),
+  !option_given(site, "backend"),
+  site_function(site, function),
+  runs_under(function, backend).
+places_on(site, backend, site) :-
+  transfers_backend(site),
+  flow_argument(site, _, 1, "literal", text),
+  backend_spelling(text, 0, backend).
+places_on(site, backend, site) :-
+  remote_call(site, _, "Nx", "with_default_backend", 2),
+  flow_argument(site, _, 0, "literal", text),
+  backend_spelling(text, 0, backend).
+places_on(site, backend, site) :- compiles_for(site, backend, "runs").
+places_on(call, backend, site) :-
+  compiles_for(site, backend, "returns"),
+  flow_callee(call, _, "fun", "result", site).
+
+// The calls that make a tensor from data, a shape or a seed, on the
+// default backend or the one their `backend:` option names.
+.decl creates_tensor(site: symbol)
+creates_tensor(site) :- operation_site(site, operation, _), makes_tensor(operation).
+creates_tensor(site) :- remote_call(site, _, "Nx.Constants", _, _).
+
+.decl makes_tensor(operation: symbol)
+makes_tensor("Nx.tensor"). makes_tensor("Nx.iota"). makes_tensor("Nx.eye"). makes_tensor("Nx.from_binary").
+makes_tensor("Nx.Random.key").
+
+// A transfer or copy of a tensor to the backend its second argument
+// names.
+.decl transfers_backend(site: symbol)
+transfers_backend(site) :- operation_site(site, "Nx.backend_transfer", 2).
+transfers_backend(site) :- operation_site(site, "Nx.backend_copy", 2).
+
+// A backend as the code writes it: its module, or the module and its
+// options in a tuple.
+.decl written_backend(text: symbol, start: number, backend: symbol)
+written_backend(text, start, backend) :- term_module(text, start, backend).
+written_backend(text, start, backend) :-
+  term_tuple(text, start),
+  term_child(text, start, 0, child),
+  term_module(text, child, backend).
+
+// Such a backend, but Nx.BinaryBackend, which meets any other and is not
+// followed.
+.decl backend_spelling(text: symbol, start: number, backend: symbol)
+backend_spelling(text, start, backend) :-
+  written_backend(text, start, backend),
+  backend != "Nx.BinaryBackend".
+
+// A call that compiles a function with a compiler whose results are on
+// its backend, and whether the call runs it ("runs": `jit_apply`) or
+// returns the compiled function ("returns": `jit`, `compile`). A
+// compiler given as an option must be written.
+.decl compiles_for(site: symbol, backend: symbol, how: symbol)
+compiles_for(site, backend, how) :-
+  compile_call(site, how),
+  option(site, "compiler", text, start),
+  term_module(text, start, compiler),
+  compiler_backend(compiler, backend).
+compiles_for(site, "EXLA.Backend", "returns") :- remote_call(site, _, "EXLA", "jit", _).
+compiles_for(site, "EXLA.Backend", "returns") :- remote_call(site, _, "EXLA", "compile", _).
+compiles_for(site, "EXLA.Backend", "runs") :- remote_call(site, _, "EXLA", "jit_apply", _).
+
+// `Nx.Defn`'s functions that compile the function they are handed with
+// the `:compiler` their options name.
+.decl compile_call(site: symbol, how: symbol)
+compile_call(site, "returns") :- remote_call(site, _, "Nx.Defn", "jit", 2).
+compile_call(site, "returns") :- remote_call(site, _, "Nx.Defn", "compile", 3).
+compile_call(site, "runs") :- remote_call(site, _, "Nx.Defn", "jit_apply", 3).
+
+// The options of the calls above, and of the creation calls whose
+// options Nx.Shape's rules do not read, come from their last argument,
+// as an Nx call's do.
+options_source(site, function, kind, source) :-
+  remote_call(site, _, "Nx.Defn", name, arity),
+  ( name = "jit" ; name = "compile" ; name = "jit_apply" ),
+  arity >= 2,
+  flow_argument(site, function, arity - 1, kind, source).
+options_source(site, function, kind, source) :-
+  operation_site(site, "Nx.from_binary", 3),
+  flow_argument(site, function, 2, kind, source).
+options_source(site, function, kind, source) :-
+  remote_call(site, _, "Nx.Constants", _, arity),
+  arity >= 2,
+  flow_argument(site, function, arity - 1, kind, source).
+
+// The backend a compiler's results are on.
+.decl compiler_backend(compiler: symbol, backend: symbol)
+compiler_backend("EXLA", "EXLA.Backend").
+compiler_backend("EMLX", "EMLX.Backend").
+
+// A function that runs on `backend`: one a compiler for it compiles, one
+// `Nx.with_default_backend/2` runs on it, and what they call.
+.decl runs_under(function: symbol, backend: symbol)
+runs_under(function, backend) :- backend_reach.reaches(backend, function).
+
+.init backend_reach = ForwardCallReach
+backend_reach.root(backend, function) :-
+  compiles_for(site, backend, _),
+  fun_handed(site, _, function, 0).
+backend_reach.root(backend, function) :-
+  remote_call(site, _, "Nx", "with_default_backend", 2),
+  flow_argument(site, _, 0, "literal", text),
+  backend_spelling(text, 0, backend),
+  fun_handed(site, _, function, 1).
+
+// The backend a creation call given none makes its tensor on: the one
+// the code sets as the default, or EMLX's, which this analysis is for,
+// where it sets none.
+.decl default_backend(backend: symbol)
+default_backend(backend) :- sets_default_backend(_, backend).
+default_backend("EMLX.Backend") :- !sets_default_backend(_, _).
+
+.decl sets_default_backend(site: symbol, backend: symbol)
+sets_default_backend(site, backend) :-
+  remote_call(site, _, "Nx", name, 1),
+  ( name = "default_backend" ; name = "global_default_backend" ),
+  flow_argument(site, _, 0, "literal", text),
+  written_backend(text, 0, backend).
+
+// ── Where a tensor goes ────────────────────────────────────────────
+
+// A value in a context can be a tensor on `backend`, put there by
+// `origin`: followed forward from the calls that choose a backend.
+.decl placed_on(context: Context, function: symbol, kind: symbol, source: symbol, backend: symbol, origin: symbol)
+placed_on(context, function, "result", site, backend, origin) :-
+  places_on(site, backend, origin),
+  site_function(site, function),
+  site_active(context, site).
+
+// An Nx call's result is on its tensor operands' backend.
+placed_on(context, function, "result", site, backend, origin) :-
+  placed_on(context, function, kind, source, backend, origin),
+  tensor_argument(site, function, _, kind, source),
+  keeps_backend(site),
+  site_active(context, site).
+
+// What a call returns, where the function it runs returns it.
+placed_on(context, function, "result", site, backend, origin) :-
+  placed_on(callee_context, callee, kind, source, backend, origin),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  site_function(site, function).
+
+// A parameter of a function the program enters only through its calls,
+// and of a call's own context: what the calls hand it.
+placed_on($Canonical(function, arguments), function, "param", to_string(position), backend, origin) :-
+  placed_on(caller, caller_function, kind, source, backend, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments).
+placed_on($Called(site, caller), callee, "param", to_string(position), backend, origin) :-
+  placed_on(caller, caller_function, kind, source, backend, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  invocation(caller, site, callee, $Called(site, caller)).
+
+// A field of a container on a backend, which a compile or a transfer
+// moves as a whole, and what a lookup finds in one.
+placed_on(context, function, "load", load, backend, origin) :-
+  placed_on(context, function, kind, source, backend, origin),
+  flow_load(function, load, _, kind, source).
+placed_on(context, function, "result", site, backend, origin) :-
+  placed_on(context, function, kind, source, backend, origin),
+  flow_argument(site, function, 0, kind, source),
+  looks_up_in(site).
+
+// A field of a term the code builds, read where the term is.
+placed_on(context, function, "load", load, backend, origin) :-
+  placed_on(object_context, builder, field_kind, field_source, backend, origin),
+  flow_field(builder, object, selector, field_kind, field_source),
+  value_of(context, function, kind, source, $Object(object_context, object, _)),
+  flow_load(function, load, selector, kind, source).
+
+// ── What another tensor it meets is on ─────────────────────────────
+
+// A call in a context that gets a tensor whose backend is followed.
+.decl meets_placed(context: Context, site: symbol)
+meets_placed(context, site) :-
+  placed_on(context, function, kind, source, _, _),
+  tensor_argument(site, function, _, kind, source),
+  site_active(context, site).
+
+// The values whose default backend is asked: the tensors such a call
+// gets, then what they are made of, as `placed_on` follows them.
+.decl default_demand(context: Context, function: symbol, kind: symbol, source: symbol)
+default_demand(context, function, kind, source) :-
+  meets_placed(context, site),
+  tensor_argument(site, function, _, kind, source).
+default_demand(context, function, kind, source) :-
+  default_demand(context, function, "result", site),
+  keeps_backend(site),
+  tensor_argument(site, function, _, kind, source).
+default_demand(callee_context, callee, kind, source) :-
+  default_demand(context, _, "result", site),
+  invocation(context, site, callee, callee_context),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at).
+default_demand(caller, caller_function, kind, source) :-
+  default_demand($Canonical(function, arguments), function, "param", parameter),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+default_demand(caller, caller_function, kind, source) :-
+  default_demand($Called(site, caller), callee, "param", parameter),
+  program_call(site, caller_function, callee),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+default_demand(object_context, builder, field_kind, field_source) :-
+  default_demand(context, function, "load", load),
+  flow_load(function, load, selector, kind, source),
+  value_of(context, function, kind, source, $Object(object_context, object, _)),
+  flow_field(builder, object, selector, field_kind, field_source).
+
+// A value asked about can be a tensor made on the default backend, by
+// `origin`: a creation call given no backend, outside any function that
+// runs on a backend of its own.
+.decl made_on_default(context: Context, function: symbol, kind: symbol, source: symbol, origin: symbol)
+made_on_default(context, function, "result", site, site) :-
+  default_demand(context, function, "result", site),
+  creates_on_default(site).
+made_on_default(context, function, "result", site, origin) :-
+  made_on_default(context, function, kind, source, origin),
+  tensor_argument(site, function, _, kind, source),
+  keeps_backend(site),
+  default_demand(context, function, "result", site).
+made_on_default(context, function, "result", site, origin) :-
+  made_on_default(callee_context, callee, kind, source, origin),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  default_demand(context, function, "result", site).
+made_on_default($Canonical(function, arguments), function, "param", to_string(position), origin) :-
+  made_on_default(caller, caller_function, kind, source, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  default_demand($Canonical(function, arguments), function, "param", to_string(position)).
+made_on_default($Called(site, caller), callee, "param", to_string(position), origin) :-
+  made_on_default(caller, caller_function, kind, source, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  default_demand($Called(site, caller), callee, "param", to_string(position)).
+made_on_default(context, function, "load", load, origin) :-
+  made_on_default(object_context, builder, field_kind, field_source, origin),
+  flow_field(builder, object, selector, field_kind, field_source),
+  value_of(context, function, kind, source, $Object(object_context, object, _)),
+  flow_load(function, load, selector, kind, source),
+  default_demand(context, function, "load", load).
+
+// A creation call given no backend, outside any function that runs on a
+// backend of its own, and not handed a tensor whose backend is followed,
+// which `Nx.tensor/2` hands back as it is.
+.decl creates_on_default(site: symbol)
+creates_on_default(site) :-
+  creates_tensor(site),
+  !option_given(site, "backend"),
+  site_function(site, function),
+  !runs_under(function, _),
+  !handed_placed_tensor(site).
+
+.decl handed_placed_tensor(site: symbol)
+handed_placed_tensor(site) :-
+  creates_tensor(site),
+  tensor_argument(site, function, _, kind, source),
+  placed_on(_, function, kind, source, _, _).
+
+// The backends of two tensors a call gets, and the calls that put them
+// there, but a backend a tensor has only as part of a mix it carries
+// from an earlier call, which is that call's finding.
+.decl operands_on(context: Context, site: symbol, backend: symbol, origin: symbol, other: symbol, other_origin: symbol)
+operands_on(context, site, backend, origin, other, other_origin) :-
+  operand_on(context, site, operand, backend, origin),
+  operand_on(context, site, other_operand, other, other_origin),
+  operand != other_operand.
+
+.decl operand_on(context: Context, site: symbol, operand: symbol, backend: symbol, origin: symbol)
+operand_on(context, site, operand, backend, origin) :-
+  operand_placed(context, site, operand, kind, source, backend, origin),
+  site_function(site, function),
+  !carries_mix(context, function, kind, source, origin).
+
+// A tensor a call gets can be on `backend`, put there by `origin`:
+// followed forward, or made on the default backend.
+.decl operand_placed(context: Context, site: symbol, operand: symbol, kind: symbol, source: symbol, backend: symbol, origin: symbol)
+operand_placed(context, site, operand, kind, source, backend, origin) :-
+  meets_placed(context, site),
+  tensor_argument(site, function, operand, kind, source),
+  placed_on(context, function, kind, source, backend, origin).
+operand_placed(context, site, operand, kind, source, backend, origin) :-
+  meets_placed(context, site),
+  tensor_argument(site, function, operand, kind, source),
+  made_on_default(context, function, kind, source, origin),
+  default_backend(backend).
+
+// A call that gets two tensors whose backends cannot meet, one of them
+// put on its backend by `origin`.
+.decl mixing_call(context: Context, site: symbol, origin: symbol)
+mixing_call(context, site, origin) :-
+  operand_placed(context, site, operand, _, _, backend, origin),
+  operand_placed(context, site, other_operand, _, _, other, _),
+  operand != other_operand,
+  backends_conflict(backend, other).
+mixing_call(context, site, other_origin) :-
+  operand_placed(context, site, operand, _, _, backend, _),
+  operand_placed(context, site, other_operand, _, _, other, other_origin),
+  operand != other_operand,
+  backends_conflict(backend, other).
+
+// A value that carries `origin`'s tensor mixed with one it cannot meet:
+// the result of a call that mixes them, and what Nx calls, returns and
+// the program's calls make of it. Nx raises at the first such call, so
+// only that call is reported.
+.decl carries_mix(context: Context, function: symbol, kind: symbol, source: symbol, origin: symbol)
+carries_mix(context, function, "result", site, origin) :-
+  mixing_call(context, site, origin),
+  site_function(site, function).
+carries_mix(context, function, "result", site, origin) :-
+  carries_mix(context, function, kind, source, origin),
+  tensor_argument(site, function, _, kind, source),
+  keeps_backend(site),
+  site_active(context, site).
+carries_mix(context, function, "result", site, origin) :-
+  carries_mix(callee_context, callee, kind, source, origin),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  site_function(site, function).
+carries_mix($Canonical(function, arguments), function, "param", to_string(position), origin) :-
+  carries_mix(caller, caller_function, kind, source, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments).
+carries_mix($Called(site, caller), callee, "param", to_string(position), origin) :-
+  carries_mix(caller, caller_function, kind, source, origin),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  invocation(caller, site, callee, $Called(site, caller)).
+
+// Two backends whose tensors cannot meet, the first not EMLX's: any two
+// the code names, but Nx.BinaryBackend, which meets any other.
+.decl backends_conflict(backend: symbol, other: symbol)
+backends_conflict(backend, other) :-
+  named_backend(backend),
+  named_backend(other),
+  backend != other,
+  backend != "EMLX.Backend",
+  backend != "Nx.BinaryBackend",
+  other != "Nx.BinaryBackend".
+
+.decl named_backend(backend: symbol)
+named_backend(backend) :- places_on(_, backend, _).
+named_backend(backend) :- default_backend(backend).
+
+// ── Which calls follow a tensor ────────────────────────────────────
+
+// A tensor an Nx call gets, and which of its operands it is (`operand`):
+// the argument at a position, or an element of a list the function
+// builds for one (`Nx.concatenate/2`, `Nx.stack/2`), named by its cell.
+// A tensor given for its shape (`Nx.broadcast/2`'s second argument,
+// `Nx.iota/2`'s first) is not one: Nx reads only its shape.
+.decl tensor_argument(site: symbol, function: symbol, operand: symbol, kind: symbol, source: symbol)
+tensor_argument(site, function, to_string(position), kind, source) :-
+  operation_site(site, _, _),
+  flow_argument(site, function, position, kind, source),
+  !shape_position(site, position).
+tensor_argument(site, function, cat(to_string(position), " ", cell), kind, source) :-
+  argument_cell(site, function, position, cell),
+  flow_field(function, cell, "head", kind, source).
+
+.decl argument_cell(site: symbol, function: symbol, position: number, cell: symbol)
+argument_cell(site, function, position, cell) :-
+  operation_site(site, _, _),
+  flow_argument(site, function, position, "object", cell),
+  flow_object(function, cell, "list", _).
+argument_cell(site, function, position, next) :-
+  argument_cell(site, function, position, cell),
+  flow_field(function, cell, "tail", "object", next),
+  flow_object(function, next, "list", _).
+
+// An Nx call whose result is a tensor on its operands' backend: every
+// one but those that choose a backend, and those that return a number,
+// a list, a binary or a description of a tensor.
+.decl keeps_backend(site: symbol)
+keeps_backend(site) :-
+  operation_site(site, operation, _),
+  !leaves_backend(operation).
+
+.decl leaves_backend(operation: symbol)
+leaves_backend("Nx.backend_transfer"). leaves_backend("Nx.backend_copy").
+leaves_backend("Nx.backend_deallocate"). leaves_backend("Nx.with_default_backend").
+leaves_backend("Nx.default_backend"). leaves_backend("Nx.global_default_backend").
+leaves_backend("Nx.to_number"). leaves_backend("Nx.to_list"). leaves_backend("Nx.to_flat_list").
+leaves_backend("Nx.to_binary"). leaves_backend("Nx.to_batched"). leaves_backend("Nx.to_template").
+leaves_backend("Nx.to_pointer"). leaves_backend("Nx.to_heatmap"). leaves_backend("Nx.serialize").
+leaves_backend("Nx.template"). leaves_backend("Nx.shape"). leaves_backend("Nx.rank").
+leaves_backend("Nx.type"). leaves_backend("Nx.size"). leaves_backend("Nx.byte_size").
+leaves_backend("Nx.names"). leaves_backend("Nx.axes"). leaves_backend("Nx.axis_size").
+leaves_backend("Nx.axis_index").
+
+// A lookup of a key in a map or keyword list (`Map.get/2`, `Access`).
+.decl looks_up_in(site: symbol)
+looks_up_in(site) :- remote_call(site, _, module, name, arity), looks_up(module, name, arity).
+
+// ── Traced calls ───────────────────────────────────────────────────
+
+// A function a `defn`'s body runs, or a function handed to a compile:
+// its Nx calls build an expression, which a compiler runs. Asked of the
+// functions where backends would mix, over their callers.
+.decl runs_traced(function: symbol)
+runs_traced(function) :-
+  mixing_trace_reach.reaches(root, function),
+  traced_root(root).
+
+.init mixing_trace_reach = CallReach
+mixing_trace_reach.seed(function, function) :-
+  operands_on(_, site, backend, _, other, _),
+  backends_conflict(backend, other),
+  site_function(site, function).
+
+.decl traced_root(function: symbol)
+traced_root(function) :-
+  function_def(function, _, name, _, _),
+  match("__defn:.*", name).
+traced_root(function) :- compile_call(site, _), fun_handed(site, _, function, 0).
+traced_root(function) :- compiles_for(site, _, _), fun_handed(site, _, function, 0).
+
+// ══ Findings ════════════════════════════════════════════════════════
+
+// An Nx call EMLX computes differently from BinaryBackend and EXLA.
+// `kind` names what: "narrowed_type" (`detail`, the type: f64 or c128),
+// "negative_remainder" (`detail`, the operand that can be negative:
+// divisor or dividend), "negative_integer_power" (`detail`, "exponent"),
+// or "round_half" (`detail`, how the operand lands on a half: halved,
+// half_added, mean). `certain` is 1 where the code's own math causes
+// it, 0 where only an input may; `origin` is the call whose math does,
+// "" for none or a written number.
+.decl emlx_divergence(context: Context, site: symbol, kind: symbol, detail: symbol, certain: number, origin: symbol)
+emlx_divergence(context, site, "narrowed_type", name, 1, "") :- narrowed_type(context, site, name).
+emlx_divergence(context, site, "negative_remainder", operand, certain, origin) :-
+  negative_remainder(context, site, operand, certain, origin).
+emlx_divergence(context, site, "negative_integer_power", "exponent", certain, origin) :-
+  hanging_integer_power(context, site, certain, origin).
+emlx_divergence(context, site, "round_half", cause, 1, origin) :-
+  rounds_half(context, site, cause, origin).
+
+// The most certain of a finding's rows, in any context.
+.decl divergence_certainty(site: symbol, kind: symbol, detail: symbol, certain: number)
+divergence_certainty(site, kind, detail, certain) :-
+  emlx_divergence(_, site, kind, detail, _, _),
+  certain = max value : { emlx_divergence(_, site, kind, detail, value, _) }.
+
+.decl tensor_emlx_divergence(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, certain: number, origin: symbol, origin_operation: symbol)
+.output tensor_emlx_divergence
+tensor_emlx_divergence(site, function, shown, kind, detail, certain, origin, origin_shown) :-
+  emlx_divergence(_, site, kind, detail, certain, origin),
+  divergence_certainty(site, kind, detail, certain),
+  site_function(site, function),
+  emlx_call_shown(site, shown),
+  emlx_call_shown(origin, origin_shown).
+
+// A tensor on another backend than EMLX's (`backend`, put there by
+// `origin`) and a tensor it cannot meet (`other`, put there by
+// `other_origin`), both handed to one Nx call.
+.decl tensor_emlx_mixed_backends(id: symbol, func: symbol, operation: symbol, backend: symbol, origin: symbol, origin_operation: symbol, other: symbol, other_origin: symbol, other_origin_operation: symbol)
+.output tensor_emlx_mixed_backends
+tensor_emlx_mixed_backends(site, function, shown, backend, origin, origin_shown, other, other_origin, other_shown) :-
+  mixed_backends(_, site, backend, origin, other, other_origin),
+  site_function(site, function),
+  emlx_call_shown(site, shown),
+  emlx_call_shown(origin, origin_shown),
+  emlx_call_shown(other_origin, other_shown).
+
+// A call as a finding names it, `Nx.remainder/2`, for the calls the
+// findings name: "" for none, and for the call of a compiled function.
+.decl emlx_call_shown(site: symbol, shown: symbol)
+emlx_call_shown("", "").
+emlx_call_shown(site, cat(module, ".", name, "/", to_string(arity))) :-
+  emlx_named(site),
+  remote_call(site, _, module, name, arity).
+emlx_call_shown(site, "") :-
+  emlx_named(site),
+  !remote_call(site, _, _, _, _).
+
+.decl emlx_named(site: symbol)
+emlx_named(site) :- emlx_divergence(_, site, _, _, _, _).
+emlx_named(origin) :- emlx_divergence(_, _, _, _, _, origin), origin != "".
+emlx_named(site) :- mixed_backends(_, site, _, _, _, _).
+emlx_named(origin) :- mixed_backends(_, _, _, origin, _, _).
+emlx_named(origin) :- mixed_backends(_, _, _, _, _, origin).

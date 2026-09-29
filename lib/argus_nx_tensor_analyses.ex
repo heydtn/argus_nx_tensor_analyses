@@ -7,6 +7,9 @@ defmodule ArgusNxTensorAnalyses do
     * `ArgusNxTensorAnalyses.TensorShapes` — Nx calls whose operand shapes
       Nx rejects, and calls Nx accepts where the code does not line its
       axes up.
+    * `ArgusNxTensorAnalyses.EMLX` — Nx calls EMLX computes differently
+      from BinaryBackend and EXLA, and calls that get tensors of two
+      backends that cannot meet: for a project whose tensors live on EMLX.
 
   Argus runs only the analyses it ships, so `mix argus_nx_tensor_analyses`
   runs these beside Argus's own and reports both as one; aliased as
@@ -15,5 +18,5 @@ defmodule ArgusNxTensorAnalyses do
 
   @doc "The analyses this package defines, each an `Argus.Analysis`."
   @spec analyses() :: [module()]
-  def analyses, do: [ArgusNxTensorAnalyses.TensorShapes]
+  def analyses, do: [ArgusNxTensorAnalyses.TensorShapes, ArgusNxTensorAnalyses.EMLX]
 end

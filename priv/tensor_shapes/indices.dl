@@ -1,3 +1,738 @@
 // Indices, slice starts and ranges the code's math can take negative or past an axis, and operands Nx rejects as complex.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+
+// ══ Why a value can be negative ═════════════════════════════════════
+//
+// `can_be_negative` says a value can be negative, whether the code's math
+// makes it so or it only comes from an input the analysis cannot see into.
+// `can_go_negative` keeps the first alone, with where and how: `origin`,
+// the Nx call whose math takes the value below zero ("" for a written
+// number no call has taken yet), and `cause`:
+//
+//   * "written": a written negative number;
+//   * "subtract": a subtraction of a value that can be positive from one
+//     that can be zero, such as an index, a count or an input (a tensor's
+//     size, at least 1, is not one);
+//   * "negate": a negation of a value that can be positive;
+//   * "remainder": a remainder of a value that can go negative, which keeps
+//     its dividend's sign (`rem(-1, 3)` is -1, where Python's `%` gives 2);
+//   * "ddof": a variance or covariance whose `ddof` is past its count.
+//
+// An operation that passes an operand's negativity on keeps its cause, as
+// the sign rules pass a negative operand on, and the first call a written
+// number reaches becomes its origin.
+//
+// Asked of the values the checks below read (`negative_asked`), then of
+// what those are made of, as `sign_demand` follows them: the operands of
+// Nx calls, the returns of the functions calls run, and the arguments
+// calls hand a parameter. Every value asked is one signs are asked of. The
+// integer arithmetic the code does outside Nx (`pos - 1` on integers) has
+// no signs, and goes negative nowhere here.
+
+.decl negative_asked(context: Context, function: symbol, kind: symbol, source: symbol)
+.decl can_go_negative(context: Context, function: symbol, kind: symbol, source: symbol, origin: symbol, cause: symbol)
+
+sign_demand(context, function, kind, source) :- negative_asked(context, function, kind, source).
+
+negative_asked(context, function, kind, source) :-
+  negative_asked(context, function, "result", site),
+  read_operand(site, position),
+  flow_argument(site, function, position, kind, source).
+negative_asked(callee_context, callee, kind, source) :-
+  negative_asked(context, _, "result", site),
+  invocation(context, site, callee, callee_context),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at).
+negative_asked(caller, caller_function, kind, source) :-
+  negative_asked($Canonical(function, arguments), function, "param", parameter),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+negative_asked(caller, caller_function, kind, source) :-
+  negative_asked($Called(site, caller), callee, "param", parameter),
+  program_call(site, caller_function, callee),
+  flow_argument(site, caller_function, to_number(parameter), kind, source).
+
+// An Nx call's result whose negativity is asked, and its sign class.
+.decl negative_call(context: Context, site: symbol, function: symbol, class: symbol)
+negative_call(context, site, function, class) :-
+  negative_asked(context, function, "result", site),
+  sign_rule(site, class).
+
+// The operand a class reads at `slot` (1, 2, 3: `sign_operands`'s first,
+// second and third) can go negative, from `origin`: its own, or this call
+// for a written number.
+.decl operand_goes_negative(context: Context, site: symbol, slot: number, origin: symbol, cause: symbol)
+operand_goes_negative(context, site, slot, origin, cause) :-
+  can_go_negative(context, function, kind, source, origin, cause),
+  origin != "",
+  signed_argument(context, site, position, function, kind, source),
+  slot_position(site, slot, position).
+operand_goes_negative(context, site, slot, site, cause) :-
+  can_go_negative(context, function, kind, source, "", cause),
+  signed_argument(context, site, position, function, kind, source),
+  slot_position(site, slot, position).
+
+.decl slot_position(site: symbol, slot: number, position: number)
+slot_position(site, 1, position) :- sign_operands(site, position, _, _).
+slot_position(site, 2, position) :- sign_operands(site, _, position, _), position >= 0.
+slot_position(site, 3, position) :- sign_operands(site, _, _, position), position >= 0.
+
+// What the sign analysis says the operand at `slot` can be ("positive",
+// "negative"), and "any" at slot 0, which every call has.
+.decl operand_sign(context: Context, site: symbol, slot: number, sign: symbol)
+operand_sign(context, site, 0, "any") :- negative_call(context, site, _, _).
+operand_sign(context, site, slot, "positive") :-
+  negative_call(context, site, _, _),
+  slot_position(site, slot, position),
+  argument_can_be_positive(context, site, position).
+operand_sign(context, site, slot, "negative") :-
+  negative_call(context, site, _, _),
+  slot_position(site, slot, position),
+  argument_can_be_negative(context, site, position).
+
+// A written negative number, one a value the rules hold is, and a written
+// list with one in it (`Nx.tensor([0, -1])`).
+can_go_negative(context, function, kind, source, "", "written") :-
+  negative_asked(context, function, kind, source),
+  signed_by_value(context, function, kind, source),
+  value_of(context, function, kind, source, value),
+  value_sign(value, "negative", "written").
+can_go_negative(context, function, kind, source, "", "written") :-
+  negative_asked(context, function, kind, source),
+  signed_by_value(context, function, kind, source),
+  value_of(context, function, kind, source, $Term(text, start)),
+  term_list(text, start),
+  term_spelling(text, start, spelled),
+  match(".*[\\[ ]-[0-9].*", spelled).
+
+// A class passes a negative operand at `slot` on to its result where the
+// operand at `needs` can have the sign `sign` (slot 0: always), as its
+// sign rules do: a sum, a difference's first operand, a product or
+// quotient with a positive other side, a maximum with another negative, a
+// clip whose low bound can be negative, and what moves elements.
+.decl passes_negative(class: symbol, slot: number, needs: number, sign: symbol)
+passes_negative("preserve", 1, 0, "any"). passes_negative("round", 1, 0, "any").
+passes_negative("add", 1, 0, "any"). passes_negative("add", 2, 0, "any").
+passes_negative("subtract", 1, 0, "any").
+passes_negative("multiply", 1, 2, "positive"). passes_negative("multiply", 2, 1, "positive").
+passes_negative("dot", 1, 2, "positive"). passes_negative("dot", 2, 1, "positive").
+passes_negative("divide", 1, 2, "positive"). passes_negative("divide", 2, 1, "positive").
+passes_negative("quotient", 1, 2, "positive"). passes_negative("quotient", 2, 1, "positive").
+passes_negative("maximum", 1, 2, "negative"). passes_negative("maximum", 2, 1, "negative").
+passes_negative("minimum", 1, 0, "any"). passes_negative("minimum", 2, 0, "any").
+passes_negative("clip", 1, 2, "negative"). passes_negative("clip", 2, 1, "negative").
+passes_negative("clip", 2, 3, "negative"). passes_negative("clip", 3, 2, "negative").
+passes_negative("power", 1, 0, "any").
+passes_negative("sum", 1, 0, "any"). passes_negative("product", 1, 0, "any").
+passes_negative("fill", 1, 0, "any").
+passes_negative("splice", 1, 0, "any"). passes_negative("splice", 2, 0, "any").
+passes_negative("select", 1, 0, "any"). passes_negative("select", 2, 0, "any").
+
+// A call that keeps its operand at `slot` from being negative whatever it
+// is: a square, an even power, and a select branch its predicate takes only
+// where the branch is positive, or not negative.
+.decl stops_negative(site: symbol, slot: number)
+stops_negative(site, 1) :- squares(site).
+stops_negative(site, 2) :- squares(site).
+stops_negative(site, 1) :- even_power(site).
+stops_negative(site, position) :- select_checks(site, position, "positive").
+stops_negative(site, position) :- select_nonnegative(site, position).
+
+can_go_negative(context, function, "result", site, origin, cause) :-
+  operand_goes_negative(context, site, slot, origin, cause),
+  negative_call(context, site, function, class),
+  passes_negative(class, slot, needs, sign),
+  operand_sign(context, site, needs, sign),
+  !stops_negative(site, slot).
+
+// `subtract`: a value that can be positive taken from one that can be zero.
+can_go_negative(context, function, "result", site, site, "subtract") :-
+  negative_call(context, site, function, "subtract"),
+  operand_sign(context, site, 2, "positive"),
+  minuend_can_be_zero(context, site).
+
+// What a subtraction takes from can be zero: from its math, or from an
+// input other than a tensor's size read from its shape (`Nx.axis_size`),
+// which Nx keeps at least 1.
+.decl minuend_can_be_zero(context: Context, site: symbol)
+minuend_can_be_zero(context, site) :-
+  negative_call(context, site, _, "subtract"),
+  first_zero(context, site, _, cause),
+  cause != "input".
+minuend_can_be_zero(context, site) :-
+  negative_call(context, site, _, "subtract"),
+  first_zero(context, site, _, "input"),
+  sign_operands(site, position, _, _),
+  argument_value(context, site, position, value),
+  !shape_size(value).
+
+// A value that is the size of a tensor's axis, read from its shape.
+.decl shape_size(value: Value)
+shape_size($Opaque(path)) :-
+  negative_call(context, site, _, "subtract"),
+  sign_operands(site, position, _, _),
+  argument_value(context, site, position, $Opaque(path)),
+  match(".*#[{:].*", path).
+
+// `negate`: a negation of a value that can be positive.
+can_go_negative(context, function, "result", site, site, "negate") :-
+  negative_call(context, site, function, "negate"),
+  operand_sign(context, site, 1, "positive").
+
+// `remainder`: the dividend's sign, which a negative dividend keeps.
+can_go_negative(context, function, "result", site, site, "remainder") :-
+  operand_goes_negative(context, site, 1, _, _),
+  negative_call(context, site, function, "remainder").
+
+// A variance or covariance whose `ddof` is past its count, which divides
+// its sum of squares by a negative number.
+can_go_negative(context, function, "result", site, site, "ddof") :-
+  negative_asked(context, function, "result", site),
+  ddof_past_count(context, site, "greater", _),
+  operation_site(site, operation, _),
+  spread(operation, _, 1).
+
+// What a call returns: what the function it runs returns there.
+can_go_negative(context, function, "result", site, origin, cause) :-
+  can_go_negative(callee_context, callee, kind, source, origin, cause),
+  flow_return(callee, at, kind, source),
+  feasible(callee_context, at),
+  invocation(context, site, callee, callee_context),
+  negative_asked(context, function, "result", site).
+
+// A parameter the program enters only through its calls, and one of a
+// call's own context: what the calls hand it.
+can_go_negative($Canonical(function, arguments), function, "param", to_string(position), origin, cause) :-
+  can_go_negative(caller, caller_function, kind, source, origin, cause),
+  flow_argument(site, caller_function, position, kind, source),
+  canonical_entry(caller, site, caller_function, function, arguments),
+  negative_asked($Canonical(function, arguments), function, "param", to_string(position)).
+can_go_negative($Called(site, caller), callee, "param", to_string(position), origin, cause) :-
+  can_go_negative(caller, caller_function, kind, source, origin, cause),
+  flow_argument(site, caller_function, position, kind, source),
+  program_call(site, caller_function, callee),
+  negative_asked($Called(site, caller), callee, "param", to_string(position)).
+
+// A select branch (1 `on_true`, 2 `on_false`) its predicate takes only
+// where the branch is not negative: `Nx.select(Nx.less(i, 0), 0, i)`.
+.decl select_nonnegative(site: symbol, position: number)
+select_nonnegative(site, position) :-
+  select_demand(site, function, predicate),
+  compares_with_zero(predicate, function, kind, source, relation),
+  flow_argument(site, function, position, kind, source),
+  1 = count : { flow_argument(site, function, position, _, _) },
+  branch_nonnegative(relation, position).
+
+.decl branch_nonnegative(relation: symbol, position: number)
+branch_nonnegative("less", 2). branch_nonnegative("greater_equal", 1).
+branch_nonnegative("greater", 1). branch_nonnegative("less_equal", 2).
+
+// ══ Negative indices ════════════════════════════════════════════════
+//
+// Nx reads no index from the end, and its backends disagree on what a
+// negative one does, none of them what the code means: the binary backend
+// raises that the index is out of bounds, EXLA clamps a gathered one to 0
+// and drops an indexed update, EMLX wraps -1 to the last element and drops
+// an update out of range.
+
+// An index the code's own math can take below zero: one less than an
+// index or an input, a written negative number such as a loss's ignored
+// label (`Nx.select(mask, labels, -100)`), a remainder of a negative. The
+// indices are the second argument of a take, gather or indexed update.
+.decl negative_index(context: Context, site: symbol, origin: symbol, cause: symbol)
+negative_index(context, site, origin, cause) :-
+  operation_site(site, cat("Nx.", name), arity),
+  takes_indices(name, arity),
+  signed_argument(context, site, 1, function, kind, source),
+  can_go_negative(context, function, kind, source, origin, cause).
+
+negative_asked(context, function, kind, source) :-
+  operation_site(site, cat("Nx.", name), arity),
+  takes_indices(name, arity),
+  site_active(context, site),
+  flow_argument(site, function, 1, kind, source).
+
+call_error(context, site, "negative_index", cause, origin) :- negative_index(context, site, origin, cause).
+
+// ══ Slice starts ════════════════════════════════════════════════════
+//
+// `Nx.slice`, `Nx.slice_along_axis` and `Nx.put_slice` move a start into
+// the tensor rather than raise: a negative start becomes 0, not a
+// position from the end as in NumPy, and a start whose slice runs past the
+// end moves back until it fits (`Nx.Shape.slice`, then the backend). The
+// slice then reads or writes other elements than the code names: the
+// first token rather than the last, a window short of its step, a cache
+// row over the one before it.
+
+// A slice whose start is written negative, or that the code's math can
+// take below zero: one less than a position, a window's start before its
+// first full step.
+.decl negative_slice_start(context: Context, site: symbol, origin: symbol, cause: symbol)
+negative_slice_start(context, site, origin, cause) :-
+  slice_start(context, site, function, kind, source),
+  can_go_negative(context, function, kind, source, origin, cause).
+negative_slice_start(context, site, "", "written") :-
+  start_literal(site, _, _, text),
+  term_element_integer(text, 0, _, value),
+  value < 0,
+  site_active(context, site).
+
+// A slice that certainly runs past the end of an axis: a start past 0 and
+// a length, both known, that add up to more than the axis's known size, or
+// a start past 0 and a length that is the axis's whole size, which a
+// variable names (`config.heads`, or `Nx.axis_size(t, 1)` for a tensor of
+// a shape not known).
+.decl slice_past_end(context: Context, site: symbol, detail: symbol)
+slice_past_end(context, site, cat("axis ", to_string(axis), ": start ", to_string(begin), " and length ", to_string(extent), " past its size ", to_string(total))) :-
+  slices_from(site, "Nx.slice"),
+  slot_value(context, site, 1, _, first),
+  slice_lengths(site, text, _),
+  term_element_integer(text, 0, axis, extent),
+  axes_axis(first, axis, [total, nil], _),
+  known_start(context, site, axis, begin),
+  extent <= total, begin + extent > total.
+slice_past_end(context, site, cat("axis ", to_string(axis), ": start ", to_string(begin), " and length ", to_string(extent), " past its size ", to_string(total))) :-
+  slices_from(site, "Nx.put_slice"),
+  slot_value(context, site, 1, _, first),
+  slot_value(context, site, 2, _, slice),
+  axes_axis(first, axis, [total, nil], _),
+  axes_axis(slice, axis, [extent, nil], _),
+  known_start(context, site, axis, begin),
+  extent <= total, begin + extent > total.
+slice_past_end(context, site, cat("axis ", to_string(axis), ": start ", to_string(begin), " and length ", to_string(extent), " past its size ", to_string(total))) :-
+  slices_from(site, "Nx.slice_along_axis"),
+  slot_value(context, site, 1, _, first),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, [total, nil], _),
+  argument_value(context, site, 1, $Integer([begin, nil])),
+  argument_value(context, site, 2, $Integer([extent, nil])),
+  extent <= total, begin + extent > total.
+slice_past_end(context, site, cat("axis ", to_string(axis), ": start ", to_string(begin), " and a length of the whole axis")) :-
+  slices_from(site, "Nx.slice_along_axis"),
+  argument_value(context, site, 1, $Integer([begin, nil])),
+  argument_value(context, site, 2, $Opaque(path)),
+  slot_value(context, site, 1, _, first),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, [1, [path, nil]], _).
+slice_past_end(context, site, cat("axis ", to_string(axis), ": start ", to_string(begin), " and a length of the whole axis")) :-
+  slices_from(site, "Nx.slice_along_axis"),
+  argument_value(context, site, 1, $Integer([begin, nil])),
+  argument_value(context, site, 2, $Opaque(length)),
+  argument_unshaped(context, site, 0, path),
+  ( option_integer(site, "axis", axis), axis >= 0 ; option_absent(site, "axis"), axis = 0 ),
+  length = cat(path, "#{", to_string(axis), "}").
+
+// The calls that slice from starts: `Nx.slice/3,4`, `Nx.slice_along_axis/3,4`
+// and `Nx.put_slice/3`, which take a list of one per axis or, for
+// `slice_along_axis`, the one.
+.decl slices_from(site: symbol, operation: symbol)
+slices_from(site, operation) :-
+  operation_site(site, operation, arity),
+  arity >= 3,
+  match("Nx\\.(slice|slice_along_axis|put_slice)", operation).
+
+// A start, as the code writes it: `slice_along_axis`'s argument, and each
+// element of a list of them the call's function builds.
+.decl slice_start(context: Context, site: symbol, function: symbol, kind: symbol, source: symbol)
+slice_start(context, site, function, kind, source) :-
+  slices_from(site, "Nx.slice_along_axis"),
+  site_active(context, site),
+  flow_argument(site, function, 1, kind, source).
+slice_start(context, site, function, kind, source) :-
+  start_cell(site, function, _, cell),
+  flow_field(function, cell, "head", kind, source),
+  site_active(context, site).
+
+negative_asked(context, function, kind, source) :- slice_start(context, _, function, kind, source).
+
+// The cells of a start list the call's function builds, head first: the
+// cell at `index` holds the start at that axis.
+.decl start_cell(site: symbol, function: symbol, index: number, cell: symbol)
+start_cell(site, function, 0, cell) :-
+  slices_from(site, operation),
+  operation != "Nx.slice_along_axis",
+  flow_argument(site, function, 1, "object", cell),
+  flow_object(function, cell, "list", _).
+start_cell(site, function, index + 1, next) :-
+  start_cell(site, function, index, cell),
+  index < 12,
+  flow_field(function, cell, "tail", "object", next),
+  flow_object(function, next, "list", _).
+
+// A list of starts written as a literal, at the call or as the constant
+// tail of a list after `offset` elements the code builds: its element at
+// `index` is the start at axis `offset + index`.
+.decl start_literal(site: symbol, function: symbol, offset: number, text: symbol)
+start_literal(site, function, 0, text) :-
+  slices_from(site, operation),
+  operation != "Nx.slice_along_axis",
+  flow_argument(site, function, 1, "literal", text),
+  term_list(text, 0).
+start_literal(site, function, index + 1, text) :-
+  start_cell(site, function, index, cell),
+  flow_field(function, cell, "tail", "literal", text),
+  term_list(text, 0).
+
+// A start at `axis` past 0 that the code writes, or the rules know.
+.decl known_start(context: Context, site: symbol, axis: number, begin: number)
+known_start(context, site, offset + element, begin) :-
+  start_literal(site, _, offset, text),
+  term_element_integer(text, 0, element, begin),
+  begin > 0,
+  site_active(context, site).
+known_start(context, site, axis, begin) :-
+  start_cell(site, function, axis, cell),
+  flow_field(function, cell, "head", kind, source),
+  site_active(context, site),
+  value_of(context, function, kind, source, $Integer([begin, nil])),
+  begin > 0.
+
+call_error(context, site, "negative_slice_start", cause, origin) :-
+  negative_slice_start(context, site, origin, cause).
+call_error(context, site, "slice_past_end", detail, "") :- slice_past_end(context, site, detail).
+
+// A start Nx rejects for its type: slices start at integers, and Nx raises
+// for a float or complex one.
+.decl non_integer_start(context: Context, site: symbol, function: symbol, kind: symbol, source: symbol, class: symbol, origin: symbol)
+non_integer_start(context, site, function, kind, source, class, origin) :-
+  start_value(context, site, function, kind, source),
+  value_class(context, function, kind, source, class, origin),
+  class != "integer".
+
+// Where a start's type is read: a start (`slice_start`), a list of them
+// written or passed whole, and a constant tail the compiler folds.
+.decl start_value(context: Context, site: symbol, function: symbol, kind: symbol, source: symbol)
+start_value(context, site, function, kind, source) :- slice_start(context, site, function, kind, source).
+start_value(context, site, function, kind, source) :-
+  slices_from(site, operation),
+  operation != "Nx.slice_along_axis",
+  site_active(context, site),
+  flow_argument(site, function, 1, kind, source),
+  kind != "object".
+start_value(context, site, function, "literal", text) :-
+  start_literal(site, function, offset, text),
+  offset > 0,
+  site_active(context, site).
+
+sign_demand(context, function, kind, source) :- start_value(context, _, function, kind, source).
+
+// `certain` is 1 where a start is never an integer in some context, which
+// Nx rejects on every path there.
+tensor_type_error(site, function, cat(operation, "/", to_string(arity)), "non_integer_start", class, 1, min(certain, 1), origin, shown) :-
+  non_integer_start(_, site, _, _, _, class, origin),
+  certain = count : {
+    non_integer_start(context, site, start_function, kind, source, _, _),
+    !value_class(context, start_function, kind, source, "integer", _)
+  },
+  operation_site(site, operation, arity),
+  site_function(site, function),
+  type_origin_shown(origin, shown).
+type_origin_shown("", "") :- non_integer_start(_, _, _, _, _, _, "").
+type_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
+  non_integer_start(_, _, _, _, _, _, origin),
+  called_name(origin, operation, arity).
+
+// ══ ddof ════════════════════════════════════════════════════════════
+//
+// `Nx.variance`, `Nx.standard_deviation` and `Nx.covariance` divide by
+// their count less `ddof`, unchecked: a count of 1 with `ddof: 1` (a batch
+// of one) divides by zero, and a `ddof` past the count by a negative
+// number, a negative variance whose square root is NaN.
+
+// A spread whose written `ddof` is at least the count it reduces over:
+// `how` is "equal" where it divides by zero, "greater" past it.
+.decl ddof_past_count(context: Context, site: symbol, how: symbol, ddof: number)
+ddof_past_count(context, site, how, ddof) :-
+  spread_count(context, site, tally),
+  written_ddof(site, ddof),
+  ( ddof = tally, how = "equal" ; ddof > tally, how = "greater" ).
+
+// A spread with a written `ddof`.
+.decl written_ddof(site: symbol, ddof: number)
+written_ddof(site, ddof) :-
+  operation_site(site, operation, _),
+  spread(operation, _, _),
+  option_integer(site, "ddof", ddof).
+
+// The spreads: what they reduce over (the `:axes` option's axes, or the
+// observations along the second to last axis), and 1 for those that are a
+// sum of squares over the count, which a negative count makes negative
+// (the standard deviation is its root, NaN).
+.decl spread(operation: symbol, over: symbol, squares: number)
+spread("Nx.variance", "axes", 1). spread("Nx.standard_deviation", "axes", 0).
+spread("Nx.covariance", "observations", 1).
+
+// `Nx.covariance/2` takes options where `Nx.covariance/3` takes the mean.
+options_at("Nx.covariance", 2, 1).
+options_at("Nx.covariance", 3, 2).
+
+// How many values a spread reduces, where the rules know it: the product
+// of the axes a variance or deviation reduces (all of them over what the
+// others leave), and a covariance's axis of observations.
+.decl spread_count(context: Context, site: symbol, tally: number)
+spread_count(context, site, tally) :-
+  spread_reduces(context, site, first, kept),
+  axes_product(first, total),
+  axes_product(kept, rest),
+  size_quotient(total, rest, [tally, nil]).
+spread_count(context, site, tally) :-
+  written_ddof(site, _),
+  operation_site(site, operation, _),
+  spread(operation, "observations", _),
+  slot_value(context, site, 1, _, first),
+  axes_rank(first, rank),
+  axes_axis(first, rank - 2, [tally, nil], _).
+
+// A variance or deviation with a written `ddof`, its operand's axes and
+// what it keeps of them.
+.decl spread_reduces(context: Context, site: symbol, first: Axes, kept: Axes)
+spread_reduces(context, site, first, kept) :-
+  written_ddof(site, _),
+  operation_site(site, operation, _),
+  spread(operation, "axes", _),
+  slot_value(context, site, 1, _, first),
+  reduction_axes(site, first, mask, keep),
+  contracted(first, mask, keep, kept).
+
+axes_needed(kept) :- spread_reduces(_, _, _, kept).
+quotient_demand(total, rest) :-
+  spread_reduces(_, _, first, kept),
+  axes_product(first, total),
+  axes_product(kept, rest).
+
+nonfinite(context, site, "ddof_not_below_count", how, "") :- ddof_past_count(context, site, how, _).
+
+// A negative `ddof`, which Nx takes: it divides by more than the count.
+call_error(context, site, "negative_ddof", to_string(ddof), "") :-
+  written_ddof(site, ddof),
+  ddof < 0,
+  site_active(context, site).
+
+// ══ Random ranges ═══════════════════════════════════════════════════
+//
+// `Nx.Random.randint` takes its values from the remainder of random bits
+// by `max - min` as an unsigned integer of the type's width, unchecked:
+// an empty range divides by zero (the binary backend raises, others give
+// what the bits hold), a reversed one wraps to a huge span, and bounds the
+// type cannot hold wrap or cut the range short (0 to 300 as `:u8` spans
+// 44). `Nx.Random.uniform` scales by `max - min` and clamps at `min`, so a
+// reversed range gives `min` alone.
+
+// A randint over an empty range: `min` equal to `max`, which is exclusive.
+call_error(context, site, "random_range_empty", cat(low, " to ", high), "") :-
+  random_sampling(site, "randint"),
+  random_bound(context, site, 1, minimum, low),
+  random_bound(context, site, 2, maximum, high),
+  minimum = maximum.
+
+// A random range whose minimum is above its maximum.
+call_error(context, site, "random_range_reversed", cat(low, " to ", high), "") :-
+  random_sampling(site, _),
+  random_bound(context, site, 1, minimum, low),
+  random_bound(context, site, 2, maximum, high),
+  minimum > maximum.
+
+// A randint whose written bounds the integer type it makes cannot hold:
+// the type holds the range where its smallest value is at most the
+// minimum, its largest at least the maximum less one, and the span is
+// narrower than its width (a span as wide wraps to zero).
+call_error(context, site, "random_range_outside_type", cat(low, " to ", high, " as ", name), "") :-
+  random_sampling(site, "randint"),
+  random_bound(context, site, 1, minimum, low),
+  random_bound(context, site, 2, maximum, high),
+  given_type(context, site, name, "integer"),
+  integer_range(name, smallest, largest),
+  min(min(minimum - smallest, largest + 1.0 - maximum), largest - smallest - (maximum - minimum)) < 0.0.
+
+// A randint that makes a tensor of a type other than an integer, which Nx
+// rejects: given one, or given none and a bound written as a float.
+call_error(context, site, "random_type_not_integer", class, "") :-
+  random_sampling(site, "randint"),
+  given_type(context, site, _, class),
+  class != "integer".
+call_error(context, site, "random_type_not_integer", "float", "") :-
+  random_sampling(site, "randint"),
+  !type_given(site),
+  float_bound(context, site).
+
+// A randint given an integer type with a bound written as a float, which
+// it truncates.
+call_error(context, site, "random_bound_truncated", "float", "") :-
+  random_sampling(site, "randint"),
+  given_type(context, site, _, "integer"),
+  float_bound(context, site).
+
+// The calls that sample a range, bounds at positions 1 and 2, by sampler.
+// A random range sampler's type is asked, whatever else asks for it.
+type_asked(context, site) :- random_sampling(site, _), site_active(context, site).
+
+.decl random_sampling(site: symbol, sampler: symbol)
+random_sampling(site, "randint") :-
+  operation_site(site, operation, arity),
+  arity >= 3,
+  match("Nx\\.Random\\.randint(_split)?", operation).
+random_sampling(site, "uniform") :-
+  operation_site(site, operation, arity),
+  arity >= 3,
+  match("Nx\\.Random\\.uniform(_split)?", operation).
+
+trailing_options("Nx.Random.randint", 3).
+trailing_options("Nx.Random.uniform", 3).
+
+// A bound as a number, where the code writes it or it is a size the rules
+// know, and as written.
+.decl random_bound(context: Context, site: symbol, position: number, bound: float, written: symbol)
+random_bound(context, site, position, to_float(value), to_string(value)) :-
+  random_sampling(site, _),
+  argument_value(context, site, position, $Integer([value, nil])),
+  position >= 1, position <= 2,
+  value > 0.
+random_bound(context, site, position, to_float(value), spelled) :-
+  random_sampling(site, _),
+  argument_value(context, site, position, $Term(text, start)),
+  position >= 1, position <= 2,
+  term_integer(text, start, value),
+  term_spelling(text, start, spelled).
+random_bound(context, site, position, to_float(spelled), spelled) :-
+  random_sampling(site, _),
+  argument_value(context, site, position, $Term(text, start)),
+  position >= 1, position <= 2,
+  term_float(text, start),
+  term_spelling(text, start, spelled),
+  match("-?([0-9]{1,16}(\\.[0-9]+)?|[0-9]\\.[0-9]+e-?([0-9]|[0-2][0-9]|3[0-7]))", spelled).
+
+// A bound written as a float.
+.decl float_bound(context: Context, site: symbol)
+float_bound(context, site) :-
+  random_sampling(site, "randint"),
+  argument_value(context, site, position, $Term(text, start)),
+  position >= 1, position <= 2,
+  term_float(text, start).
+
+// The values each integer type of up to 16 bits holds, as Nx names it.
+.decl integer_range(name: symbol, smallest: float, largest: float)
+integer_range("s2", -2.0, 1.0). integer_range("s4", -8.0, 7.0). integer_range("s8", -128.0, 127.0).
+integer_range("s16", -32768.0, 32767.0). integer_range("u2", 0.0, 3.0). integer_range("u4", 0.0, 15.0).
+integer_range("u8", 0.0, 255.0). integer_range("u16", 0.0, 65535.0).
+
+// ══ Complex operands ════════════════════════════════════════════════
+//
+// The calls that order values, or round them, have no meaning for complex
+// numbers, and Nx raises for a complex tensor there: a maximum, sort or
+// comparison, `argmax` of a spectrum not taken `Nx.abs` of first. A
+// variance of complex values squares them rather than their magnitudes,
+// and is silently wrong.
+
+// A call that rejects complex tensors (`kind` "complex_operand") or
+// misreads them ("complex_spread") whose operand can be complex.
+.decl complex_operand(context: Context, site: symbol, position: number, kind: symbol, origin: symbol)
+complex_operand(context, site, position, kind, origin) :-
+  complex_hazard(site, position, kind),
+  operand_class(context, site, position, "complex", origin).
+
+// The operands of Nx calls that reject complex tensors or misread them.
+.decl complex_hazard(site: symbol, position: number, kind: symbol)
+complex_hazard(site, position, "complex_operand") :-
+  operation_site(site, operation, _),
+  rejects_complex(operation, position).
+complex_hazard(site, 0, "complex_operand") :-
+  operation_site(site, "Nx.LinAlg.norm", _),
+  ( option_atom(site, "ord", ":nuclear") ; option_integer(site, "ord", -2) ).
+complex_hazard(site, 0, "complex_spread") :-
+  operation_site(site, operation, _),
+  spread(operation, "axes", _).
+
+// The operands of the functions that order or round values, or take them
+// as real: Nx raises for a complex one.
+.decl rejects_complex(operation: symbol, position: number)
+rejects_complex("Nx.reduce_max", 0). rejects_complex("Nx.reduce_min", 0). rejects_complex("Nx.argmax", 0).
+rejects_complex("Nx.argmin", 0). rejects_complex("Nx.window_max", 0). rejects_complex("Nx.window_min", 0).
+rejects_complex("Nx.cumulative_max", 0). rejects_complex("Nx.cumulative_min", 0). rejects_complex("Nx.sort", 0).
+rejects_complex("Nx.argsort", 0). rejects_complex("Nx.top_k", 0). rejects_complex("Nx.median", 0).
+rejects_complex("Nx.mode", 0). rejects_complex("Nx.logsumexp", 0). rejects_complex("Nx.erf", 0).
+rejects_complex("Nx.erfc", 0). rejects_complex("Nx.erf_inv", 0). rejects_complex("Nx.floor", 0).
+rejects_complex("Nx.ceil", 0). rejects_complex("Nx.round", 0). rejects_complex("Nx.rfft", 0).
+rejects_complex("Nx.LinAlg.svd", 0). rejects_complex("Nx.LinAlg.pinv", 0). rejects_complex("Nx.LinAlg.matrix_rank", 0).
+rejects_complex("Nx.LinAlg.least_squares", 0). rejects_complex("Nx.LinAlg.least_squares", 1).
+rejects_complex("Nx.clip", 0). rejects_complex("Nx.clip", 1). rejects_complex("Nx.clip", 2).
+rejects_complex("Nx.window_scatter_max", 0). rejects_complex("Nx.window_scatter_max", 1).
+rejects_complex("Nx.window_scatter_min", 0). rejects_complex("Nx.window_scatter_min", 1).
+rejects_complex("Nx.max", 0). rejects_complex("Nx.max", 1). rejects_complex("Nx.min", 0). rejects_complex("Nx.min", 1).
+rejects_complex("Nx.remainder", 0). rejects_complex("Nx.remainder", 1).
+rejects_complex("Nx.greater", 0). rejects_complex("Nx.greater", 1). rejects_complex("Nx.less", 0).
+rejects_complex("Nx.less", 1). rejects_complex("Nx.greater_equal", 0). rejects_complex("Nx.greater_equal", 1).
+rejects_complex("Nx.less_equal", 0). rejects_complex("Nx.less_equal", 1).
+rejects_complex("Nx.Defn.Kernel.max", 0). rejects_complex("Nx.Defn.Kernel.max", 1).
+rejects_complex("Nx.Defn.Kernel.min", 0). rejects_complex("Nx.Defn.Kernel.min", 1).
+rejects_complex("Nx.Defn.Kernel.rem", 0). rejects_complex("Nx.Defn.Kernel.rem", 1).
+rejects_complex("Nx.Defn.Kernel.__less_than__", 0). rejects_complex("Nx.Defn.Kernel.__less_than__", 1).
+rejects_complex("Nx.Defn.Kernel.__more_than__", 0). rejects_complex("Nx.Defn.Kernel.__more_than__", 1).
+rejects_complex("Nx.Defn.Kernel.__less_than_equal_to__", 0).
+rejects_complex("Nx.Defn.Kernel.__less_than_equal_to__", 1).
+rejects_complex("Nx.Defn.Kernel.__more_than_equal_to__", 0).
+rejects_complex("Nx.Defn.Kernel.__more_than_equal_to__", 1).
+
+// The class an operand of such a call can be of, asked only of a program
+// that can make a complex tensor.
+.decl operand_class(context: Context, site: symbol, position: number, class: symbol, origin: symbol)
+operand_class(context, site, position, class, origin) :-
+  complex_hazard(site, position, _),
+  makes_complex(),
+  site_active(context, site),
+  flow_argument(site, function, position, kind, source),
+  value_class(context, function, kind, source, class, origin).
+
+sign_demand(context, function, kind, source) :-
+  complex_hazard(site, position, _),
+  makes_complex(),
+  site_active(context, site),
+  flow_argument(site, function, position, kind, source).
+
+// The program makes a complex tensor somewhere: calls that make one, and
+// the complex types written in its literals. With none, no operand can be
+// complex, and no class is asked for it.
+.decl makes_complex()
+makes_complex() :- operation_site(_, operation, _), type_class(operation, "complex").
+makes_complex() :- remote_call(_, _, "Nx.Constants", "i", _).
+makes_complex() :- literal_source(_, text), match(".*(c64|c128|\\{:c, ).*", text).
+
+// The calls that make a complex tensor of any operand: the Fourier
+// transforms, `Nx.complex/2`, and `Nx.conjugate/1`, which makes even a
+// real tensor complex; and `Nx.Constants.i`.
+type_class("Nx.fft", "complex"). type_class("Nx.ifft", "complex"). type_class("Nx.rfft", "complex").
+type_class("Nx.fft2", "complex"). type_class("Nx.ifft2", "complex"). type_class("Nx.complex", "complex").
+type_class("Nx.conjugate", "complex").
+
+value_class(context, function, "result", site, "complex", site) :-
+  type_call(context, site, function, "complex").
+value_class(context, function, "result", site, "complex", site) :-
+  type_call(context, site, function, "typed"),
+  remote_call(site, _, "Nx.Constants", "i", 0).
+
+// `Nx.abs` keeps an integer or float operand's class, and makes a complex
+// one's magnitude a float.
+type_class("Nx.abs", "magnitude").
+value_class(context, function, "result", site, class, origin) :-
+  argument_class(context, site, 0, class, origin),
+  class != "complex",
+  type_call(context, site, function, "magnitude").
+value_class(context, function, "result", site, "float", site) :-
+  argument_class(context, site, 0, "complex", _),
+  type_call(context, site, function, "magnitude").
+
+// `certain` is 1 where an operand is never anything but complex in some
+// context, which Nx rejects on every path there.
+tensor_type_error(site, function, cat(operation, "/", to_string(arity)), kind, "complex", position, min(certain, 1), origin, shown) :-
+  complex_operand(_, site, position, kind, origin),
+  certain = count : {
+    complex_operand(context, site, position, _, _),
+    !operand_class(context, site, position, "integer", _),
+    !operand_class(context, site, position, "float", _)
+  },
+  operation_site(site, operation, arity),
+  site_function(site, function),
+  type_origin_shown(origin, shown).
+type_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
+  complex_operand(_, _, _, _, origin),
+  called_name(origin, operation, arity).

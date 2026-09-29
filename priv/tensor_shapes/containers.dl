@@ -1,3 +1,651 @@
 // Containers handed to `defn` or `jit`: leaves Nx rejects, and fields a derived `Nx.Container` drops.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// `defn` takes tensors, numbers and containers of them from outside:
+// tuples, maps, and structs with an `Nx.Container` implementation. Nx
+// traverses each argument on the way in (every element of a tuple, every
+// value of a map, the fields a struct's implementation traverses) and
+// raises at anything else. It rebuilds a struct from what its
+// implementation keeps, so a field a derived one lists in neither
+// `containers:` nor `keep:` holds its default inside the `defn`, and in the
+// struct a `defn` returns. A `grad` differentiates the value it is handed,
+// and every value its function captures is a constant to it.
+//
+// The checks, reported as `call_error`:
+//
+//   * "dropped_field_read": a `defn`, or a function `jit` runs, reads a
+//     field of a struct handed in from outside that the struct's container
+//     drops, and gets the field's default;
+//   * "dropped_field_returned": code reads such a field of a struct a
+//     `defn` or `jit` call returns;
+//   * "container_leaf": a container handed to a `defn`, a `jit`,
+//     `Nx.Defn.jit_apply/2` or `Nx.Batch` holds a value Nx cannot trace;
+//   * "captured_gradient": a `grad`'s function captures the value it
+//     differentiates, or part of it;
+//   * "container_order": an implementation's `traverse/3` and `reduce/3`
+//     visit its fields in different orders.
+//
+// Which way they err: a struct is known only where the code builds it
+// (`%S{...}`, or an update of one it builds), and a container only where
+// the code builds it, so a value the rules cannot follow gives no finding;
+// nor does a call from a function a `defn`'s body may call, which is taken
+// to run while the `defn` is traced (quiet). A `grad`'s function that
+// reads a value it captures only for its shape is reported all the same
+// (loud).
+
+// ══ Code that runs as `defn` ════════════════════════════════════════
+
+// A `defn`'s body, which the compiler names `__defn:name__`, or a closure
+// in one: code that runs as `defn` traces it, over what its wrapper or a
+// `jit` hands in.
+.decl traced_function(function: symbol)
+traced_function(function) :- function_def(function, _, name, _, _), match("-?__defn:.*", name).
+
+// A call from outside `defn` that runs code as `defn` compiles it,
+// handing it its arguments: a `defn` called through its wrapper, or the
+// function `Nx.Defn.jit/1,2` returns. A wrapper called while a `defn` is
+// traced calls its body directly, over values already traced, so only a
+// call from a function that runs outside one counts.
+.decl defn_call(site: symbol, caller: symbol)
+defn_call(site, caller) :-
+  entering_call(site, caller),
+  !runs_while_traced(caller).
+
+// Such a call from a function other than a `defn`'s body.
+.decl entering_call(site: symbol, caller: symbol)
+entering_call(site, caller) :-
+  program_call(site, caller, wrapper),
+  defn_wrapper(wrapper, _),
+  !traced_function(caller).
+entering_call(site, caller) :-
+  jitted_call(site, caller, _, _),
+  !traced_function(caller).
+
+// A function called while a `defn` is traced: a `defn`'s body calls it, or
+// calls what calls it, as Argus's call graph has it or as the rules follow
+// the calls (a protocol's implementation, a fun a transform captures).
+// Asked of the functions that make the calls above, and of those that
+// build a struct whose container drops a field.
+.decl runs_while_traced(function: symbol)
+runs_while_traced(function) :- trace_reach.reaches(traced, function), traced_function(traced).
+
+.init trace_reach = CallReach
+trace_reach.seed(caller, caller) :- entering_call(_, caller).
+trace_reach.seed(builder, builder) :-
+  dropped_field(struct, _, _),
+  struct_built(object, struct),
+  flow_object(builder, object, "map", _).
+trace_reach.seed(caller, target) :-
+  trace_reach.reaches(callee, target),
+  call_made(_, site, callee),
+  site_function(site, caller).
+
+// A call of what `Nx.Defn.jit/1,2` returns: it runs `function` as `defn`
+// compiles it, which takes the call's arguments from `offset` on (a closure
+// takes what it captured first). A `defn`'s wrapper runs its body, which
+// it hands its parameters as they are.
+.decl jitted_call(site: symbol, caller: symbol, function: symbol, offset: number)
+jitted_call(site, caller, body, offset) :-
+  flow_callee(site, caller, "fun", "result", jit),
+  flow_dynamic(site, caller, _),
+  jit_handed(jit, caller, wrapper, offset),
+  defn_wrapper(wrapper, body).
+jitted_call(site, caller, function, offset) :-
+  flow_callee(site, caller, "fun", "result", jit),
+  flow_dynamic(site, caller, _),
+  jit_handed(jit, caller, function, offset),
+  !defn_wrapper(function, _).
+
+// The function a `jit` call is handed, and how many arguments it takes
+// before the ones the compiled function is called with: a closure's
+// captured values, none for a capture of a named function.
+.decl jit_handed(jit: symbol, caller: symbol, function: symbol, offset: number)
+jit_handed(jit, caller, function, captured) :-
+  remote_call(jit, caller, "Nx.Defn", "jit", _),
+  flow_argument(jit, caller, 0, "object", closure),
+  flow_object(caller, closure, "closure", captured),
+  flow_closure(closure, function).
+jit_handed(jit, caller, function, 0) :-
+  remote_call(jit, caller, "Nx.Defn", "jit", _),
+  flow_argument(jit, caller, 0, "literal", _),
+  fun_handed(jit, caller, function, 0).
+
+// ══ What a struct's container keeps ═════════════════════════════════
+
+// The program's implementation of `Nx.Container` or `Nx.LazyContainer`
+// for a struct, named as `defimpl` and `@derive` name it: the protocol,
+// then the struct.
+.decl implemented_for(protocol: symbol, implementation: symbol, struct: symbol)
+implemented_for("Nx.Container", implementation, substr(implementation, 13, strlen(implementation) - 13)) :-
+  function_def(_, implementation, "__impl__", 1, _),
+  match("Nx\\.Container\\..+", implementation).
+implemented_for("Nx.LazyContainer", implementation, substr(implementation, 17, strlen(implementation) - 17)) :-
+  function_def(_, implementation, "__impl__", 1, _),
+  match("Nx\\.LazyContainer\\..+", implementation).
+
+// A field the struct an implementation's `traverse/3` rebuilds (the map it
+// returns first in its tuple) holds a literal at, whatever the struct
+// handed in held: inside a `defn`, and in a struct one returns, the field
+// holds that literal. A derived `Nx.Container` rebuilds every field in
+// neither `containers:` nor `keep:` so, from the struct's default.
+.decl dropped_field(struct: symbol, field: symbol, default: symbol)
+dropped_field(struct, field, default) :-
+  implemented_for("Nx.Container", implementation, struct),
+  function_def(traverse, implementation, "traverse", 3, _),
+  flow_return(traverse, _, "object", tuple),
+  flow_field(traverse, tuple, "{0}", "object", map),
+  flow_field(traverse, map, field, "literal", default),
+  field != ":__struct__",
+  1 = count : { flow_field(traverse, map, field, _, _) }.
+
+// A field an implementation's `traverse/3` hands the function it traverses
+// with: one in a derived implementation's `containers:`, whose leaves Nx
+// traverses in turn.
+.decl traversed_field(struct: symbol, field: symbol)
+traversed_field(struct, field) :-
+  implemented_for("Nx.Container", implementation, struct),
+  function_def(traverse, implementation, "traverse", 3, _),
+  visit_call(traverse, field, _, _).
+
+// A struct the code builds, `%S{...}`, or an update of one it builds.
+.decl struct_built(object: symbol, struct: symbol)
+struct_built(object, struct) :-
+  flow_field(_, object, ":__struct__", "literal", struct),
+  flow_object(_, object, "map", _).
+struct_built(object, struct) :-
+  struct_built(base, struct),
+  flow_base(_, object, "object", base).
+
+// A struct built by a function that runs outside `defn`, which reaches one
+// only through a call that traverses it.
+.decl struct_from_outside(object: symbol, struct: symbol)
+struct_from_outside(object, struct) :-
+  struct_built(object, struct),
+  flow_object(builder, object, "map", _),
+  !traced_function(builder),
+  !runs_while_traced(builder).
+
+// ══ Fields a container drops ════════════════════════════════════════
+
+// A `defn` reads a field of a struct handed in from outside, which the
+// struct's container drops on the way in: the read gets the field's
+// default, not what the caller set.
+.decl dropped_field_read(context: Context, read: symbol, struct: symbol, field: symbol)
+dropped_field_read(context, read, struct, field) :-
+  dropped_field(struct, field, _),
+  struct_from_outside(object, struct),
+  reads_field(context, function, read, field, object),
+  traced_function(function).
+// ... or a function `jit` runs reads it of a struct its call hands it.
+dropped_field_read(context, read, struct, field) :-
+  hands_jitted_struct(context, function, position, struct),
+  dropped_field(struct, field, _),
+  reads_source_field(function, "param", to_string(position), field, read).
+
+// Code reads a field of a struct a `defn` or `jit` call returns, which
+// the struct's container drops on the way out: the read gets the field's
+// default, whatever the `defn` set. `call` is the call that returns it.
+.decl dropped_field_returned(context: Context, read: symbol, struct: symbol, field: symbol, call: symbol)
+dropped_field_returned(context, read, struct, field, call) :-
+  dropped_field(struct, field, _),
+  struct_built(object, struct),
+  reads_field(context, function, read, field, object),
+  reads_returned(function, read, field, call).
+dropped_field_returned(context, read, struct, field, call) :-
+  jitted_struct_result(context, call, caller, struct),
+  dropped_field(struct, field, _),
+  reads_source_field(caller, "result", call, field, read).
+
+// The instruction `read` of `function` reads `field` of the object in the
+// context, for a field its struct's container drops. A read's load is
+// named by its instruction, then the field.
+.decl reads_field(context: Context, function: symbol, read: symbol, field: symbol, object: symbol)
+reads_field(context, function, substr(load, 0, strlen(load) - strlen(field) - 1), field, object) :-
+  dropped_field(struct, field, _),
+  struct_built(object, struct),
+  object_read(object_context, object, mapping, field),
+  read_from(context, function, load, field, $Object(object_context, object, mapping)).
+
+// The read is of what a `defn` or `jit` call returns, or of a part of it.
+.decl reads_returned(function: symbol, read: symbol, field: symbol, call: symbol)
+reads_returned(function, read, field, call) :-
+  reads_field(_, function, read, field, _),
+  flow_load(function, cat(read, " ", field), field, kind, source),
+  defn_result(function, kind, source, call).
+
+// Where a function outside `defn` holds what a `defn` or `jit` call
+// returns, or a part of it: the call's result, and what is read from it.
+.decl defn_result(function: symbol, kind: symbol, source: symbol, call: symbol)
+defn_result(function, "result", call, call) :- defn_call(call, function).
+defn_result(function, "load", load, call) :-
+  defn_result(function, kind, source, call),
+  flow_load(function, load, _, kind, source).
+
+// A struct built outside `defn` that a call of what `jit` returns hands
+// the function it runs, as its parameter at `position`.
+.decl hands_jitted_struct(context: Context, function: symbol, position: number, struct: symbol)
+hands_jitted_struct(context, function, offset + position, struct) :-
+  jitted_call(site, _, function, offset),
+  argument_value(context, site, position, $Object(_, object, _)),
+  struct_from_outside(object, struct).
+
+// The instruction `read` of `function` reads `field` of the source
+// itself: of a parameter a call of what `jit` returns hands a struct, or of
+// the result of such a call, which may return one.
+.decl reads_source_field(function: symbol, kind: symbol, source: symbol, field: symbol, read: symbol)
+reads_source_field(function, "param", source, field, substr(load, 0, strlen(load) - strlen(field) - 1)) :-
+  hands_jitted_struct(_, function, position, _),
+  source = to_string(position),
+  flow_load(function, load, field, "param", source).
+reads_source_field(caller, "result", call, field, substr(load, 0, strlen(load) - strlen(field) - 1)) :-
+  jitted_struct_result(_, call, caller, _),
+  flow_load(caller, load, field, "result", call).
+
+// A struct a call of what `jit` returns may return: one the function it
+// runs builds and returns over its own parameters, or the struct the call
+// hands it where it returns that parameter as it is.
+.decl jitted_struct_result(context: Context, call: symbol, caller: symbol, struct: symbol)
+jitted_struct_result(context, call, caller, struct) :-
+  jitted_call(call, caller, function, _),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments),
+  return_value($Canonical(function, arguments), function, $Object(_, object, _)),
+  struct_built(object, struct),
+  site_active(context, call).
+jitted_struct_result(context, call, caller, struct) :-
+  jitted_call(call, caller, function, offset),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments),
+  return_value($Canonical(function, arguments), function, $Opaque(path)),
+  argument_value(context, call, position, $Object(_, object, _)),
+  path = cat("$", to_string(offset + position)),
+  struct_built(object, struct).
+
+call_error(context, read, "dropped_field_read", detail, "") :-
+  dropped_field_read(context, read, struct, field),
+  dropped_field(struct, field, default),
+  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
+// The call that returns the struct is the finding's origin where it is a
+// remote call, which a finding can name.
+call_error(context, read, "dropped_field_returned", detail, call) :-
+  dropped_field_returned(context, read, struct, field, call),
+  remote_call(call, _, _, _, _),
+  dropped_field(struct, field, default),
+  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
+call_error(context, read, "dropped_field_returned", detail, "") :-
+  dropped_field_returned(context, read, struct, field, call),
+  !remote_call(call, _, _, _, _),
+  dropped_field(struct, field, default),
+  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
+
+// ══ Values `defn` cannot trace ══════════════════════════════════════
+
+// A container a call hands `defn` holds, at `path` from the argument
+// `root`, a value Nx cannot trace: an atom (`nil` and the booleans too), a
+// list, a string, a fun, or a struct with no container implementation.
+.decl untraceable_leaf(context: Context, site: symbol, root: symbol, path: symbol, leaf: symbol, object: symbol, selector: symbol)
+untraceable_leaf(context, site, root, path, leaf, object, selector) :-
+  traversed_value(context, site, root, path, object, selector, value),
+  cannot_trace(value, leaf).
+// ... or is itself a struct with no container implementation, at no field.
+untraceable_leaf(context, site, root, "", cat("a ", struct, " struct"), object, "") :-
+  defn_argument(context, site, root, $Object(_, object, _)),
+  struct_built(object, struct),
+  !implemented_for(_, _, struct).
+
+// A value a call hands `defn` from outside, at `root`: an argument of a
+// `defn` or of what `jit` returns, and an entry of the list
+// `Nx.Defn.jit_apply/2,3` or `Nx.Batch` takes. A list at the top is not
+// traversed (`defn` takes one as it is), so only the entries of those
+// count.
+.decl defn_argument(context: Context, site: symbol, root: symbol, value: Value)
+defn_argument(context, site, cat("argument ", to_string(position + 1)), value) :-
+  held(context, caller, kind, source, value),
+  flow_argument(site, caller, position, kind, source),
+  defn_call(site, caller),
+  entry_context(context, site, caller).
+defn_argument(context, site, cat(entry, to_string(index + 1)), value) :-
+  entry_cell(context, site, index, cell_context, cell),
+  listing_call(site, _, _, entry),
+  flow_field(builder, cell, "head", kind, source),
+  held(cell_context, builder, kind, source, value).
+
+// A context a call that hands `defn` values is made in: one the rules
+// analyze its function in, or the function over its own names where they
+// analyze it in none.
+.decl entry_context(context: Context, site: symbol, caller: symbol)
+entry_context(context, site, caller) :-
+  defn_call(site, caller),
+  site_active(context, site).
+entry_context(context, site, caller) :-
+  listing_call(site, caller, _, _),
+  site_active(context, site).
+entry_context($Canonical(caller, arguments), site, caller) :-
+  defn_call(site, caller),
+  !active(_, caller),
+  function_def(caller, _, _, arity, _),
+  own_names(arity, 0, arguments).
+entry_context($Canonical(caller, arguments), site, caller) :-
+  listing_call(site, caller, _, _),
+  !active(_, caller),
+  function_def(caller, _, _, arity, _),
+  own_names(arity, 0, arguments).
+
+// What a source may hold in the context: what the rules follow it to, and
+// the terms it builds and the literals it writes, in a context the rules
+// do not analyze too. A literal the rules do not parse (a string, a fun)
+// is a term spelled as it is written.
+.decl held(context: Context, function: symbol, kind: symbol, source: symbol, value: Value)
+held(context, function, "object", object, $Object(context, object, nil)) :-
+  held_demand(context, function, "object", object).
+held(context, function, "literal", text, value) :-
+  held_demand(context, function, "literal", text),
+  written_value(text, value).
+held(context, function, "literal", text, $Term(text, 0)) :-
+  held_demand(context, function, "literal", text),
+  !literal_text(text).
+held(context, function, kind, source, value) :-
+  held_demand(context, function, kind, source),
+  value_of(context, function, kind, source, value).
+
+.decl held_demand(context: Context, function: symbol, kind: symbol, source: symbol)
+held_demand(context, caller, kind, source) :-
+  entry_context(context, site, caller),
+  defn_call(site, caller),
+  flow_argument(site, caller, _, kind, source).
+held_demand(context, caller, kind, source) :-
+  entry_context(context, site, caller),
+  listing_call(site, caller, position, _),
+  flow_argument(site, caller, position, kind, source).
+held_demand(cell_context, builder, kind, source) :-
+  entry_cell(_, _, _, cell_context, cell),
+  flow_field(builder, cell, field, kind, source),
+  ( field = "head" ; field = "tail" ).
+held_demand(object_context, builder, kind, source) :-
+  container_part(_, _, _, _, object_context, object),
+  traverses(object, selector),
+  flow_field(builder, object, selector, kind, source).
+.plan 1:(2,1,3)
+
+// A call that hands `defn` the entries of a list, which `entry` names:
+// `Nx.Defn.jit_apply/2,3` the arguments of the function it runs (other
+// than in a `defn`'s wrapper, which hands its own), and `Nx.Batch.stack`
+// and `concatenate` the entries they batch.
+.decl listing_call(site: symbol, caller: symbol, position: number, entry: symbol)
+listing_call(site, caller, 1, "argument ") :-
+  remote_call(site, caller, "Nx.Defn", "jit_apply", arity),
+  arity >= 2,
+  !defn_wrapper(caller, _).
+listing_call(site, caller, arity - 1, "entry ") :-
+  remote_call(site, caller, "Nx.Batch", name, arity),
+  match("stack|concatenate", name),
+  arity <= 2.
+
+// The list cell at `index` of the list such a call is handed.
+.decl entry_cell(context: Context, site: symbol, index: number, cell_context: Context, cell: symbol)
+entry_cell(context, site, 0, cell_context, cell) :-
+  entry_context(context, site, caller),
+  listing_call(site, caller, position, _),
+  flow_argument(site, caller, position, kind, source),
+  held(context, caller, kind, source, $Object(cell_context, cell, _)),
+  flow_object(_, cell, "list", _).
+entry_cell(context, site, index + 1, next_context, next) :-
+  entry_cell(context, site, index, cell_context, cell),
+  index < 64,
+  flow_field(builder, cell, "tail", kind, source),
+  held(cell_context, builder, kind, source, $Object(next_context, next, _)),
+  flow_object(_, next, "list", _).
+
+// A term the code builds that Nx traverses as a container, handed to a
+// `defn`, from the argument `root` along `path`, and the context that
+// built it.
+.decl container_part(context: Context, site: symbol, root: symbol, path: symbol, object_context: Context, object: symbol)
+container_part(context, site, root, "", object_context, object) :-
+  defn_argument(context, site, root, $Object(object_context, object, _)),
+  container_kind(object, _).
+container_part(context, site, root, path, inner_context, inner) :-
+  traversed_value(context, site, root, path, _, _, $Object(inner_context, inner, _)),
+  strlen(path) <= 96,
+  container_kind(inner, _).
+
+// A value Nx traverses at a field of a container part.
+.decl traversed_value(context: Context, site: symbol, root: symbol, path: symbol, object: symbol, selector: symbol, value: Value)
+traversed_value(context, site, root, cat(path, suffix), object, selector, value) :-
+  container_part(context, site, root, path, object_context, object),
+  traverses(object, selector),
+  selector_suffix(selector, suffix),
+  flow_field(builder, object, selector, kind, source),
+  held(object_context, builder, kind, source, value).
+.plan 1:(2,1,3,4,5), 2:(5,4,2,1,3)
+
+// A term a call hands `defn`, or that one holds, whose kind as a container
+// the rules ask.
+.decl container_demand(object: symbol)
+container_demand(object) :- defn_argument(_, _, _, $Object(_, object, _)).
+container_demand(object) :- traversed_value(_, _, _, _, _, _, $Object(_, object, _)).
+
+// How Nx traverses the term: a tuple, a map that is no struct, or a
+// struct with the program's own `Nx.Container` implementation. A map
+// built over a value the rules do not know may be a struct, and is none of
+// these.
+.decl container_kind(object: symbol, kind: symbol)
+container_kind(object, "tuple") :-
+  container_demand(object),
+  flow_object(_, object, "tuple", _),
+  !flow_base(_, object, _, _).
+container_kind(object, "map") :-
+  container_demand(object),
+  flow_object(_, object, "map", _),
+  flow_base(_, object, "literal", base),
+  match("%\\{.*", base),
+  !struct_built(object, _).
+container_kind(object, "struct") :-
+  container_demand(object),
+  struct_built(object, struct),
+  implemented_for("Nx.Container", _, struct).
+
+// A field of a container part that Nx traverses: every element of a
+// tuple, every value of a map under a key the code writes, and the fields
+// a struct's implementation traverses.
+.decl traverses(object: symbol, selector: symbol)
+traverses(object, selector) :-
+  container_kind(object, "tuple"),
+  flow_field(_, object, selector, _, _).
+traverses(object, selector) :-
+  container_kind(object, "map"),
+  flow_field(_, object, selector, _, _),
+  selector != "*".
+traverses(object, selector) :-
+  container_kind(object, "struct"),
+  struct_built(object, struct),
+  traversed_field(struct, selector),
+  flow_field(_, object, selector, _, _).
+
+// What Nx raises at, as a finding names it: an atom as it is spelled
+// (`nil`, `true`, `:relu`, a module), a list, a string, a fun, a struct
+// with no container implementation.
+.decl cannot_trace(value: Value, leaf: symbol)
+cannot_trace($Term(text, start), atom) :-
+  leaf_demand($Term(text, start)),
+  term_atom(text, start, atom).
+cannot_trace($Term(text, start), "a list") :-
+  leaf_demand($Term(text, start)),
+  term_list(text, start).
+cannot_trace($Term(text, start), "a list") :-
+  leaf_demand($Term(text, start)),
+  charlist(text, start, _).
+cannot_trace($Term(text, 0), "a string") :-
+  leaf_demand($Term(text, 0)),
+  match("\".*", text).
+cannot_trace($Term(text, 0), "a bitstring") :-
+  leaf_demand($Term(text, 0)),
+  match("<<.*", text).
+cannot_trace($Term(text, 0), "a fun") :-
+  leaf_demand($Term(text, 0)),
+  match("&.*", text).
+cannot_trace($Module(module), module) :- leaf_demand($Module(module)).
+cannot_trace($Object(object_context, object, mapping), "a list") :-
+  leaf_demand($Object(object_context, object, mapping)),
+  flow_object(_, object, "list", _).
+cannot_trace($Object(object_context, object, mapping), "a fun") :-
+  leaf_demand($Object(object_context, object, mapping)),
+  flow_object(_, object, "closure", _).
+cannot_trace($Object(object_context, object, mapping), cat("a ", struct, " struct")) :-
+  leaf_demand($Object(object_context, object, mapping)),
+  struct_built(object, struct),
+  !implemented_for(_, _, struct).
+
+.decl leaf_demand(value: Value)
+leaf_demand(value) :- traversed_value(_, _, _, _, _, _, value).
+
+// The leaf is there on every path to the call: the code writes it at the
+// field (`""` for the term itself) as its only value, in a term the call
+// is handed through fields that hold only it.
+.decl written_leaf(site: symbol, object: symbol, selector: symbol)
+written_leaf(site, object, "") :-
+  untraceable_leaf(_, site, _, _, _, object, ""),
+  sole_part(site, object).
+written_leaf(site, object, selector) :-
+  untraceable_leaf(_, site, _, _, _, object, selector),
+  sole_part(site, object),
+  flow_field(_, object, selector, kind, _),
+  kind != "param",
+  kind != "result",
+  kind != "load",
+  1 = count : { flow_field(_, object, selector, _, _) }.
+
+// A term the call is handed as the only value of an argument, of an entry
+// of the list it is handed, or of a field of one.
+.decl sole_part(site: symbol, object: symbol)
+sole_part(site, object) :-
+  defn_call(site, caller),
+  flow_argument(site, caller, position, "object", object),
+  1 = count : { flow_argument(site, caller, position, _, _) }.
+sole_part(site, object) :-
+  sole_cell(site, cell),
+  flow_field(_, cell, "head", "object", object),
+  1 = count : { flow_field(_, cell, "head", _, _) }.
+sole_part(site, inner) :-
+  sole_part(site, object),
+  traverses(object, selector),
+  flow_field(_, object, selector, "object", inner),
+  1 = count : { flow_field(_, object, selector, _, _) }.
+
+// A cell of the list a call hands `defn` the entries of, which every path
+// to the call hands it.
+.decl sole_cell(site: symbol, cell: symbol)
+sole_cell(site, cell) :-
+  listing_call(site, caller, position, _),
+  flow_argument(site, caller, position, "object", cell),
+  1 = count : { flow_argument(site, caller, position, _, _) }.
+sole_cell(site, next) :-
+  sole_cell(site, cell),
+  flow_field(_, cell, "tail", "object", next),
+  1 = count : { flow_field(_, cell, "tail", _, _) }.
+
+call_error(context, site, "container_leaf", cat(leaf, " at ", root, path), "") :-
+  untraceable_leaf(context, site, root, path, leaf, object, selector),
+  written_leaf(site, object, selector).
+call_error(context, site, "container_leaf", cat("possibly ", leaf, " at ", root, path), "") :-
+  untraceable_leaf(context, site, root, path, leaf, object, selector),
+  !written_leaf(site, object, selector).
+
+// ══ Values a gradient's function captures ═══════════════════════════
+
+// A `grad` or `value_and_grad` differentiates a value its function
+// captures: the function reads the captured value, a constant to the
+// gradient, where it means the one it is handed, and the gradient through
+// what it reads so is zero. `path` is where the captured value is in the
+// value differentiated ("" for the whole).
+.decl captured_gradient(site: symbol, path: symbol)
+captured_gradient(site, path) :-
+  gradient_call(site, caller),
+  captures(site, caller, kind, source),
+  differentiates(site, caller, kind, source, path).
+
+// A call of `grad/2` or `value_and_grad/2,3`, which differentiates its
+// first argument through the function its second is.
+.decl gradient_call(site: symbol, caller: symbol)
+gradient_call(site, caller) :-
+  remote_call(site, caller, module, name, arity),
+  gradient_function(name, arity, 1),
+  match("Nx\\.Defn(\\.Kernel)?", module).
+
+// A value the closure the call differentiates through captures.
+.decl captures(site: symbol, caller: symbol, kind: symbol, source: symbol)
+captures(site, caller, kind, source) :-
+  gradient_call(site, caller),
+  flow_argument(site, caller, 1, "object", closure),
+  flow_object(caller, closure, "closure", _),
+  flow_field(caller, closure, _, kind, source),
+  kind != "literal".
+
+// The value the call differentiates and its parts, at `path` in it: the
+// elements of a tuple and values of a map the caller builds, and what it
+// reads from them.
+.decl differentiates(site: symbol, caller: symbol, kind: symbol, source: symbol, path: symbol)
+differentiates(site, caller, kind, source, "") :-
+  gradient_call(site, caller),
+  flow_argument(site, caller, 0, kind, source),
+  kind != "literal".
+differentiates(site, caller, kind, source, cat(path, suffix)) :-
+  differentiates(site, caller, "object", object, path),
+  strlen(path) <= 96,
+  flow_object(caller, object, shape, _),
+  match("tuple|map", shape),
+  flow_field(caller, object, selector, kind, source),
+  kind != "literal",
+  selector_suffix(selector, suffix).
+differentiates(site, caller, "load", load, cat(path, suffix)) :-
+  differentiates(site, caller, kind, source, path),
+  strlen(path) <= 96,
+  flow_load(caller, load, selector, kind, source),
+  selector_suffix(selector, suffix).
+
+call_error($Canonical(function, arguments), site, "captured_gradient", path, "") :-
+  captured_gradient(site, path),
+  site_function(site, function),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments).
+
+// ══ Fields visited in two orders ════════════════════════════════════
+
+// An implementation's `traverse/3` and `reduce/3` visit a field at
+// different places in their order: Nx flattens a container with `reduce`
+// and rebuilds it with `traverse`, so tensors land in each other's fields.
+.decl misordered_field(visit: symbol, struct: symbol, field: symbol)
+misordered_field(visit, struct, field) :-
+  visits(struct, "traverse", field, visit, order),
+  visits(struct, "reduce", field, _, other),
+  order != other.
+
+// The field `traverse/3` or `reduce/3` of the struct's implementation
+// hands the function it is handed at the call `visit`, the `order`-th such
+// call in the function.
+.decl visits(struct: symbol, name: symbol, field: symbol, visit: symbol, order: number)
+visits(struct, name, field, visit, order) :-
+  implemented_for("Nx.Container", implementation, struct),
+  function_def(function, implementation, name, 3, _),
+  visit_call(function, field, visit, index),
+  order = count : { visit_call(function, _, _, earlier), earlier < index }.
+
+// A call of the function a `traverse/3` or `reduce/3` of the program's
+// own implementation is handed, on a field of the struct, and the call's
+// place in the function.
+.decl visit_call(function: symbol, field: symbol, visit: symbol, index: number)
+visit_call(function, field, visit, index) :-
+  implemented_for("Nx.Container", implementation, _),
+  function_def(function, implementation, name, 3, _),
+  match("traverse|reduce", name),
+  flow_callee(visit, function, "fun", "param", "2"),
+  flow_argument(visit, function, 0, "load", load),
+  flow_load(function, load, field, "param", "0"),
+  instruction(visit, function, index, _).
+
+call_error($Canonical(function, arguments), visit, "container_order", detail, "") :-
+  misordered_field(visit, struct, field),
+  instruction(visit, function, _, _),
+  function_def(function, _, _, arity, _),
+  own_names(arity, 0, arguments),
+  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1)).

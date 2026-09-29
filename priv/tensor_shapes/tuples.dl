@@ -1,3 +1,711 @@
-// The Nx calls that return tuples: random samplers and linear algebra decompositions.
+// The Nx calls that return tuples: random samplers, linear algebra
+// decompositions and `Nx.split/3`, with the shapes of the calls beside
+// them whose results depend on the same arguments (`Nx.Random.fold_in/2`,
+// `Nx.LinAlg.cholesky/1`, the matrix orders of `Nx.LinAlg.norm/2`).
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+
+// ══ Tuples an Nx call returns ═══════════════════════════════════════
+//
+// A call that returns a tuple of tensors returns an object of its own,
+// named by the call, whose fields are the tensors: the code reads one
+// where it matches the tuple (`{q, r} = Nx.LinAlg.qr(t)`) or takes an
+// element (`elem(tuple, 1)`), and the tuple crosses calls and returns as
+// the tuples the code builds do. A rule states each tensor
+// (`tuple_element`), from the call's operands and the sizes the code
+// writes.
+
+// The tensor at a position of the tuple an Nx call returns in a context,
+// by the selector that reads it: `{0}` for the first.
+.decl tuple_element(context: Context, site: symbol, selector: symbol, tensor: Tensor)
+
+// The Nx functions that return a tuple: a sample and the key to use
+// next, or the parts of what they compute.
+.decl returns_tuple(operation: symbol, kind: symbol)
+returns_tuple("Nx.Random.uniform", "sample"). returns_tuple("Nx.Random.normal", "sample").
+returns_tuple("Nx.Random.randint", "sample"). returns_tuple("Nx.Random.gumbel", "sample").
+returns_tuple("Nx.Random.shuffle", "sample"). returns_tuple("Nx.Random.choice", "sample").
+returns_tuple("Nx.Random.multivariate_normal", "sample").
+returns_tuple("Nx.LinAlg.qr", "parts"). returns_tuple("Nx.LinAlg.eigh", "parts").
+returns_tuple("Nx.LinAlg.svd", "parts"). returns_tuple("Nx.LinAlg.lu", "parts").
+returns_tuple("Nx.split", "parts").
+
+result_value(context, site, $Object(context, site, nil)) :- tuple_element(context, site, "{0}", _).
+
+// Such a call's object holds a tensor at each position, and nothing
+// else: a position a rule gives no tensor has no value.
+object_holds(site, selector) :-
+  operation_site(site, operation, _),
+  returns_tuple(operation, _),
+  selector_position(selector, _).
+object_field(context, site, selector, $Tensor(tensor)) :-
+  object_field_demand(context, site, selector),
+  tuple_element(context, site, selector, tensor).
+.plan 1:(2,1)
+
+// A sampler's second element: the key to use next.
+tuple_element(context, site, "{1}", [nil, [[2, nil], "nil", nil]]) :-
+  tuple_element(context, site, "{0}", _),
+  operation_site(site, operation, _),
+  returns_tuple(operation, "sample").
+
+// ══ Random ══════════════════════════════════════════════════════════
+
+// ── Keys ───────────────────────────────────────────────────────────
+
+// The functions of `Nx.Random` that take a key first, which must be a
+// single key, a tensor of shape {2}.
+.decl takes_key(operation: symbol)
+takes_key("Nx.Random.split"). takes_key("Nx.Random.fold_in"). takes_key("Nx.Random.shuffle").
+takes_key("Nx.Random.choice"). takes_key(operation) :- draws_shape(operation).
+
+// A call handed a key of another shape, such as the keys
+// `Nx.Random.split/2` makes before one is taken from them.
+violation(context, site, "key", cat("expected key to have shape {2}, got tensor with shape ", spelled)) :-
+  operation_site(site, operation, _),
+  takes_key(operation),
+  argument_tensor(context, site, 0, [_, axes]),
+  ( axes = nil ; axes = [_, _, [_, _, _]] ; axes = [[size, nil], _, nil], size > 0, size != 2 ),
+  sizes_spelled(axes, spelled).
+spelling_demand(axes) :-
+  operation_site(site, operation, _),
+  takes_key(operation),
+  argument_tensor(_, site, 0, [_, axes]).
+
+// `Nx.Random.fold_in/2` folds each element of its data into the key: a
+// key for each, the data's shape then {2}, with no names.
+operand_slot("Nx.Random.fold_in", 2, 1, 1).
+result_axes(site, [first, second, third], axes) :-
+  site_instance(site, "Nx.Random.fold_in", 2, [first, second, third]),
+  unnamed(first, data),
+  appended(data, [[2, nil], "nil", nil], axes).
+.plan 1:(2,1,3), 2:(3,2,1)
+unnamed_demand(first) :- site_instance(_, "Nx.Random.fold_in", 2, [first, _, _]).
+append_demand(data, [[2, nil], "nil", nil]) :-
+  site_instance(_, "Nx.Random.fold_in", 2, [first, _, _]),
+  unnamed(first, data).
+.plan 1:(2,1)
+
+// ── Samplers ───────────────────────────────────────────────────────
+
+// The samplers that draw the shape their `:shape` option gives.
+.decl draws_shape(operation: symbol)
+draws_shape(operation) :-
+  returns_tuple(operation, "sample"),
+  operation != "Nx.Random.shuffle",
+  operation != "Nx.Random.choice".
+draws_shape(operation) :- random_sampler(operation).
+draws_shape("Nx.Random.multivariate_normal_split").
+
+trailing_options("Nx.Random.uniform", 1). trailing_options("Nx.Random.uniform", 3).
+trailing_options("Nx.Random.normal", 1). trailing_options("Nx.Random.normal", 3).
+trailing_options("Nx.Random.randint", 3). trailing_options("Nx.Random.gumbel", 1).
+trailing_options("Nx.Random.shuffle", 2).
+trailing_options("Nx.Random.multivariate_normal", 3).
+trailing_options("Nx.Random.multivariate_normal_split", 3).
+
+// The shape a sampler draws: its `:shape` option's, {} when not given.
+.decl drawn_shape(site: symbol, axes: Axes)
+drawn_shape(site, axes) :-
+  operation_site(site, operation, _),
+  draws_shape(operation),
+  option(site, "shape", text, start),
+  shape_term(text, start, axes).
+drawn_shape(site, nil) :-
+  operation_site(site, operation, _),
+  draws_shape(operation),
+  option_absent(site, "shape").
+
+axes_needed(axes) :- drawn_shape(_, axes).
+
+// What a sampler draws: its shape, named by `:names`, which name a
+// multivariate normal's sample instead.
+named_by_option(site, base) :-
+  drawn_shape(site, base),
+  operation_site(site, operation, _),
+  ( returns_tuple(operation, "sample"), operation != "Nx.Random.multivariate_normal"
+  ; operation = "Nx.Random.normal_split" ).
+
+// A sampler whose sample is what it draws, whatever else it is handed:
+// every one but those whose sample takes the shapes of the tensors they
+// are handed, which fill the slots their shape rules read.
+tuple_element(context, site, "{0}", [nil, sample]) :-
+  built(site, [base, nil, nil], sample),
+  drawn_shape(site, base),
+  operation_site(site, operation, arity),
+  returns_tuple(operation, "sample"),
+  !slot_used(operation, arity, 1),
+  site_active(context, site).
+.plan 1:(5,1,2,3,4)
+
+// ── A normal sampler's mean and standard deviation ─────────────────
+//
+// `Nx.Random.normal/4` and `normal_split/4` scale their draw by the
+// standard deviation and shift it by the mean, element by element
+// (`deviation * draw + mean`): the sample has the shape all three
+// broadcast to.
+
+.decl normal_sampler(operation: symbol)
+normal_sampler("Nx.Random.normal"). normal_sampler("Nx.Random.normal_split").
+operand_slot(operation, arity, 1, 1) :- normal_sampler(operation), ( arity = 3 ; arity = 4 ).
+operand_slot(operation, arity, 2, 2) :- normal_sampler(operation), ( arity = 3 ; arity = 4 ).
+
+// The draw a normal sampler scales.
+.decl normal_draw(site: symbol, operands: Operands, draw: Axes)
+normal_draw(site, [mean_axes, deviation, third], draw) :-
+  site_instance(site, operation, _, [mean_axes, deviation, third]),
+  normal_sampler(operation),
+  drawn_shape(site, base),
+  built(site, [base, nil, nil], draw).
+.plan 1:(4,3,1,2)
+broadcast_demand(deviation, draw) :- normal_draw(_, [_, deviation, _], draw).
+broadcast_demand(scaled, mean_axes) :-
+  normal_draw(_, [mean_axes, deviation, _], draw),
+  broadcast(deviation, draw, scaled).
+.plan 1:(2,1)
+axes_needed(draw) :- normal_draw(_, _, draw).
+spelling_demand(draw) :- normal_draw(_, _, draw).
+spelling_demand(scaled) :-
+  normal_draw(_, [_, deviation, _], draw),
+  broadcast(deviation, draw, scaled).
+
+// The sample: the draw scaled, then shifted.
+.decl normal_sample(site: symbol, operands: Operands, sample: Axes)
+normal_sample(site, [mean_axes, deviation, third], sample) :-
+  normal_draw(site, [mean_axes, deviation, third], draw),
+  broadcast(deviation, draw, scaled),
+  broadcast(scaled, mean_axes, sample).
+.plan 1:(2,1,3), 2:(3,2,1)
+axes_needed(sample) :- normal_sample(_, _, sample).
+spelling_demand(sample) :- normal_sample(_, _, sample).
+
+result_axes(site, operands, sample) :-
+  normal_sample(site, operands, sample),
+  operation_site(site, "Nx.Random.normal_split", _).
+tuple_element(context, site, "{0}", [vectorized, sample]) :-
+  instance(context, site, operands, vectorized),
+  normal_sample(site, operands, sample),
+  operation_site(site, "Nx.Random.normal", _).
+.plan 1:(2,1,3)
+
+// A standard deviation that does not broadcast with the draw, or a mean
+// that does not broadcast with the draw scaled, as Nx names the two.
+violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", deviation_spelled, " to ", draw_spelled)) :-
+  normal_draw(site, [mean_axes, deviation, third], draw),
+  instance(context, site, [mean_axes, deviation, third], _),
+  broadcast_axis(deviation, draw, _, deviation_size, _, draw_size, _),
+  broadcast_conflict(deviation_size, draw_size),
+  sizes_spelled(deviation, deviation_spelled),
+  sizes_spelled(draw, draw_spelled).
+violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", scaled_spelled, " to ", mean_spelled)) :-
+  normal_draw(site, [mean_axes, deviation, third], draw),
+  instance(context, site, [mean_axes, deviation, third], _),
+  broadcast(deviation, draw, scaled),
+  broadcast_axis(scaled, mean_axes, _, scaled_size, _, mean_size, _),
+  broadcast_conflict(scaled_size, mean_size),
+  sizes_spelled(scaled, scaled_spelled),
+  sizes_spelled(mean_axes, mean_spelled).
+
+// A sample of more elements than the draw: a mean or standard deviation
+// that adds axes the draw repeats along, so the elements along them share
+// one draw. `Nx.Random.normal(key, mean, deviation)` with a tensor mean
+// and no `:shape` draws a single value for all of them.
+call_error(context, site, "shared_draw", cat("draws ", draw_spelled, " and returns ", sample_spelled), "") :-
+  normal_sample(site, operands, sample),
+  instance(context, site, operands, _),
+  normal_draw(site, operands, draw),
+  axes_product(sample, sample_count),
+  axes_product(draw, draw_count),
+  sample_count != draw_count,
+  size_determined(sample_count),
+  size_determined(draw_count),
+  sizes_spelled(draw, draw_spelled),
+  sizes_spelled(sample, sample_spelled).
+
+// ── Bounds ─────────────────────────────────────────────────────────
+//
+// `uniform` broadcasts its bounds against a draw of its shape and
+// reshapes the result to that shape; `randint` broadcasts each bound to
+// its shape. Their sample has the shape, where the bounds fit it.
+
+// A sampler of bounds, and whether it broadcasts them against its draw.
+.decl bounded_sampler(operation: symbol, against_draw: number)
+bounded_sampler("Nx.Random.uniform", 1). bounded_sampler("Nx.Random.uniform_split", 1).
+bounded_sampler("Nx.Random.randint", 0). bounded_sampler("Nx.Random.randint_split", 0).
+
+// A bound a sampler is handed, and the shape it draws.
+.decl sampler_bound(context: Context, site: symbol, against_draw: number, bound: Axes, shape: Axes)
+sampler_bound(context, site, against_draw, bound, shape) :-
+  argument_tensor(context, site, position, [_, bound]),
+  position >= 1,
+  position <= 2,
+  operation_site(site, operation, arity),
+  arity >= 3,
+  bounded_sampler(operation, against_draw),
+  drawn_shape(site, shape).
+broadcast_demand(shape, bound) :- sampler_bound(_, _, _, bound, shape).
+axes_needed(bound) :- sampler_bound(_, _, _, bound, _).
+spelling_demand(bound) :- sampler_bound(_, _, _, bound, _).
+spelling_demand(shape) :- sampler_bound(_, _, _, _, shape).
+spelling_demand(grown) :- sampler_bound(_, _, 1, bound, shape), broadcast(shape, bound, grown).
+
+// A bound that does not fit the shape, and what Nx raises: `uniform`'s
+// bound that does not broadcast with the draw, or broadcasts it to more
+// elements; `randint`'s bound that does not broadcast to the shape.
+violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", shape_spelled, " to ", bound_spelled)) :-
+  sampler_bound(context, site, 1, bound, shape),
+  broadcast_axis(shape, bound, _, shape_size, _, bound_size, _),
+  broadcast_conflict(shape_size, bound_size),
+  sizes_spelled(shape, shape_spelled),
+  sizes_spelled(bound, bound_spelled).
+violation(context, site, "sampler_parameters", cat("cannot reshape, current shape ", grown_spelled, " is not compatible with new shape ", shape_spelled)) :-
+  sampler_bound(context, site, 1, bound, shape),
+  broadcast(shape, bound, grown),
+  broadcast_axis(shape, bound, _, [1, nil], _, [bound_size, nil], _),
+  bound_size > 1,
+  sizes_spelled(grown, grown_spelled),
+  sizes_spelled(shape, shape_spelled).
+violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", bound_spelled, " to ", shape_spelled)) :-
+  sampler_bound(context, site, 0, bound, shape),
+  axes_rank(bound, bound_rank),
+  axes_rank(shape, shape_rank),
+  broadcast_axis(shape, bound, _, [shape_size, shape_factors], _, [bound_size, nil], _),
+  ( bound_rank > shape_rank
+  ; bound_size > 1, shape_factors = nil, shape_size > 0, shape_size != bound_size ),
+  sizes_spelled(bound, bound_spelled),
+  sizes_spelled(shape, shape_spelled).
+
+// ── Shuffling and choosing ─────────────────────────────────────────
+
+// `Nx.Random.shuffle/3` permutes the tensor along `:axis`: the sample
+// has its shape and names.
+operand_slot("Nx.Random.shuffle", arity, 1, 1) :- arity = 2 ; arity = 3.
+axis_option_demand(site, "axis", 0, first) :- site_instance(site, "Nx.Random.shuffle", _, [first, _, _]).
+
+tuple_element(context, site, "{0}", [vectorized, first]) :-
+  instance(context, site, [first, _, _], vectorized),
+  operation_site(site, "Nx.Random.shuffle", _),
+  axis_option(site, "axis", first, _).
+.plan 1:(3,1,2)
+
+// `Nx.Random.choice/4` takes `:samples` elements along `:axis`, or from
+// the tensor flattened where it has none, given the probability of each
+// (`p`) or not. What it returns has no names.
+operand_slot("Nx.Random.choice", arity, 1, 1) :- arity = range(2, 5).
+operand_slot("Nx.Random.choice", 4, 2, 2).
+trailing_options("Nx.Random.choice", 2).
+options_at("Nx.Random.choice", 4, 3).
+option_default(site, "samples", 1) :- operation_site(site, "Nx.Random.choice", _).
+option_key("samples"). option_key("replace").
+
+axis_option_demand(site, "axis", 0, first) :-
+  site_instance(site, "Nx.Random.choice", _, [first, _, _]),
+  option(site, "axis", text, start),
+  !term_atom(text, start, "nil").
+
+// The elements `choice` takes from, along its axis (-1 where it
+// flattens the tensor), and how many.
+.decl choice_population(site: symbol, operands: Operands, axis: number, population: Size)
+choice_population(site, [first, second, third], axis, size) :-
+  site_instance(site, "Nx.Random.choice", _, [first, second, third]),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, size, _).
+.plan 1:(2,1,3), 2:(3,1,2)
+choice_population(site, [first, second, third], -1, product) :-
+  site_instance(site, "Nx.Random.choice", _, [first, second, third]),
+  option_absent(site, "axis"),
+  axes_product(first, product).
+.plan 1:(3,1,2)
+
+tuple_element(context, site, "{0}", [vectorized, [[samples, nil], "nil", nil]]) :-
+  instance(context, site, operands, vectorized),
+  choice_population(site, operands, -1, _),
+  option_number(site, "samples", 1, samples),
+  samples >= 1.
+.plan 1:(2,1,3)
+tuple_element(context, site, "{0}", [vectorized, sample]) :-
+  instance(context, site, [first, second, third], vectorized),
+  unnamed(first, operand),
+  choice_population(site, [first, second, third], axis, _),
+  option_number(site, "samples", 1, samples),
+  replaced(operand, axis, [samples, nil], sample).
+.plan 1:(2,1,3,4,5), 2:(3,1,2,4,5), 3:(5,2,3,1,4)
+unnamed_demand(first) :- site_instance(_, "Nx.Random.choice", _, [first, _, _]).
+replace_demand(operand, axis, [samples, nil]) :-
+  choice_population(site, [first, _, _], axis, _),
+  axis >= 0,
+  unnamed(first, operand),
+  option_number(site, "samples", 1, samples),
+  samples >= 1.
+.plan 1:(2,1,3)
+
+// A `choice` call Nx rejects, and what it raises.
+violation(context, site, "choice", "tensor must have rank 1 or greater") :-
+  instance(context, site, [nil, _, _], _),
+  operation_site(site, "Nx.Random.choice", _),
+  option_absent(site, "axis").
+violation(context, site, "choice", cat("must take at least one sample, got samples=", to_string(samples))) :-
+  instance(context, site, _, _),
+  operation_site(site, "Nx.Random.choice", _),
+  option_integer(site, "samples", samples),
+  samples < 1.
+violation(context, site, "choice", "cannot take more samples than the input size when replace: false") :-
+  choice_population(site, operands, _, [population, nil]),
+  instance(context, site, operands, _),
+  option_atom(site, "replace", "false"),
+  option_number(site, "samples", 1, samples),
+  population > 0,
+  samples > population.
+violation(context, site, "choice", cat("probability tensor must have rank 1, got: ", to_string(rank))) :-
+  instance(context, site, [_, probabilities, _], _),
+  operation_site(site, "Nx.Random.choice", 4),
+  axes_rank(probabilities, rank),
+  rank != 1.
+violation(context, site, "choice", cat("probability tensor of size ", to_string(given), " is expected to have size ", to_string(population))) :-
+  choice_population(site, [first, [[given, nil], name, nil], third], _, [population, nil]),
+  instance(context, site, [first, [[given, nil], name, nil], third], _),
+  operation_site(site, "Nx.Random.choice", 4),
+  given > 0,
+  population > 0,
+  given != population.
+
+// ── Multivariate normal ────────────────────────────────────────────
+
+// `Nx.Random.multivariate_normal/4` draws vectors of the mean's size, one
+// for each element of `:shape`: its sample is `:shape` then that size.
+// `:names` names the whole sample; the rules give it a shape where it has
+// none.
+.decl multivariate_sampler(operation: symbol)
+multivariate_sampler("Nx.Random.multivariate_normal").
+multivariate_sampler("Nx.Random.multivariate_normal_split").
+operand_slot(operation, arity, 1, 1) :- multivariate_sampler(operation), ( arity = 3 ; arity = 4 ).
+operand_slot(operation, arity, 2, 2) :- multivariate_sampler(operation), ( arity = 3 ; arity = 4 ).
+
+.decl multivariate_sample(site: symbol, operands: Operands, sample: Axes)
+multivariate_sample(site, [[size, name, nil], covariance, third], sample) :-
+  site_instance(site, operation, _, [[size, name, nil], covariance, third]),
+  multivariate_sampler(operation),
+  covariance = [_, _, [_, _, nil]],
+  option_absent(site, "names"),
+  drawn_shape(site, shape),
+  appended(shape, [size, "nil", nil], sample).
+.plan 1:(5,1,2,3,4)
+append_demand(shape, [size, "nil", nil]) :-
+  site_instance(site, operation, _, [[size, _, nil], [_, _, [_, _, nil]], _]),
+  multivariate_sampler(operation),
+  drawn_shape(site, shape).
+
+result_axes(site, operands, sample) :-
+  multivariate_sample(site, operands, sample),
+  operation_site(site, "Nx.Random.multivariate_normal_split", _).
+tuple_element(context, site, "{0}", [vectorized, sample]) :-
+  instance(context, site, operands, vectorized),
+  multivariate_sample(site, operands, sample),
+  operation_site(site, "Nx.Random.multivariate_normal", _).
+.plan 1:(2,1,3)
+
+// A mean or covariance Nx rejects, and what it raises.
+violation(context, site, "multivariate_normal", cat("expected mean to have rank 1, got tensor with rank ", to_string(rank))) :-
+  site_instance(site, operation, _, [mean_axes, covariance, third]),
+  multivariate_sampler(operation),
+  instance(context, site, [mean_axes, covariance, third], _),
+  axes_rank(mean_axes, rank),
+  rank != 1.
+violation(context, site, "multivariate_normal", cat("expected covariance to have rank 2, got tensor with rank ", to_string(rank))) :-
+  site_instance(site, operation, _, [[size, name, nil], covariance, third]),
+  multivariate_sampler(operation),
+  instance(context, site, [[size, name, nil], covariance, third], _),
+  axes_rank(covariance, rank),
+  rank != 2.
+violation(context, site, "multivariate_normal", detail) :-
+  site_instance(site, operation, _, [[size, name, nil], covariance, third]),
+  multivariate_sampler(operation),
+  instance(context, site, [[size, name, nil], covariance, third], _),
+  covariance = [[rows, nil], _, [[columns, nil], _, nil]],
+  rows > 0,
+  columns > 0,
+  sizes_spelled(covariance, spelled),
+  ( rows != columns, detail = cat("expected covariance to be a square matrix, got tensor with shape ", spelled)
+  ; rows = columns, size = [dimension, nil], dimension > 0, dimension != rows,
+    detail = cat("expected mean and covariance to have the same dimensions, got ", to_string(dimension), " and ", to_string(rows)) ).
+
+// ══ Linear algebra ══════════════════════════════════════════════════
+
+// The decompositions that return a tuple. Each part is the operand's
+// batch axes, then axes of its own, none named.
+.decl decomposition(operation: symbol)
+decomposition(operation) :- returns_tuple(operation, "parts"), operation != "Nx.split".
+
+trailing_options("Nx.LinAlg.qr", 1). trailing_options("Nx.LinAlg.svd", 1).
+trailing_options("Nx.LinAlg.eigh", 1).
+option_key("mode"). option_key("full_matrices?").
+
+// A decomposition's operand: its batch axes with no names, and the sizes
+// of its rows and columns.
+.decl decomposed(site: symbol, operands: Operands, batch: Axes, rows: Size, columns: Size)
+decomposed(site, [first, second, third], batch, rows, columns) :-
+  site_instance(site, operation, _, [first, second, third]),
+  decomposition(operation),
+  matrix_split(first, batch, rows, columns).
+.plan 1:(3,1,2)
+
+// A matrix or a batch of them: the axes before its last two, with no
+// names, and the sizes of the last two.
+.decl matrix_demand(axes: Axes)
+matrix_demand(first) :- site_instance(_, operation, _, [first, _, _]), decomposition(operation).
+matrix_demand(rest) :- matrix_demand([_, _, rest]), rest = [_, _, [_, _, _]].
+
+.decl matrix_split(axes: Axes, batch: Axes, rows: Size, columns: Size)
+matrix_split([rows, row_name, [columns, column_name, nil]], nil, rows, columns) :-
+  matrix_demand([rows, row_name, [columns, column_name, nil]]).
+matrix_split([size, name, rest], [size, "nil", batch], rows, columns) :-
+  matrix_demand([size, name, rest]),
+  matrix_split(rest, batch, rows, columns).
+.plan 1:(2,1)
+
+// The form of a decomposition's result: `Nx.LinAlg.qr/2`'s `:mode`, and
+// `Nx.LinAlg.svd/2`'s `:full_matrices?`, true unless given.
+.decl decomposition_form(site: symbol, form: symbol)
+decomposition_form(site, operation) :-
+  operation_site(site, operation, _),
+  ( operation = "Nx.LinAlg.eigh" ; operation = "Nx.LinAlg.lu" ).
+decomposition_form(site, cat("Nx.LinAlg.qr ", mode)) :-
+  operation_site(site, "Nx.LinAlg.qr", _),
+  option_atom(site, "mode", mode).
+decomposition_form(site, "Nx.LinAlg.qr :reduced") :-
+  operation_site(site, "Nx.LinAlg.qr", _),
+  option_absent(site, "mode").
+decomposition_form(site, cat("Nx.LinAlg.svd ", full)) :-
+  operation_site(site, "Nx.LinAlg.svd", _),
+  option_atom(site, "full_matrices?", full).
+decomposition_form(site, "Nx.LinAlg.svd true") :-
+  operation_site(site, "Nx.LinAlg.svd", _),
+  option_absent(site, "full_matrices?").
+
+// The axes of each part after the batch axes, by form: the sizes they
+// take, the operand's rows or columns or the smaller of the two, and
+// none for a vector's second.
+.decl part_layout(form: symbol, selector: symbol, leading: symbol, following: symbol)
+part_layout("Nx.LinAlg.eigh", "{0}", "rows", ""). part_layout("Nx.LinAlg.eigh", "{1}", "rows", "rows").
+part_layout("Nx.LinAlg.lu", "{0}", "rows", "columns"). part_layout("Nx.LinAlg.lu", "{1}", "rows", "columns").
+part_layout("Nx.LinAlg.lu", "{2}", "rows", "columns").
+part_layout("Nx.LinAlg.qr :reduced", "{0}", "rows", "smaller").
+part_layout("Nx.LinAlg.qr :reduced", "{1}", "smaller", "columns").
+part_layout("Nx.LinAlg.qr :complete", "{0}", "rows", "rows").
+part_layout("Nx.LinAlg.qr :complete", "{1}", "rows", "columns").
+part_layout("Nx.LinAlg.svd true", "{0}", "rows", "rows"). part_layout("Nx.LinAlg.svd true", "{1}", "smaller", "").
+part_layout("Nx.LinAlg.svd true", "{2}", "columns", "columns").
+part_layout("Nx.LinAlg.svd false", "{0}", "rows", "smaller"). part_layout("Nx.LinAlg.svd false", "{1}", "smaller", "").
+part_layout("Nx.LinAlg.svd false", "{2}", "smaller", "columns").
+
+// The size a layout names, of a decomposition's operand: the smaller of
+// its rows and columns is not known where it is not clear.
+.decl matrix_side(site: symbol, operands: Operands, side: symbol, size: Size)
+matrix_side(site, operands, "rows", rows) :- decomposed(site, operands, _, rows, _).
+matrix_side(site, operands, "columns", columns) :- decomposed(site, operands, _, _, columns).
+matrix_side(site, operands, "smaller", rows) :- decomposed(site, operands, _, rows, rows).
+matrix_side(site, operands, "smaller", [min(rows, columns), factors]) :-
+  decomposed(site, operands, _, [rows, factors], [columns, factors]),
+  rows > 0,
+  columns > 0,
+  rows != columns.
+matrix_side(site, operands, "smaller", [0, nil]) :-
+  decomposed(site, operands, _, [rows, _], [columns, _]),
+  min(rows, columns) = 0.
+matrix_side(site, operands, "smaller", [0, nil]) :-
+  decomposed(site, operands, _, [_, row_factors], [_, column_factors]),
+  row_factors != column_factors.
+
+// The axes a part of a decomposition's result has after the batch
+// axes: a vector's, or a matrix's.
+.decl decomposition_part(site: symbol, operands: Operands, selector: symbol, trailing: Axes)
+decomposition_part(site, operands, selector, [size, "nil", nil]) :-
+  matrix_side(site, operands, leading, size),
+  decomposition_form(site, form),
+  part_layout(form, selector, leading, "").
+decomposition_part(site, operands, selector, [leading_size, "nil", [following_size, "nil", nil]]) :-
+  matrix_side(site, operands, leading, leading_size),
+  decomposition_form(site, form),
+  part_layout(form, selector, leading, following),
+  matrix_side(site, operands, following, following_size).
+.plan 1:(4,2,3,1)
+append_demand(batch, trailing) :-
+  decomposition_part(site, operands, _, trailing),
+  decomposed(site, operands, batch, _, _).
+.plan 1:(2,1)
+
+tuple_element(context, site, selector, [vectorized, axes]) :-
+  instance(context, site, operands, vectorized),
+  decomposition_part(site, operands, selector, trailing),
+  decomposed(site, operands, batch, _, _),
+  appended(batch, trailing, axes).
+.plan 1:(2,1,3,4), 2:(3,1,2,4), 3:(4,3,2,1)
+
+// `Nx.LinAlg.cholesky/1` keeps its operand's shape. A compiled `defn`
+// keeps the operand's names and the binary backend drops them, so the
+// result has a shape where the operand has none.
+result_axes(site, [first, second, third], first) :-
+  site_instance(site, "Nx.LinAlg.cholesky", 1, [first, second, third]),
+  square(first),
+  unnamed(first, first).
+.plan 1:(2,1,3), 2:(3,1,2)
+unnamed_demand(first) :- site_instance(_, "Nx.LinAlg.cholesky", 1, [first, _, _]).
+
+// ── Norms ──────────────────────────────────────────────────────────
+//
+// `Nx.LinAlg.norm/2` of a matrix for the orders 1 and -1, `:inf` and
+// `:neg_inf`, and -2 first reduces the matrix to a vector (its column
+// sums, row sums or singular values), then reduces that vector over
+// `:axes`, keeping it at size 1 with `keep_axes: true`. `:nuclear` sums
+// the singular values into a scalar whatever `:axes` and `:keep_axes` say.
+
+// The orders that reduce a matrix to its column sums (axis 1 kept) or
+// row sums (axis 0 kept), as the option spells them.
+.decl sums_matrix(order: symbol, kept: number)
+sums_matrix("1", 1). sums_matrix("-1", 1). sums_matrix(":inf", 0). sums_matrix(":neg_inf", 0).
+
+.decl norm_vector(site: symbol, operands: Operands, vector: Axes)
+norm_vector(site, [first, second, third], [size, name, nil]) :-
+  site_instance(site, "Nx.LinAlg.norm", _, [first, second, third]),
+  first = [_, _, [_, _, nil]],
+  option(site, "ord", text, start),
+  term_spelling(text, start, order),
+  sums_matrix(order, kept),
+  axes_axis(first, kept, size, name).
+.plan 1:(5,1,2,3,4)
+norm_vector(site, [first, second, third], [[0, nil], "nil", nil]) :-
+  site_instance(site, "Nx.LinAlg.norm", _, [first, second, third]),
+  first = [_, _, [_, _, nil]],
+  option_integer(site, "ord", -2).
+term_axes_demand(site, vector, text, start) :-
+  norm_vector(site, _, vector),
+  option(site, "axes", text, start).
+
+// The vector reduced whole: no `:axes`, or axes that name its only axis.
+.decl norm_vector_reduced(site: symbol, operands: Operands, name: symbol)
+norm_vector_reduced(site, operands, name) :-
+  norm_vector(site, operands, [_, name, nil]),
+  option_absent(site, "axes").
+norm_vector_reduced(site, operands, name) :-
+  norm_vector(site, operands, [size, name, nil]),
+  option(site, "axes", text, start),
+  term_axes_mask([size, name, nil], text, start, 1).
+.plan 1:(3,1,2)
+
+result_axes(site, operands, reduced) :-
+  norm_vector_reduced(site, operands, name),
+  option_flag(site, "keep_axes", keep),
+  ( keep = 1, reduced = [[1, nil], name, nil] ; keep = 0, reduced = nil ).
+result_axes(site, [first, second, third], nil) :-
+  site_instance(site, "Nx.LinAlg.norm", _, [first, second, third]),
+  first = [_, _, [_, _, nil]],
+  option_atom(site, "ord", ":nuclear").
+
+// A norm Nx rejects for its order, or for axes its vector lacks.
+violation(context, site, "norm", detail) :-
+  instance(context, site, [[_, _, nil], _, _], _),
+  operation_site(site, "Nx.LinAlg.norm", _),
+  option_atom(site, "ord", order),
+  ( order = ":frobenius", detail = "expected a 2-D tensor for ord: :frobenius, got a 1-D tensor"
+  ; order = ":nuclear", detail = "nuclear norm not supported for rank != 2" ).
+violation(context, site, "norm", cat("invalid :ord for 2-D tensor, got: ", to_string(order))) :-
+  instance(context, site, [[_, _, [_, _, nil]], _, _], _),
+  operation_site(site, "Nx.LinAlg.norm", _),
+  option_integer(site, "ord", order),
+  order != 1, order != -1, order != 2, order != -2.
+violation(context, site, "norm", cat("unknown ord ", order)) :-
+  instance(context, site, [first, _, _], _),
+  operation_site(site, "Nx.LinAlg.norm", _),
+  axes_rank(first, rank),
+  rank >= 1,
+  rank <= 2,
+  option_atom(site, "ord", order),
+  order != "nil", order != ":frobenius", order != ":nuclear", order != ":inf", order != ":neg_inf".
+violation(context, site, "axis", cat("given axis (", to_string(value), ") invalid for shape with rank 1")) :-
+  norm_vector(site, operands, vector),
+  instance(context, site, operands, _),
+  option(site, "axes", text, start),
+  term_element_integer(text, start, _, value),
+  !integer_axis_resolves(vector, value).
+
+// A matrix norm handed `:axes`, which Nx applies to the vector the
+// matrix is reduced to, or ignores: it returns the norm of the whole
+// matrix, not one for each row or column.
+call_error(context, site, "norm_axes", order, "") :-
+  norm_vector_reduced(site, operands, _),
+  instance(context, site, operands, _),
+  option_given(site, "axes"),
+  option(site, "ord", text, start),
+  term_spelling(text, start, order).
+call_error(context, site, "norm_axes", ":nuclear", "") :-
+  instance(context, site, [[_, _, [_, _, nil]], _, _], _),
+  operation_site(site, "Nx.LinAlg.norm", _),
+  option_atom(site, "ord", ":nuclear"),
+  option_given(site, "axes").
+
+// ══ Splitting ═══════════════════════════════════════════════════════
+//
+// `Nx.split/3` cuts `:axis` in two at a point: an integer, counted from
+// the end when negative, or a float, the fraction of the axis before the
+// cut rounded up (`ceil(split * size)`). Each half keeps the names. Nx
+// computes that product in double precision, which can round a product
+// that is a whole number up or down, so a float split's halves have
+// sizes not known.
+
+// The axis a split cuts, and its size.
+.decl split_axis(site: symbol, operands: Operands, axis: number, size: Size)
+split_axis(site, [first, second, third], axis, size) :-
+  site_instance(site, "Nx.split", _, [first, second, third]),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, size, _).
+.plan 1:(2,1,3), 2:(3,1,2)
+
+// The size of each half, by the selector that reads it: of an integer
+// split inside an axis of a known size, and not known otherwise.
+.decl split_half(site: symbol, operands: Operands, axis: number, selector: symbol, size: Size)
+split_half(site, operands, axis, selector, [half, nil]) :-
+  split_axis(site, operands, axis, [size, nil]),
+  size > 0,
+  argument_literal(site, 1, text),
+  term_integer(text, 0, split),
+  split != 0,
+  split > 0 - size,
+  split < size,
+  before = (split + size) % max(size, 1),
+  ( selector = "{0}", half = before ; selector = "{1}", half = size - before ).
+split_half(site, operands, axis, selector, [0, nil]) :-
+  split_axis(site, operands, axis, size),
+  argument_literal(site, 1, text),
+  term_scalar(text, 0),
+  ( term_float(text, 0) ; size = [0, nil] ; size = [_, [_, _]] ),
+  ( selector = "{0}" ; selector = "{1}" ).
+replace_demand(first, axis, size) :- split_half(_, [first, _, _], axis, _, size).
+
+tuple_element(context, site, selector, [vectorized, half]) :-
+  instance(context, site, [first, second, third], vectorized),
+  split_half(site, [first, second, third], axis, selector, size),
+  replaced(first, axis, size, half).
+.plan 1:(2,1,3), 2:(3,2,1)
+
+// A float split point not above 0 or not below 1, which Nx rejects
+// whatever the axis.
+violation(context, site, "split", "split must be a float such that 0 < split and ceil(split * axis_size) < 1") :-
+  split_axis(site, operands, _, _),
+  instance(context, site, operands, _),
+  argument_literal(site, 1, text),
+  term_float(text, 0),
+  match("-.*|0\\.0+(e.*)?|[1-9][0-9]*\\.[0-9]+(e\\+?[0-9]+)?", text).
+
+// ══ Replacing an axis ═══════════════════════════════════════════════
+
+// The axes with the size at one axis replaced, its name kept.
+.decl replace_demand(axes: Axes, axis: number, size: Size)
+replace_demand(rest, axis - 1, size) :- replace_demand([_, _, rest], axis, size), axis > 0.
+
+.decl replaced(axes: Axes, axis: number, size: Size, result: Axes)
+replaced([held, name, rest], 0, size, [size, name, rest]) :- replace_demand([held, name, rest], 0, size).
+replaced([held, name, rest], axis, size, [held, name, result]) :-
+  replace_demand([held, name, rest], axis, size),
+  axis > 0,
+  replaced(rest, axis - 1, size, result).
+.plan 1:(2,1)

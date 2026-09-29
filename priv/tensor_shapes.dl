@@ -408,7 +408,7 @@ site_active(context, site) :-
 may_equal(value, literal) :- value = $Opaque(_), strlen(literal) >= 0.
 may_equal(value, literal) :- value = $Term(text, start), term_spelling(text, start, literal).
 may_equal(value, literal) :- value = $Integer([known, nil]), known > 0, to_string(known) = literal.
-may_equal(value, literal) :- value = $Integer([coefficient, [_, _]]), coefficient > 0, match("[0-9]+", literal).
+may_equal(value, literal) :- value = $Integer([coefficient, [_factor, _factors]]), coefficient > 0, match("[0-9]+", literal).
 may_equal(value, literal) :- value = $Integer([0, nil]), match("[0-9]+", literal).
 may_equal(value, literal) :- value = $Module(literal).
 may_equal(value, literal) :- value = $Object(_, _, _), match("[\\[{%].*", literal).
@@ -417,7 +417,7 @@ may_equal(value, literal) :- value = $Object(_, _, _), match("[\\[{%].*", litera
 may_differ(value, literal) :- value = $Opaque(_), strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Term(text, start), term_spelling(text, start, spelled), spelled != literal.
 may_differ(value, literal) :- value = $Integer([known, nil]), known > 0, to_string(known) != literal.
-may_differ(value, literal) :- value = $Integer([coefficient, [_, _]]), coefficient > 0, strlen(literal) >= 0.
+may_differ(value, literal) :- value = $Integer([coefficient, [_factor, _factors]]), coefficient > 0, strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Integer([0, nil]), strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Module(module), module != literal.
 may_differ(value, literal) :- value = $Object(_, _, _), strlen(literal) >= 0.
@@ -814,18 +814,26 @@ call_argument(context, site, callee, position, value) :-
   remote_defn(site, caller, callee),
   remote_literal_argument(site, caller, position, text, start),
   term_value(text, start, value).
-call_argument(context, site, callee, position, value) :-
+call_argument(context, site, callee, captured_from + position, value) :-
   calls_closure(context, site, callee, $Object(object_context, object, mapping)),
   flow_field(_, object, selector, _, _),
   selector_position(selector, position),
-  field_value($Object(object_context, object, mapping), selector, value).
-.plan 1:(4,2,1,3)
-call_argument(context, site, callee, captured + position, value) :-
-  calls_closure(context, site, callee, $Object(_, object, _)),
+  field_value($Object(object_context, object, mapping), selector, value),
+  closure_captures_from(object, callee, captured_from).
+.plan 1:(4,2,1,3,5)
+call_argument(context, site, callee, position, value) :-
+  calls_closure(context, site, callee, $Object(_, _, _)),
   flow_dynamic(site, _, _),
-  flow_object(_, object, "closure", captured),
   argument_value(context, site, position, value).
-.plan 1:(4,1,3,2)
+.plan 1:(3,1,2)
+
+// The parameter a closure's first captured value is: its code takes the
+// arguments it is called with first, then the values it captured.
+.decl closure_captures_from(object: symbol, callee: symbol, position: number)
+closure_captures_from(object, callee, arity - captured) :-
+  flow_closure(object, callee),
+  flow_object(_, object, "closure", captured),
+  function_def(callee, _, _, arity, _).
 field_demand($Object(object_context, object, mapping), selector) :-
   calls_closure(_, _, _, $Object(object_context, object, mapping)),
   flow_field(_, object, selector, _, _),
@@ -1319,7 +1327,20 @@ looked_up(context, site, $Opaque("")) :-
   argument_value(context, site, 1, key),
   remote_call(site, _, module, name, arity),
   looks_up(module, name, arity),
-  ( key = $Opaque(_) ; key = $Integer(_) ; key = $Module(_) ).
+  ( key = $Opaque(_) ; key = $Integer(_) ; key = $Module(_) ),
+  argument_value(context, site, 0, term),
+  holds_keys(term).
+.plan 1:(4,2,3,1,5), 2:(5,4,2,3,1)
+
+// A term a lookup can find a key in: a keyword list, a map, or a value not
+// known. A tensor of known axes is not one: `tensor[index]` finds a slice
+// of it.
+.decl holds_keys(term: Value)
+holds_keys(term) :-
+  argument_value(_, site, 0, term),
+  remote_call(site, _, module, name, arity),
+  looks_up(module, name, arity),
+  ( term = $Opaque(_) ; term = $Object(_, _, _) ; term = $Term(_, _) ).
 
 // The cells of a keyword list the code builds, from the one looked in.
 .decl keyword_cell(start: Value, cell: Value)
@@ -1833,11 +1854,11 @@ size_known(size, value) :- size = [value, nil], value > 0.
 
 // A size the code names with variables.
 .decl size_symbolic(size: Size) inline
-size_symbolic(size) :- size = [coefficient, [_, _]], coefficient > 0.
+size_symbolic(size) :- size = [coefficient, [_factor, _factors]], coefficient > 0.
 
 // Known, or named by variables: a size the code determines.
 .decl size_determined(size: Size) inline
-size_determined(size) :- size = [coefficient, _], coefficient > 0.
+size_determined(size) :- size = [coefficient, _factors], coefficient > 0.
 
 // Two known sizes that differ: what Nx rejects where sizes must agree.
 .decl sizes_conflict(left: Size, right: Size) inline
@@ -1852,11 +1873,15 @@ broadcast_conflict(left, right) :-
   one != 1,
   other != 1.
 
+// The wildcards inside records in the inline relations' clauses are
+// named: Soufflé 2.5's inliner drops rows when an inlined clause and the
+// rule it is inlined into both have `_` inside a record.
+
 // Two sizes that may agree: equal, or not both known.
 .decl sizes_compatible(left: Size, right: Size) inline
 sizes_compatible(left, right) :- left = right.
-sizes_compatible(left, right) :- left = [0, nil], right = [_, _].
-sizes_compatible(left, right) :- left = [_, _], right = [0, nil].
+sizes_compatible(left, right) :- left = [0, nil], right = [_right_coefficient, _right_factors].
+sizes_compatible(left, right) :- left = [_left_coefficient, _left_factors], right = [0, nil].
 sizes_compatible(left, right) :- size_symbolic(left), size_determined(right).
 sizes_compatible(left, right) :- size_determined(left), size_symbolic(right).
 
@@ -1898,7 +1923,7 @@ broadcast_size(left, right, left) :-
 
 // A size that broadcasts into another: 1, or one that may agree with it.
 .decl size_fits(size: Size, target: Size) inline
-size_fits(size, target) :- size = [1, nil], target = [_, _].
+size_fits(size, target) :- size = [1, nil], target = [_target_coefficient, _target_factors].
 size_fits(size, target) :- sizes_compatible(size, target).
 
 // A size that may hold `length` elements: at least that many, or not
@@ -1911,8 +1936,8 @@ size_holds(size, length) :- size_symbolic(size), length >= 0.
 // A size that may be no larger than another.
 .decl size_within(inner: Size, outer: Size) inline
 size_within(inner, outer) :- size_known(inner, one), size_known(outer, other), one <= other.
-size_within(inner, outer) :- inner = [0, nil], outer = [_, _].
-size_within(inner, outer) :- inner = [_, _], outer = [0, nil].
+size_within(inner, outer) :- inner = [0, nil], outer = [_outer_coefficient, _outer_factors].
+size_within(inner, outer) :- inner = [_inner_coefficient, _inner_factors], outer = [0, nil].
 size_within(inner, outer) :- size_symbolic(inner), size_determined(outer).
 size_within(inner, outer) :- size_determined(inner), size_symbolic(outer).
 
@@ -2236,7 +2261,8 @@ shape_element($Object(object_context, tuple, mapping), index, [1, [path, nil]]) 
   flow_field(_, tuple, selector, _, _),
   selector_position(selector, index),
   field_value($Object(object_context, tuple, mapping), selector, $Opaque(path)),
-  path != "".
+  path != "",
+  !traced_element(object_context, tuple, selector).
 .plan 1:(4,2,1,3)
 shape_element($Object(object_context, tuple, mapping), index, [0, nil]) :-
   shape_tuple_demand($Object(object_context, tuple, mapping)),
@@ -2426,7 +2452,11 @@ character(text, position, substr(text, position, 1)) :-
   position = range(0, strlen(text)).
 
 // The state before the character at `position`: the bracket depth, and
-// "code", "string" or "escape".
+// "code", "string", "backslash", "escape" or "escaped_backslash". Argus
+// writes each backslash of a fact as two (`Argus.Tsv`), so a string's
+// escape `\t` reads here as three characters: the backslash's two
+// halves, then "escape" at the `t`. An escaped backslash, the escape of
+// `\\`, is two more halves, the second one "escaped_backslash".
 .decl scan(text: symbol, position: number, depth: number, mode: symbol)
 scan(text, 0, 0, "code") :- literal_text(text).
 scan(text, position + 1, depth + 1, "code") :-
@@ -2444,9 +2474,12 @@ scan(text, position + 1, depth, "code") :-
   scan(text, position, depth, "code"),
   character(text, position, glyph),
   glyph != "[", glyph != "{", glyph != "]", glyph != "}", glyph != "\"".
-scan(text, position + 1, depth, "escape") :-
+scan(text, position + 1, depth, "backslash") :-
   scan(text, position, depth, "string"),
   character(text, position, "\\").
+scan(text, position + 1, depth, "escape") :-
+  scan(text, position, depth, "backslash"),
+  character(text, position, _).
 scan(text, position + 1, depth, "code") :-
   scan(text, position, depth, "string"),
   character(text, position, "\"").
@@ -2456,6 +2489,13 @@ scan(text, position + 1, depth, "string") :-
   glyph != "\\", glyph != "\"".
 scan(text, position + 1, depth, "string") :-
   scan(text, position, depth, "escape"),
+  character(text, position, glyph),
+  glyph != "\\".
+scan(text, position + 1, depth, "escaped_backslash") :-
+  scan(text, position, depth, "escape"),
+  character(text, position, "\\").
+scan(text, position + 1, depth, "string") :-
+  scan(text, position, depth, "escaped_backslash"),
   character(text, position, _).
 
 .decl bracket_open(text: symbol, position: number, depth: number)
@@ -2539,10 +2579,24 @@ term_list(text, start) :- term(text, start, _), character(text, start, "[").
 .decl term_tuple(text: symbol, start: number)
 term_tuple(text, start) :- term(text, start, _), character(text, start, "{").
 
+// An integer, where it fits a Souffle number, which is an s32: nine
+// digits always do, and ten where they are within s32's bounds (digit
+// strings of one length compare as their numbers do). An integer past
+// them has no value here.
 .decl term_integer(text: symbol, start: number, value: number)
 term_integer(text, start, to_number(spelling)) :-
   term_spelling(text, start, spelling),
   match("-?[0-9]{1,9}", spelling).
+term_integer(text, start, to_number(spelling)) :-
+  term_spelling(text, start, spelling),
+  strlen(spelling) = 10,
+  match("[0-9]*", spelling),
+  spelling <= "2147483647".
+term_integer(text, start, to_number(spelling)) :-
+  term_spelling(text, start, spelling),
+  strlen(spelling) = 11,
+  match("-[0-9]*", spelling),
+  spelling <= "-2147483648".
 
 .decl term_float(text: symbol, start: number)
 term_float(text, start) :-
@@ -2569,7 +2623,9 @@ charlist(text, start, end) :-
   end >= start + 4,
   character(text, end - 1, "\"").
 
-// A character of a charlist, at `position`, and its code.
+// A character of a charlist, at `position`, and its code. An escape is
+// one character, at its first backslash, with the escaped character two
+// further on (see `scan`).
 .decl charlist_unit(text: symbol, start: number, position: number, code: number)
 charlist_unit(text, start, position, code) :-
   charlist(text, start, end),
@@ -2585,7 +2641,7 @@ charlist_unit(text, start, position, code) :-
   position >= start + 3,
   position < end - 1,
   scan(text, position, _, "string"),
-  character(text, position + 1, escaped),
+  character(text, position + 2, escaped),
   escape_code(escaped, code).
 
 .decl term_length(text: symbol, start: number, length: number)
@@ -2632,19 +2688,35 @@ term_scalar(text, start) :-
   ( atom = "true" ; atom = "false" ; atom = ":infinity" ; atom = ":neg_infinity" ; atom = ":nan" ).
 
 // The shape of literal tensor data: a number, or nested lists as deep as
-// the tensor's rank.
+// the tensor's rank, the lists at each depth of one shape.
 .decl data_axes(text: symbol, start: number, axes: Axes)
 data_axes(text, start, nil) :- term_scalar(text, start).
 data_axes(text, start, [[length, nil], "nil", inner]) :-
-  data_axes(text, child, inner),
-  term_list(text, start),
-  term_length(text, start, length),
-  length > 0,
-  term_child(text, start, 0, child).
+  data_children_agree(text, start, 0, inner),
+  term_length(text, start, length).
 data_axes(text, start, [[length, nil], "nil", nil]) :-
   charlist(text, start, _),
   term_length(text, start, length),
   length > 0.
+
+// The children of a list from `index` on have the shape of its first.
+.decl data_children_agree(text: symbol, start: number, index: number, inner: Axes)
+data_children_agree(text, start, last, inner) :-
+  data_axes(text, child, inner),
+  term_child(text, start, last, child),
+  term_list(text, start),
+  term_length(text, start, length),
+  last = length - 1,
+  term_child(text, start, 0, first),
+  data_axes(text, first, inner).
+.plan 1:(6,5,3,4,2,1)
+data_children_agree(text, start, index, inner) :-
+  data_children_agree(text, start, next, inner),
+  index = next - 1,
+  index >= 0,
+  term_child(text, start, index, child),
+  data_axes(text, child, inner).
+.plan 1:(3,2,1)
 
 // A shape tuple, `:auto` as size -1.
 .decl shape_term_from(text: symbol, start: number, index: number, axes: Axes)
@@ -3657,7 +3729,6 @@ preserves_shape("Nx.triu", 1). preserves_shape("Nx.triu", 2).
 preserves_shape("Nx.Defn.Kernel.stop_grad", 1).
 preserves_shape("Nx.Defn.Kernel.print_value", 1). preserves_shape("Nx.Defn.Kernel.print_value", 2).
 preserves_shape("Nx.Defn.Kernel.print_expr", 1). preserves_shape("Nx.Defn.Kernel.print_expr", 2).
-preserves_shape("Nx.Defn.Kernel.hook", 2). preserves_shape("Nx.Defn.Kernel.hook", 3).
 preserves_shape("Nx.Defn.Kernel.custom_grad", 3).
 preserves_shape("Nx.Defn.Kernel.-", 1).
 preserves_shape("Nx.Defn.Kernel.+", 1).
@@ -3946,22 +4017,37 @@ result_axes(site, operands, axes) :-
   site_instance(site, operation, _, operands),
   reduction(operation),
   operation != "Nx.LinAlg.norm",
+  operation != "Nx.weighted_mean",
   operands = [first, _, _],
   reduction_axes(site, first, mask, keep),
   contracted(first, mask, keep, axes).
 .plan 1:(3,4,1,2), 2:(4,3,1,2)
 
-// `Nx.LinAlg.norm/2` reduces like the others for the default order.
+// `Nx.LinAlg.norm/2` reduces like the others for an order that takes the
+// norm of the elements it reduces.
 result_axes(site, operands, axes) :-
   site_instance(site, "Nx.LinAlg.norm", _, operands),
   operands = [first, _, _],
-  option_absent(site, "ord"),
-  option_flag(site, "keep_axes", 0),
   axes_rank(first, rank),
-  ( rank = 1 ; rank = 2 ),
-  reduction_axes(site, first, mask, 0),
-  contracted(first, mask, 0, axes).
-.plan 1:(4,1,3,5,6,2), 2:(5,1,3,6,2,4), 3:(6,5,1,3,2,4)
+  norm_of_elements(site, rank),
+  reduction_axes(site, first, mask, keep),
+  contracted(first, mask, keep, axes).
+.plan 1:(2,1,3,4,5), 2:(4,1,2,3,5), 3:(5,4,1,2,3)
+
+// The orders that take the norm of the elements of a tensor of the rank:
+// the default, any number or infinity of a vector, and the Frobenius norm
+// or 2 of a matrix.
+.decl norm_of_elements(site: symbol, rank: number)
+norm_of_elements(site, rank) :-
+  operation_site(site, "Nx.LinAlg.norm", _),
+  ( option_absent(site, "ord") ; option_atom(site, "ord", "nil") ),
+  ( rank = 1 ; rank = 2 ).
+norm_of_elements(site, 1) :-
+  operation_site(site, "Nx.LinAlg.norm", _),
+  ( option_integer(site, "ord", _) ; option_atom(site, "ord", ":inf") ; option_atom(site, "ord", ":neg_inf") ).
+norm_of_elements(site, 2) :-
+  operation_site(site, "Nx.LinAlg.norm", _),
+  ( option_integer(site, "ord", 2) ; option_atom(site, "ord", ":frobenius") ).
 
 violation(context, site, "rank", cat("expected 1-D or 2-D tensor, got tensor with shape ", spelled)) :-
   site_instance(site, "Nx.LinAlg.norm", _, [first, _, _]),
@@ -3983,14 +4069,14 @@ violation(context, site, "weighted_mean", "axes must be specified when shapes of
   instance(context, site, [first, second, _], _),
   axes_sized(first),
   axes_sized(second),
-  first != second,
+  agree_conflict(first, second, -1),
   option_absent(site, "axes").
 violation(context, site, "weighted_mean", "weights tensor must have rank equal to the number of aggregation axes when input shapes differ") :-
   site_instance(site, "Nx.weighted_mean", _, [first, second, _]),
   instance(context, site, [first, second, _], _),
   axes_sized(first),
   axes_sized(second),
-  first != second,
+  agree_conflict(first, second, -1),
   option(site, "axes", text, start),
   term_length(text, start, length),
   axes_rank(second, rank),
@@ -5775,6 +5861,7 @@ conv_padding(site, operands, axis, low, high) :-
   term_length(text, start, spatial),
   term_child(text, start, axis, tuple),
   term_tuple(text, tuple),
+  term_length(text, tuple, 2),
   term_element_integer(text, tuple, 0, low),
   term_element_integer(text, tuple, 1, high).
 
@@ -5875,9 +5962,9 @@ violation(context, site, "conv", cat("input shape ", extent, " and kernel shape 
   sizes_spelled(first, extent),
   sizes_spelled(second, kernel).
 violation(context, site, "conv", detail) :-
-  conv_instance(site, [first, second, third], _),
-  instance(context, site, [first, second, third], _),
+  conv_context(context, site, [first, second, _]),
   option_number(site, "feature_group_size", 1, feature_groups),
+  feature_groups >= 1,
   axes_axis(first, 1, [channels, nil], _),
   axes_axis(second, 1, [kernel_channels, nil], _),
   channels != kernel_channels * feature_groups,
@@ -5885,10 +5972,15 @@ violation(context, site, "conv", detail) :-
   sizes_spelled(second, kernel),
   detail = cat("size of input channels divided by feature groups must match size of kernel channels, got ", to_string(channels), " / ", to_string(feature_groups), " != ", to_string(kernel_channels), " for shapes ", extent, " and ", kernel).
 violation(context, site, "conv", "conv would result in empty tensor which is not currently supported in Nx") :-
-  conv_instance(site, [first, second, third], _),
-  instance(context, site, [first, second, third], _),
+  conv_context(context, site, [first, second, third]),
   conv_window(site, [first, second, third], _, span),
   span < 0.
+
+// The contexts a conv's operands arrive in, as the convolution reads them.
+.decl conv_context(context: Context, site: symbol, operands: Operands)
+conv_context(context, site, operands) :-
+  conv_instance(site, operands, _),
+  instance(context, site, operands, _).
 
 // ══ Operations: windows ═════════════════════════════════════════════
 
@@ -5960,6 +6052,7 @@ window_padding(site, rank, axis, low + high) :-
   term_list(text, start),
   term_child(text, start, axis, tuple),
   term_tuple(text, tuple),
+  term_length(text, tuple, 2),
   term_element_integer(text, tuple, 0, low),
   term_element_integer(text, tuple, 1, high).
 
@@ -6378,8 +6471,7 @@ violation(context, site, "rank", cat("tensor must have rank 2, got rank ", to_st
   rank != 2,
   sizes_spelled(first, spelled).
 
-// Each backend names a Cholesky or LU result its own way, so they have no
-// result shape here; the others follow `Nx.Shape`.
+// Matrix results, as `Nx.Shape` gives them.
 result_axes(site, [first, second, third], first) :-
   site_instance(site, "Nx.LinAlg.matrix_power", 2, [first, second, third]),
   square(first),
@@ -6853,9 +6945,7 @@ creation(site, [[rows, nil], "nil", [[columns, nil], "nil", nil]]) :-
   term_integer(columns_text, 0, columns).
 
 // `Nx.Random`: keys are {2}, samplers take a `:shape` option.
-creation(site, [[2, nil], "nil", nil]) :-
-  operation_site(site, operation, _),
-  ( operation = "Nx.Random.key" ; operation = "Nx.Random.fold_in" ).
+creation(site, [[2, nil], "nil", nil]) :- operation_site(site, "Nx.Random.key", _).
 option_default(site, "parts", 2) :- operation_site(site, "Nx.Random.split", _).
 creation(site, [[parts, nil], "nil", [[2, nil], "nil", nil]]) :-
   operation_site(site, "Nx.Random.split", _),
@@ -6866,14 +6956,18 @@ creation(site, [[parts, nil], "nil", [[2, nil], "nil", nil]]) :-
 random_sampler("Nx.Random.randint_split"). random_sampler("Nx.Random.uniform_split").
 random_sampler("Nx.Random.normal_split"). random_sampler("Nx.Random.gumbel_split").
 
+// `Nx.Random.normal_split/4`'s result takes the shapes of its mean and
+// standard deviation too, which its draw broadcasts against.
 creation(site, axes) :-
   operation_site(site, operation, _),
   random_sampler(operation),
+  operation != "Nx.Random.normal_split",
   option(site, "shape", text, start),
   shape_term(text, start, axes).
 creation(site, nil) :-
   operation_site(site, operation, _),
   random_sampler(operation),
+  operation != "Nx.Random.normal_split",
   option_absent(site, "shape").
 
 axes_needed(axes) :- creation(_, axes).
@@ -7711,13 +7805,13 @@ unnamed_meets_named(left, left_name, right, right_name, named) :-
   left_name = "nil",
   right_name != "nil",
   left != [1, nil],
-  right = [_, _],
+  right = [_right_coefficient, _right_factors],
   named = right_name.
 unnamed_meets_named(left, left_name, right, right_name, named) :-
   right_name = "nil",
   left_name != "nil",
   right != [1, nil],
-  left = [_, _],
+  left = [_left_coefficient, _left_factors],
   named = left_name.
 
 // Two names, neither nil, that differ.
@@ -8043,7 +8137,8 @@ divisor_position("Nx.rsqrt", 1, 0).
 
 divides_by(site, 0) :- negative_power(site).
 
-// A power whose exponent is written negative: `x ** -0.5`.
+// A power whose exponent is written negative: `x ** -0.5`, at the call or
+// where a value the exponent holds is written.
 .decl negative_power(site: symbol)
 negative_power(site) :-
   operation_site(site, operation, 2),
@@ -8074,7 +8169,7 @@ takes_root(site, 0, "log_of_negative") :- takes_logarithm(site, 0).
 takes_root(site, 0, "root_of_negative") :- fractional_power(site).
 
 // A power whose exponent is written as a fraction, which is a root:
-// `x ** 0.5`.
+// `x ** 0.5`, at the call or where a value the exponent holds is written.
 .decl fractional_power(site: symbol)
 fractional_power(site) :-
   operation_site(site, operation, 2),
@@ -8084,16 +8179,18 @@ fractional_power(site) :-
   !match("-?[0-9]+\\.0+(e[-+]?[0-9]+)?", text).
 
 // A call whose derivative is infinite where its result is zero: a square
-// root, a root power (`x ** 0.5`) and a cube root, and a norm, whose
-// gradient is 0/0 there. `signed` is 1 where the operand must not be
-// negative for the root to be real.
+// root, a root power (`x ** 0.5`) and a cube root, and a norm and a
+// standard deviation, whose gradient is 0/0 there. `signed` is 1 where the
+// operand must not be negative for the root to be real.
 .decl singular_derivative(site: symbol, signed: number)
 singular_derivative(site, 1) :- operation_site(site, "Nx.sqrt", 1).
 singular_derivative(site, 1) :- root_power(site).
 singular_derivative(site, 0) :- operation_site(site, "Nx.cbrt", 1).
 singular_derivative(site, 0) :- operation_site(site, "Nx.LinAlg.norm", _).
+singular_derivative(site, 0) :- operation_site(site, "Nx.standard_deviation", _).
 
-// A power whose exponent is written between 0 and 1.
+// A power whose exponent is written between 0 and 1, at the call or where
+// a value the exponent holds is written.
 .decl root_power(site: symbol)
 root_power(site) :-
   fractional_power(site),
@@ -8116,8 +8213,9 @@ nonnegative_root_needed(context, site) :-
   gradient_asked(context, site, _),
   argument_can_be_negative(context, site, 0).
 
-// A call whose operand is `stop_grad`'s result, which no gradient flows
-// through.
+// A call whose gradient Nx does not compute: one whose operand is
+// `stop_grad`'s result, which no gradient flows through, or one a
+// `custom_grad` replaces the gradient of.
 .decl stopped_gradient(site: symbol)
 stopped_gradient(site) :-
   singular_derivative(site, _),
@@ -8260,7 +8358,25 @@ argument_can_be_positive(context, site, position) :-
 .decl argument_can_be_zero(context: Context, site: symbol, position: number, origin: symbol, cause: symbol)
 argument_can_be_zero(context, site, position, origin, cause) :-
   can_be_zero(context, function, kind, source, origin, cause),
-  signed_argument(context, site, position, function, kind, source).
+  signed_argument(context, site, position, function, kind, source),
+  !summed_past(site, position, cause).
+
+// A zero only some of a value's elements hold: an index (an iota starts
+// at zero and counts up) and an identity matrix (zero off its diagonal).
+// A sum or mean of the elements is not zero for it, as an element is.
+.decl partial_zero(cause: symbol)
+partial_zero("index"). partial_zero("identity").
+
+// An operand a call sums before it uses it (`weighted_mean` divides by
+// the sum of its weights), whose zero is only some elements'.
+.decl summed_past(site: symbol, position: number, cause: symbol)
+summed_past(site, position, cause) :-
+  operation_site(site, operation, arity),
+  summed_operand(operation, arity, position),
+  partial_zero(cause).
+
+.decl summed_operand(operation: symbol, arity: number, position: number)
+summed_operand("Nx.weighted_mean", 2, 1). summed_operand("Nx.weighted_mean", 3, 1).
 
 // A value in a context can be negative, zero or positive: some element,
 // on some path. A value the rules do not follow can be any of them.
@@ -8326,7 +8442,9 @@ can_be_zero(context, function, kind, source, "", cause) :-
 // value says only their shape (a value not known being a shape not known).
 .decl signed_by_value(context: Context, function: symbol, kind: symbol, source: symbol)
 signed_by_value(context, function, "literal", source) :- sign_demand(context, function, "literal", source).
-signed_by_value(context, function, "load", source) :- sign_demand(context, function, "load", source).
+signed_by_value(context, function, "load", source) :-
+  sign_demand(context, function, "load", source),
+  !signed_load(function, source).
 signed_by_value($Canonical(owner, arguments), function, "param", source) :-
   sign_demand($Canonical(owner, arguments), function, "param", source),
   entered_from_outside(function).
@@ -8344,7 +8462,7 @@ signed_by_value(context, function, "result", site) :-
 value_sign(value, "negative", "input") :- value = $Opaque(_).
 value_sign(value, "zero", "input") :- value = $Opaque(_).
 value_sign(value, "positive", "input") :- value = $Opaque(_).
-value_sign(value, "positive", "size") :- value = $Integer([coefficient, _]), coefficient > 0.
+value_sign(value, "positive", "size") :- value = $Integer([coefficient, _factors]), coefficient > 0.
 value_sign(value, "negative", "input") :- value = $Integer([0, nil]).
 value_sign(value, "zero", "input") :- value = $Integer([0, nil]).
 value_sign(value, "positive", "input") :- value = $Integer([0, nil]).
@@ -8369,7 +8487,8 @@ value_sign(value, "positive", "written") :-
 .decl followed_unknown(context: Context, function: symbol, kind: symbol, source: symbol)
 followed_unknown(context, function, "load", source) :-
   sign_demand(context, function, "load", source),
-  tensor_valued(context, function, "load", source).
+  tensor_valued(context, function, "load", source),
+  !signed_load(function, source).
 followed_unknown($Canonical(owner, arguments), function, "param", source) :-
   sign_demand($Canonical(owner, arguments), function, "param", source),
   entered_from_outside(function),
@@ -8386,6 +8505,10 @@ followed_unknown(context, function, "result", site) :-
   !operation_site(site, _, _),
   !program_call(site, _, _),
   tensor_valued(context, function, "result", site).
+
+// A load of a tensor whose signs a rule gives, which is followed: a
+// sample read out of a sampler's `{sample, key}`.
+.decl signed_load(function: symbol, load: symbol)
 
 // Such a tensor can have any sign, and so can any value an Nx call with no
 // sign rule returns.
@@ -8871,10 +8994,22 @@ can_be_positive(context, function, "result", site) :-
 can_be_negative(context, function, "result", site) :-
   first_negative(context, site), signed_call(context, site, function, "sum").
 can_be_zero(context, function, "result", site, origin, cause) :-
-  first_zero(context, site, origin, cause), signed_call(context, site, function, "sum").
+  first_zero(context, site, origin, cause), signed_call(context, site, function, "sum"),
+  !whole_sum_past(site, cause).
 can_be_zero(context, function, "result", site, site, "cancel") :-
   first_positive(context, site), first_negative(context, site),
   signed_call(context, site, function, "sum").
+
+// A sum or mean of every element, which a zero only some of them hold
+// does not make zero (a cumulative sum's first element is its operand's).
+.decl whole_sum_past(site: symbol, cause: symbol)
+whole_sum_past(site, cause) :-
+  operation_site(site, operation, _),
+  whole_sum(operation),
+  partial_zero(cause).
+
+.decl whole_sum(operation: symbol)
+whole_sum("Nx.sum"). whole_sum("Nx.mean").
 
 // `product`: positive from positives, or from negatives paired; negative
 // where an element is; zero where one is.
@@ -9792,6 +9927,9 @@ type_spelling(cat(":", family, to_string(size)), cat(family, to_string(size)), c
   nx_type(family, size, class).
 type_spelling(cat("{:", family, ", ", to_string(size), "}"), cat(family, to_string(size)), class) :-
   nx_type(family, size, class).
+// The 8-bit float with no infinities, whose atom does not end in its size.
+type_spelling(":f8_e4m3fn", "f8_e4m3fn", "float").
+type_spelling("{:f8_e4m3fn, 8}", "f8_e4m3fn", "float").
 
 .decl nx_type(family: symbol, size: number, class: symbol)
 nx_type("s", size, "integer") :- integer_size(size).
@@ -9810,7 +9948,7 @@ type_class(cat("Nx.", name), "move") :- moves_elements(name), name != "as_type",
 type_class(operation, "move") :-
   sign_class(operation, class),
   operation != "Nx.mean",
-  ( class = "negate" ; class = "absolute" ; class = "round" ; class = "sum" ; class = "product" ).
+  ( class = "negate" ; class = "round" ; class = "sum" ; class = "product" ).
 type_class("Nx.sign", "move").
 type_class("Nx.Defn.Kernel.stop_grad", "move"). type_class("Nx.Defn.Kernel.print_value", "move").
 type_class("Nx.Defn.Kernel.__unary_plus__", "move").
@@ -9823,7 +9961,7 @@ type_class(cat("Nx.", name), "float") :- floating_function(name).
 type_class("Nx.Defn.Kernel./", "float"). type_class("Nx.LinAlg.norm", "float").
 type_class(operation, "integer") :- sign_class(operation, "compare").
 type_class(operation, "integer") :- integer_operand(operation, _, 0).
-type_class("Nx.argmax", "integer"). type_class("Nx.argmin", "integer"). type_class("Nx.argsort", "integer").
+type_class("Nx.argmax", "integer"). type_class("Nx.argmin", "integer").
 type_class(cat("Nx.", name), "typed") :- typed_function(name).
 
 // The functions whose result is a float: division and the transcendental
@@ -10096,9 +10234,10 @@ tensor_shape_mismatch_via(site, kind, order, at, function, how, subject, positio
 // An Nx call that Nx accepts, where the code does not line axes up.
 // `kind` is "size_variables" (sizes the code names differently),
 // "unnamed_axis" (an axis with no name meeting a named one),
-// "contracted_names" (axes of different names contracted together) or
-// "vectorize_name" (an axis vectorized under another name); `certainty`
-// and `operands` as for mismatches.
+// "contracted_names" (axes of different names contracted together),
+// "vectorize_name" (an axis vectorized under another name) or
+// "reshape_order" (a reshape that moves a size past another axis's, where
+// a transpose was meant); `certainty` and `operands` as for mismatches.
 .decl tensor_axis_misalignment(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, certainty: symbol, operands: symbol)
 tensor_axis_misalignment(site, function, operation, kind, detail, certainty, operands) :-
   misalignment(context, site, kind, detail),

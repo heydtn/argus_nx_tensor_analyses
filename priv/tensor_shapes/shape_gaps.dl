@@ -1,3 +1,732 @@
 // Shape rules of Nx calls the core does not model, or models only in part.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// Most checks here are of literals: a stride, a window, a padding, a
+// permutation or a size the code writes, which Nx rejects whatever the
+// operands, or for the operands' ranks. A check that needs sizes needs them
+// known, as the core's do, and what the rules cannot follow yields no
+// finding (it errs quiet).
+
+// ── What Nx rejects ────────────────────────────────────────────────
+
+// A call Nx rejects for a literal it is given, in every context it runs.
+violation(context, site, kind, detail) :-
+  written_misfit(site, kind, detail),
+  site_active(context, site).
+
+// A call Nx rejects for a literal it is given against its operands, in the
+// contexts they arrive in.
+violation(context, site, kind, detail) :-
+  operand_misfit(site, operands, kind, detail),
+  instance(context, site, operands, _).
+
+.decl written_misfit(site: symbol, kind: symbol, detail: symbol)
+.decl operand_misfit(site: symbol, operands: Operands, kind: symbol, detail: symbol)
+
+// ── Convolutions and windows ───────────────────────────────────────
+
+// A conv or window operation, and the `rank` axes its per-axis options
+// cover: a conv's spatial axes, after the batch and channel axes of an
+// input and kernel of one rank; every axis of a window operation's operand.
+// `kind` names the violations of its options.
+.decl sliding(site: symbol, operands: Operands, rank: number, kind: symbol)
+sliding(site, [first, second, third], rank - 2, "conv_options") :-
+  site_instance(site, "Nx.conv", _, [first, second, third]),
+  axes_rank(first, rank),
+  axes_rank(second, rank),
+  rank >= 3.
+.plan 1:(2,1,3), 2:(3,1,2)
+sliding(site, [first, second, third], rank, "window_options") :-
+  site_instance(site, operation, arity, [first, second, third]),
+  window_operation(operation, arity, _),
+  axes_rank(first, rank).
+.plan 1:(3,2,1)
+
+per_axis_demand(site, key, rank, fallback) :-
+  sliding(site, _, rank, kind),
+  sliding_option(kind, key, fallback).
+
+// The per-axis options of each kind of operation, and their defaults.
+.decl sliding_option(kind: symbol, key: symbol, fallback: number)
+sliding_option("conv_options", "strides", 1).
+sliding_option("conv_options", "input_dilation", 1).
+sliding_option("conv_options", "kernel_dilation", 1).
+sliding_option("conv_options", "padding", 0).
+sliding_option("window_options", "strides", 1).
+sliding_option("window_options", "window_dilations", 1).
+sliding_option("window_options", "padding", 0).
+
+// What Nx raises for a dilation option below 1, and for one of another
+// length than the axes it covers (a window's, as the padding of the
+// window it becomes).
+.decl dilation_rule(key: symbol, below_one: symbol, misfit: symbol)
+dilation_rule("input_dilation", "input dilation of each dimension must be a positive integer, got ", "must specify dilation for each spatial dimension of the input or specify an integer dilation factor").
+dilation_rule("kernel_dilation", "kernel dilation of each dimension must be a positive integer, got ", "must specify dilation for each spatial dimension of the kernel or specify an integer dilation factor").
+dilation_rule("window_dilations", "dilation rates must be greater than or equal to 1 got ", "invalid padding configuration, rank of padding configuration and shape must match").
+
+// A stride of 0, which Nx divides by.
+operand_misfit(site, operands, kind, "bad argument in arithmetic expression (ArithmeticError), from a stride of 0") :-
+  sliding(site, operands, rank, kind),
+  per_axis(site, "strides", rank, _, 0).
+
+// A dilation below 1, or of other than one per axis.
+operand_misfit(site, operands, kind, cat(below_one, spelled)) :-
+  sliding(site, operands, rank, kind),
+  dilation_rule(key, below_one, _),
+  per_axis(site, key, rank, _, dilation),
+  dilation < 1,
+  option(site, key, text, start),
+  term_spelling(text, start, spelled).
+operand_misfit(site, operands, kind, misfit) :-
+  sliding(site, operands, rank, kind),
+  dilation_rule(key, _, misfit),
+  per_axis_length_mismatch(site, key, rank, _).
+
+// Padding given as a list with an entry that is no `{low, high}` pair of
+// integers, or of pairs for other than the axes it pads.
+operand_misfit(site, operands, kind, cat("padding must be a list of {high, low} tuples, where each element is an integer. Got: ", spelled)) :-
+  sliding(site, operands, _, kind),
+  padding_listed(site, text, start),
+  padding_irregular(text, start),
+  term_spelling(text, start, spelled).
+operand_misfit(site, operands, kind, "invalid padding configuration, rank of padding configuration and shape must match") :-
+  sliding(site, operands, rank, kind),
+  per_axis_length_mismatch(site, "padding", rank, _),
+  padding_listed(site, text, start),
+  !padding_irregular(text, start).
+
+.decl padding_listed(site: symbol, text: symbol, start: number)
+padding_listed(site, text, start) :- option(site, "padding", text, start), term_list(text, start).
+
+.decl padding_pair(text: symbol, start: number)
+padding_pair(text, entry) :-
+  padding_listed(_, text, start),
+  term_child(text, start, _, entry),
+  term_tuple(text, entry),
+  term_length(text, entry, 2),
+  term_element_integer(text, entry, 0, _),
+  term_element_integer(text, entry, 1, _).
+
+.decl padding_irregular(text: symbol, start: number)
+padding_irregular(text, start) :-
+  padding_listed(_, text, start),
+  term_child(text, start, _, entry),
+  !padding_pair(text, entry).
+
+// A conv's strides of other than one per spatial axis.
+operand_misfit(site, [first, second, third], "conv_options", detail) :-
+  sliding(site, [first, second, third], spatial, "conv_options"),
+  per_axis_length_mismatch(site, "strides", spatial, length),
+  option(site, "strides", text, start),
+  term_spelling(text, start, strides),
+  sizes_spelled(first, shape),
+  detail = cat("rank of strides much match rank of spatial dimensions got strides ", strides, " with rank ", to_string(length), " and got input shape ", shape, " of rank ", to_string(spatial)).
+
+// A conv's group size of 0, which Nx divides by.
+operand_misfit(site, operands, "conv_options", cat("bad argument in arithmetic expression (ArithmeticError), from a ", key, " of 0")) :-
+  sliding(site, operands, _, "conv_options"),
+  option_integer(site, key, 0),
+  ( key = "feature_group_size" ; key = "batch_group_size" ).
+
+// Group sizes Nx rejects, by the first of its checks they fail: one of
+// them must be 1, the batch groups must divide the batch, and both the
+// kernel's output channels.
+operand_misfit(site, operands, "conv_options", cat("either batch groups or feature groups must be 1, got batch_groups = ", to_string(batch_groups), " and feature_groups = ", to_string(feature_groups))) :-
+  conv_instance(site, operands, _),
+  option_number(site, "feature_group_size", 1, feature_groups),
+  option_number(site, "batch_group_size", 1, batch_groups),
+  feature_groups != 1,
+  batch_groups != 1.
+operand_misfit(site, [first, second, nil], "conv_options", cat("batch groups must evenly divide input batch size got rem(", to_string(batch_groups), ", ", to_string(batch), ") != 0")) :-
+  conv_instance(site, [first, second, nil], _),
+  option_number(site, "feature_group_size", 1, 1),
+  option_number(site, "batch_group_size", 1, batch_groups),
+  batch_groups > 1,
+  axes_axis(first, 0, [batch, nil], _),
+  batch % max(batch_groups, 1) != 0.
+operand_misfit(site, [first, second, nil], "conv_options", cat("size of kernel output channels must be evenly divisible by ", named, " got rem(", to_string(filters), ", ", to_string(groups), ") != 0 for kernel with shape ", kernel)) :-
+  conv_instance(site, [first, second, nil], _),
+  option_number(site, "feature_group_size", 1, feature_groups),
+  option_number(site, "batch_group_size", 1, batch_groups),
+  ( feature_groups = 1, groups = batch_groups, named = "batch groups"
+  ; batch_groups = 1, groups = feature_groups, named = "feature groups" ),
+  groups > 1,
+  axes_axis(first, 0, [batch, nil], _),
+  batch % max(batch_groups, 1) = 0,
+  axes_axis(second, 0, [filters, nil], _),
+  filters % max(groups, 1) != 0,
+  sizes_spelled(second, kernel).
+
+// Window dimensions given as a list, or with a size below 1.
+// (`Nx.window_reduce/5` fails otherwise on those, in a function clause
+// or in its backend.)
+written_misfit(site, "window_options", cat("invalid window_dimensions. window_dimensions is a n-element tuple with the size of each dimension. Got: ", text)) :-
+  window_operation(operation, arity, position),
+  operation != "Nx.window_reduce",
+  operation_site(site, operation, arity),
+  argument_literal(site, position, text),
+  term_list(text, 0).
+written_misfit(site, "window_options", cat("invalid dimension in axis ", to_string(axis), " found in window_dimensions. Each dimension must be a positive integer, got ", to_string(size), " in shape ", text)) :-
+  window_operation(operation, arity, position),
+  operation != "Nx.window_reduce",
+  operation_site(site, operation, arity),
+  argument_literal(site, position, text),
+  term_tuple(text, 0),
+  term_element_integer(text, 0, axis, size),
+  size < 1.
+
+// ── Permuted convolutions ──────────────────────────────────────────
+//
+// `Nx.conv/3` reads its input and kernel transposed by
+// `:input_permutation` and `:kernel_permutation`, convolves them in batch,
+// channel, spatial order, and lays the result out as `:output_permutation`
+// says, with the permuted input's names.
+
+// A permutation written for a conv, a list of axes of the operand it
+// permutes: the input's for `:input_permutation` and
+// `:output_permutation`, the kernel's for `:kernel_permutation`.
+.decl permutation_given(site: symbol, key: symbol, axes: Axes, text: symbol, start: number)
+permutation_given(site, key, first, text, start) :-
+  sliding(site, [first, _, _], _, "conv_options"),
+  ( key = "input_permutation" ; key = "output_permutation" ),
+  option(site, key, text, start).
+permutation_given(site, "kernel_permutation", second, text, start) :-
+  sliding(site, [_, second, _], _, "conv_options"),
+  option(site, "kernel_permutation", text, start).
+
+term_axes_demand(site, axes, text, start) :- permutation_given(site, _, axes, text, start).
+
+// A permutation of other than one entry per axis.
+operand_misfit(site, operands, "conv_options", cat("expected length of permutation (", to_string(length), ") to match rank of shape (", to_string(spatial + 2), ")")) :-
+  permutation_given(site, _, axes, text, start),
+  sliding(site, operands, spatial, "conv_options"),
+  term_axes_mask(axes, text, start, _),
+  term_length(text, start, length),
+  length != spatial + 2.
+
+// An operand as its permutation lays it out, each axis the one its entry
+// names; as it is, where a conv given another permutation is given none.
+.decl permuted(site: symbol, key: symbol, axes: Axes, permuted: Axes)
+permuted(site, key, axes, arranged) :- permuted_from(site, key, axes, 0, arranged).
+permuted(site, key, axes, axes) :-
+  permutation_given(site, _, _, _, _),
+  sliding(site, [first, second, _], _, "conv_options"),
+  ( key = "input_permutation", axes = first ; key = "kernel_permutation", axes = second ),
+  option_absent(site, key).
+.plan 1:(2,1,3)
+
+.decl permuted_from(site: symbol, key: symbol, axes: Axes, index: number, permuted: Axes)
+permuted_from(site, key, axes, rank, nil) :-
+  permutation_given(site, key, axes, text, start),
+  key != "output_permutation",
+  term_axes_mask(axes, text, start, _),
+  term_length(text, start, rank),
+  axes_rank(axes, rank).
+.plan 1:(2,1,3,4), 2:(4,1,2,3)
+permuted_from(site, key, axes, index, [size, name, rest]) :-
+  permuted_from(site, key, axes, next, rest),
+  index = next - 1,
+  index >= 0,
+  permutation_given(site, key, axes, text, start),
+  term_axes_element(axes, text, start, index, source),
+  axes_axis(axes, source, size, name).
+.plan 1:(2,1,3,4), 2:(3,2,1,4), 3:(4,3,2,1)
+
+axes_needed(arranged) :- permuted(_, _, _, arranged).
+spelling_demand(arranged) :- permuted(_, _, _, arranged).
+
+// A permuted conv over its operands as it reads them. The third slot
+// holds the input as the call gets it, which tells these operands from
+// those of a conv given no permutation.
+conv_instance(site, [permuted_input, permuted_kernel, first], spatial) :-
+  permuted(site, "input_permutation", first, permuted_input),
+  sliding(site, [first, second, nil], spatial, "conv_options"),
+  instance(_, site, [first, second, nil], nil),
+  permuted(site, "kernel_permutation", second, permuted_kernel),
+  axes_sized(permuted_input),
+  axes_sized(permuted_kernel).
+.plan 1:(2,1,3,4,5,6), 2:(3,2,1,4,5,6), 3:(4,2,3,1,5,6), 4:(5,1,2,3,4,6), 5:(6,4,2,3,1,5)
+
+conv_context(context, site, [permuted_input, permuted_kernel, first]) :-
+  conv_instance(site, [permuted_input, permuted_kernel, first], _),
+  first != nil,
+  instance(context, site, [first, second, nil], _),
+  permuted(site, "kernel_permutation", second, permuted_kernel).
+
+// The permuted conv's result: the convolved axes, each at the position
+// its entry of the output permutation names, or as they are without one.
+result_axes(site, [first, second, nil], axes) :-
+  conv_instance(site, [permuted_input, permuted_kernel, first], _),
+  first != nil,
+  permuted(site, "kernel_permutation", second, permuted_kernel),
+  built(site, [permuted_input, permuted_kernel, first], convolved),
+  arranged_from(site, first, convolved, 0, axes).
+.plan 1:(2,1,3,4), 2:(3,1,2,4), 3:(4,3,1,2)
+
+axes_needed(convolved) :-
+  conv_instance(site, [permuted_input, permuted_kernel, first], _),
+  first != nil,
+  built(site, [permuted_input, permuted_kernel, first], convolved).
+.plan 1:(2,1)
+
+// The convolved axes laid out from `position` on.
+.decl arranged_from(site: symbol, input_axes: Axes, convolved: Axes, position: number, arranged: Axes)
+arranged_from(site, first, convolved, spatial + 2, nil) :-
+  conv_instance(site, [permuted_input, permuted_kernel, first], spatial),
+  first != nil,
+  built(site, [permuted_input, permuted_kernel, first], convolved).
+.plan 1:(2,1)
+arranged_from(site, first, convolved, position, [size, name, rest]) :-
+  arranged_from(site, first, convolved, next, rest),
+  position = next - 1,
+  position >= 0,
+  output_source(site, first, position, index),
+  axes_axis(convolved, index, size, name).
+.plan 1:(2,1,3), 2:(3,1,2)
+
+// The convolved axis the result's axis at `position` is: the one whose
+// entry of the output permutation names the position.
+.decl output_source(site: symbol, input_axes: Axes, position: number, index: number)
+output_source(site, first, position, index) :-
+  permutation_given(site, "output_permutation", first, text, start),
+  term_axes_mask(first, text, start, _),
+  term_axes_element(first, text, start, index, position).
+.plan 1:(2,1,3), 2:(3,1,2)
+output_source(site, first, position, position) :-
+  sliding(site, [first, _, _], spatial, "conv_options"),
+  permutation_given(site, _, _, _, _),
+  option_absent(site, "output_permutation"),
+  position = range(0, spatial + 2).
+.plan 1:(2,1,3)
+
+// ── Padding ────────────────────────────────────────────────────────
+
+// Padding written whole that crops an axis to nothing: the backend fails
+// to build the result.
+operand_misfit(site, [first, second, third], "cropped_axis", cat("no match of right hand side value (MatchError), from padding axis ", to_string(axis), " of size ", to_string(size), " to ", to_string(padded))) :-
+  site_instance(site, "Nx.pad", 3, [first, second, third]),
+  pad_configuration(site, axis, low, high, interior),
+  interior >= 0,
+  axes_axis(first, axis, [size, nil], _),
+  size > 0,
+  padded = size + (size - 1) * interior + low + high,
+  padded < 1.
+operand_misfit(site, [first, second, third], "cropped_axis", cat("no match of right hand side value (MatchError), from padding axis ", to_string(axis), " of size ", to_string(size), " to ", to_string(size + low + high))) :-
+  site_instance(site, "Nx.pad_outer", 3, [first, second, third]),
+  outer_padding(site, axis, low, high),
+  axes_axis(first, axis, [size, nil], _),
+  size > 0,
+  size + low + high < 1.
+
+// ── Literal sizes below 1 ──────────────────────────────────────────
+
+// A dimension below 1 in a shape the code writes where Nx validates it:
+// `Nx.iota/2`'s and `Nx.broadcast/3`'s shape, a sampler's `:shape`.
+// (`Nx.template/2` and `Nx.eye/2` take a dimension of 0.)
+written_misfit(site, "nonpositive", cat("invalid dimension in axis ", to_string(axis), " found in shape. Each dimension must be a positive integer, got ", to_string(value), " in shape ", text)) :-
+  operation_site(site, operation, _),
+  ( operation = "Nx.iota", position = 0 ; operation = "Nx.broadcast", position = 1 ),
+  argument_literal(site, position, text),
+  term_tuple(text, 0),
+  term_element_integer(text, 0, axis, value),
+  value < 1.
+written_misfit(site, "nonpositive", cat("invalid dimension in axis ", to_string(axis), " found in shape. Each dimension must be a positive integer, got ", to_string(value), " in shape ", spelled)) :-
+  random_sampler(operation),
+  operation_site(site, operation, _),
+  option(site, "shape", text, start),
+  term_tuple(text, start),
+  term_element_integer(text, start, axis, value),
+  value < 1,
+  term_spelling(text, start, spelled).
+
+// `Nx.reshape/3` to a written shape with a dimension below 1, which no
+// number of elements fits.
+violation(context, site, "reshape", cat("cannot reshape, current shape ", current, " is not compatible with new shape ", text)) :-
+  reshaped_to_nothing(site, text),
+  argument_tensor(context, site, 0, [_, first]),
+  sizes_spelled(first, current).
+
+.decl reshaped_to_nothing(site: symbol, text: symbol)
+reshaped_to_nothing(site, text) :-
+  operation_site(site, "Nx.reshape", _),
+  argument_literal(site, 1, text),
+  term_tuple(text, 0),
+  term_element_integer(text, 0, _, value),
+  value < 1.
+
+spelling_demand(first) :- reshaped_to_nothing(site, _), argument_tensor(_, site, 0, [_, first]).
+
+// A count, length, repetition or stride below 1 where Nx takes one of at
+// least 1.
+written_misfit(site, "nonpositive", cat("repetitions must be a list of integers, got: ", text)) :-
+  tile_repetitions(site, text, _),
+  term_element_integer(text, 0, _, repetition),
+  repetition < 1.
+written_misfit(site, "nonpositive", cat("top_k k must be an integer greater than or equal to 1, got k=", to_string(k))) :-
+  operation_site(site, "Nx.top_k", _),
+  option_integer(site, "k", k),
+  k < 1.
+written_misfit(site, "nonpositive", cat("expected an integer or :power_of_two as length, got: ", to_string(length))) :-
+  fourier(operation),
+  operation != "Nx.irfft",
+  operation_site(site, operation, _),
+  option_integer(site, "length", length),
+  length < 1.
+written_misfit(site, "nonpositive", cat("expected a positive integer as length, got: ", to_string(length))) :-
+  operation_site(site, "Nx.irfft", _),
+  option_integer(site, "length", length),
+  length < 1.
+written_misfit(site, "nonpositive", cat("no case clause matching: ", to_string(length), " (CaseClauseError)")) :-
+  fourier2(operation),
+  operation_site(site, operation, _),
+  option(site, "lengths", text, start),
+  term_element_integer(text, start, _, length),
+  length < 1.
+written_misfit(site, "nonpositive", cat("expected n to be a non-negative integer, got: ", to_string(n))) :-
+  operation_site(site, "Nx.linspace", _),
+  option_integer(site, "n", n),
+  n < 1.
+operand_misfit(site, [first, second, third], "nonpositive", cat("stride at axis ", to_string(axis), " must be greater than or equal to 1, got: ", to_string(stride))) :-
+  site_instance(site, "Nx.slice", _, [first, second, third]),
+  axes_rank(first, rank),
+  per_axis(site, "strides", rank, axis, stride),
+  stride < 1.
+operand_misfit(site, [first, second, third], "nonpositive", cat("stride at axis ", to_string(axis), " must be greater than or equal to 1, got: ", to_string(stride))) :-
+  site_instance(site, "Nx.slice_along_axis", _, [first, second, third]),
+  option_integer(site, "strides", stride),
+  stride < 1,
+  axis_option(site, "axis", first, axis).
+
+// `Nx.concatenate/2` and `Nx.stack/2` of no tensors.
+written_misfit(site, "no_tensors", cat("no tensors were given to ", substr(operation, 3, strlen(operation) - 3))) :-
+  operation_site(site, operation, _),
+  ( operation = "Nx.concatenate" ; operation = "Nx.stack" ),
+  argument_literal(site, 0, "[]").
+
+// `Nx.stack/2` at a position the result does not have: between -rank-1
+// and rank, which `2 * axis + 1` puts within `2 * rank + 1` of 0.
+violation(context, site, "axis", detail) :-
+  operation_site(site, "Nx.stack", _),
+  option_integer(site, "axis", axis),
+  list_instance(context, site, tensors),
+  list_first(site, tensors, first),
+  axes_rank(first, rank),
+  max(2 * axis + 1, 0 - 2 * axis - 1) > 2 * rank + 1,
+  sizes_spelled(first, spelled),
+  detail = cat("new axis position for shape ", spelled, " must be a number between ", to_string(0 - rank - 1), " and ", to_string(rank), ", got: ", to_string(axis)).
+
+// ── Contracting ────────────────────────────────────────────────────
+
+// `Nx.dot/6` contracting an axis it also batches.
+operand_misfit(site, operands, "dot", cat("dot batch axes for ", side, " tensor (", batch, ") cannot be in contract axes (", contract, ")")) :-
+  dot_sides(side, batch_role, contract_role),
+  dot_mask(site, operands, batch_role, batch_mask, length),
+  length > 0,
+  dot_mask(site, operands, contract_role, contract_mask, _),
+  (batch_mask band contract_mask) != 0,
+  dot_list(site, batch_role, batch_text),
+  term_spelling(batch_text, 0, batch),
+  dot_list(site, contract_role, contract_text),
+  term_spelling(contract_text, 0, contract).
+
+.decl dot_sides(side: symbol, batch_role: symbol, contract_role: symbol)
+dot_sides("left", "left_batch", "left_contract").
+dot_sides("right", "right_batch", "right_contract").
+
+// ── Weighted means ─────────────────────────────────────────────────
+//
+// `Nx.weighted_mean/3` multiplies the input by weights of its sizes as
+// they are. Weights of other sizes, one axis for each axis it reduces, it
+// reshapes to the input's rank, their axes last, and then swaps the axis
+// at the first reduced position with the last (`swap_last/2`): weights
+// over two or more axes land transposed, where they broadcast at all.
+
+agree_demand(first, second, -1) :- site_instance(_, "Nx.weighted_mean", _, [first, second, _]).
+
+// Weights that may have the input's sizes, as they are.
+result_axes(site, [first, second, third], axes) :-
+  site_instance(site, "Nx.weighted_mean", _, [first, second, third]),
+  agrees(first, second, -1),
+  reduction_axes(site, first, mask, keep),
+  contracted(first, mask, keep, axes).
+.plan 1:(2,1,3,4), 2:(3,1,2,4), 3:(4,3,1,2)
+
+// Weights of other sizes, one axis per reduced axis: the input's `rank`,
+// and the first reduced position, which Nx swaps with the last.
+.decl weights_arranging(site: symbol, operands: Operands, rank: number, swapped: number)
+weights_arranging(site, [first, second, third], rank, swapped) :-
+  site_instance(site, "Nx.weighted_mean", _, [first, second, third]),
+  agree_conflict(first, second, -1),
+  option(site, "axes", text, start),
+  term_length(text, start, length),
+  axes_rank(second, length),
+  term_axes_element(first, text, start, 0, swapped),
+  axes_rank(first, rank).
+.plan 1:(2,1,3,4,5,6,7), 2:(5,1,2,3,4,6,7), 3:(6,1,2,3,4,5,7), 4:(7,1,2,3,4,5,6)
+
+// The position of the reshaped weights each position of the arranged
+// weights takes its axis from.
+.decl weights_source(site: symbol, operands: Operands, position: number, source: number)
+weights_source(site, operands, swapped, rank - 1) :- weights_arranging(site, operands, rank, swapped).
+weights_source(site, operands, rank - 1, swapped) :- weights_arranging(site, operands, rank, swapped).
+weights_source(site, operands, position, position) :-
+  weights_arranging(site, operands, rank, swapped),
+  position = range(0, rank),
+  position != swapped,
+  position != rank - 1.
+
+build_rank(cat("weights ", site), operands, rank) :- weights_arranging(site, operands, rank, _).
+build_axis(cat("weights ", site), [first, second, third], position, [1, nil], "nil") :-
+  weights_arranging(site, [first, second, third], rank, _),
+  weights_source(site, [first, second, third], position, source),
+  axes_rank(second, weights_rank),
+  source < rank - weights_rank.
+.plan 1:(2,1,3), 2:(3,1,2)
+build_axis(cat("weights ", site), [first, second, third], position, size, "nil") :-
+  weights_arranging(site, [first, second, third], rank, _),
+  weights_source(site, [first, second, third], position, source),
+  axes_rank(second, weights_rank),
+  source >= rank - weights_rank,
+  axes_axis(second, source - rank + weights_rank, size, _).
+.plan 1:(2,1,3,4), 2:(3,1,2,4), 3:(4,3,1,2)
+
+axes_needed(arranged) :- weights_arranging(site, operands, _, _), built(cat("weights ", site), operands, arranged).
+.plan 1:(2,1)
+spelling_demand(arranged) :- weights_arranging(site, operands, _, _), built(cat("weights ", site), operands, arranged).
+broadcast_demand(first, arranged) :- weights_arranging(site, [first, second, third], _, _), built(cat("weights ", site), [first, second, third], arranged).
+.plan 1:(2,1)
+
+// The product of the input and the arranged weights, reduced.
+result_axes(site, [first, second, third], axes) :-
+  weights_arranging(site, [first, second, third], _, _),
+  built(cat("weights ", site), [first, second, third], arranged),
+  broadcast(first, arranged, product),
+  reduction_axes(site, first, mask, keep),
+  contracted(product, mask, keep, axes).
+.plan 1:(2,1,3,4,5), 2:(3,1,2,4,5), 3:(4,1,2,3,5), 4:(5,3,1,2,4)
+contract_demand(product, mask, keep, 0) :-
+  weights_arranging(site, [first, second, third], _, _),
+  built(cat("weights ", site), [first, second, third], arranged),
+  broadcast(first, arranged, product),
+  reduction_axes(site, first, mask, keep).
+.plan 1:(2,1,3,4), 2:(3,1,2,4), 3:(4,1,2,3)
+
+operand_misfit(site, [first, second, third], "weighted_mean", cat("cannot broadcast tensor of dimensions ", shape, " to ", weights)) :-
+  weights_arranging(site, [first, second, third], _, _),
+  built(cat("weights ", site), [first, second, third], arranged),
+  broadcast_axis(first, arranged, _, size, _, weight_size, _),
+  broadcast_conflict(size, weight_size),
+  sizes_spelled(first, shape),
+  sizes_spelled(arranged, weights).
+
+// Weights over two or more axes that Nx takes: arranged to broadcast,
+// they are transposed from the axes the code lines them up with.
+call_error(context, site, "transposed_weights", cat(weights, " over axes ", axes), "") :-
+  weights_arranging(site, [first, second, third], _, _),
+  axes_rank(second, weights_rank),
+  weights_rank >= 2,
+  built(cat("weights ", site), [first, second, third], arranged),
+  broadcast(first, arranged, _),
+  instance(context, site, [first, second, third], _),
+  sizes_spelled(second, weights),
+  option(site, "axes", text, start),
+  term_spelling(text, start, axes).
+
+// ── Literal data ───────────────────────────────────────────────────
+
+// Literal data of a tensor constructor, lists of which have children of
+// different shapes: Nx builds no tensor of those.
+written_misfit(site, "ragged_data", detail) :-
+  operation_site(site, operation, arity),
+  tensor_constructor(operation, arity),
+  argument_literal(site, 0, text),
+  ragged_detail(text, detail).
+
+// A list in literal data whose child at `index` has another shape than
+// its first child: `first` and `other`, nil for a number.
+.decl data_ragged(text: symbol, start: number, index: number, first: Axes, other: Axes)
+data_ragged(text, start, index, first, other) :-
+  operation_site(site, operation, arity),
+  tensor_constructor(operation, arity),
+  argument_literal(site, 0, text),
+  term_list(text, start),
+  term_child(text, start, 0, head),
+  data_axes(text, head, first),
+  term_child(text, start, index, child),
+  index > 0,
+  data_axes(text, child, other),
+  other != first.
+
+// What Nx raises building ragged data: lists of two shapes, a number
+// where it found a list, a list where it found a number.
+.decl ragged_detail(text: symbol, detail: symbol)
+ragged_detail(text, cat("cannot build tensor because lists have different shapes, got ", first_spelled, " at position 0 and ", other_spelled, " at position ", to_string(index + 1))) :-
+  data_ragged(text, _, index, first, other),
+  first != nil,
+  other != nil,
+  sizes_spelled(first, first_spelled),
+  sizes_spelled(other, other_spelled).
+ragged_detail(text, "errors were found at the given arguments: 1st argument: not a list") :-
+  data_ragged(text, _, _, first, nil),
+  first != nil.
+ragged_detail(text, cat("invalid value given to Nx.tensor/1, got: ", spelled)) :-
+  data_ragged(text, start, index, nil, _),
+  term_child(text, start, index, child),
+  term_spelling(text, child, spelled).
+
+spelling_demand(first) :- data_ragged(_, _, _, first, _), first != nil.
+spelling_demand(other) :- data_ragged(_, _, _, _, other), other != nil.
+
+// `Nx.tensor/2` of a named tensor, given names that do not merge with its
+// own.
+operand_misfit(site, [first, second, third], "names", cat("cannot merge name ", own, " on axis ", to_string(axis), " with name ", name, " on axis ", to_string(axis))) :-
+  site_instance(site, "Nx.tensor", 2, [first, second, third]),
+  given_names(site, axis, name),
+  axes_axis(first, axis, _, own),
+  own != name,
+  own != "nil",
+  name != "nil".
+
+// ── Element-wise logarithms ────────────────────────────────────────
+
+preserves_shape("Nx.log2", 1).
+preserves_shape("Nx.log10", 1).
+
+// ── Vectorized axes of a list ──────────────────────────────────────
+
+// `Nx.broadcast_vectors/2` and `Nx.reshape_vectors/2` line up the
+// vectorized axes of every tensor in their list: those of one name must
+// have one size, or 1.
+list_demand(value, 0) :-
+  operation_site(site, operation, _),
+  ( operation = "Nx.broadcast_vectors" ; operation = "Nx.reshape_vectors" ),
+  argument_value(_, site, 0, value).
+
+// The vectorized axes of the listed tensors, a tensor and an axis at a
+// time: `rest` the tensors after.
+.decl vectors_listed(site: symbol, tensors: Tensors, rest: Tensors, vectorized: VectorizedAxes)
+vectors_listed(site, tensors, rest, vectorized) :-
+  operation_site(site, operation, _),
+  ( operation = "Nx.broadcast_vectors" ; operation = "Nx.reshape_vectors" ),
+  argument_tensors(_, site, 0, tensors),
+  tensors = [[vectorized, _], rest].
+vectors_listed(site, tensors, rest, vectorized) :- vectors_listed(site, tensors, [[vectorized, _], rest], _).
+vectors_listed(site, tensors, rest, inner) :- vectors_listed(site, tensors, rest, [_, _, inner]).
+
+violation(context, site, "vectorized_axes", cat("expected vectorized axis ", name, " to have the same size in both tensors or to one of them to have size 1, got ", to_string(larger), " and ", to_string(smaller))) :-
+  vectors_listed(site, tensors, _, [name, [larger, nil], _]),
+  vectors_listed(site, tensors, _, [name, [smaller, nil], _]),
+  smaller > 1,
+  larger > smaller,
+  argument_tensors(context, site, 0, tensors).
+
+// ── Iotas ──────────────────────────────────────────────────────────
+
+// `Nx.iota/2` given a tensor for its shape, which Nx 1.0 rejects.
+violation(context, site, "tensor_as_shape", "vectorization is only supported for shape inputs") :-
+  operation_site(site, "Nx.iota", _),
+  argument_value(context, site, 0, $Tensor(_)).
+
+// `Nx.iota/2` given a number, which it takes as a scalar's shape: it
+// makes a scalar 0, not a range.
+call_error(context, site, "scalar_iota", to_string(value), "") :-
+  operation_site(site, "Nx.iota", _),
+  argument_value(context, site, 0, $Integer([value, nil])),
+  value > 0.
+call_error(context, site, "scalar_iota", spelled, "") :-
+  operation_site(site, "Nx.iota", _),
+  argument_value(context, site, 0, $Term(text, start)),
+  term_scalar(text, start),
+  term_spelling(text, start, spelled).
+
+// ── Inverse real transforms ────────────────────────────────────────
+
+// The length `Nx.irfft/2` rebuilds along its axis: its `:length`, or
+// twice the axis's size less two.
+.decl irfft_length(site: symbol, axes: Axes, axis: number, length: number)
+irfft_length(site, first, axis, 2 * (size - 1)) :-
+  site_instance(site, "Nx.irfft", _, [first, _, _]),
+  option_absent(site, "length"),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, [size, nil], _),
+  size > 0.
+irfft_length(site, first, axis, length) :-
+  site_instance(site, "Nx.irfft", _, [first, _, _]),
+  option_integer(site, "length", length),
+  length > 0,
+  axis_option(site, "axis", first, axis).
+
+// Nx rebuilds the signal by mirroring the spectrum but its first entry
+// and, for an even length, its last: a length below 3 leaves nothing to
+// mirror, and slicing out that nothing raises.
+operand_misfit(site, [first, second, third], "irfft", cat("length at axis ", to_string(axis), " must be greater than or equal to 1, got: ", to_string(mirrored))) :-
+  irfft_length(site, first, axis, length),
+  mirrored = length - length / 2 - 1,
+  mirrored < 1,
+  site_instance(site, "Nx.irfft", _, [first, second, third]).
+
+// An `Nx.irfft/2` with no `:length`, of the spectrum an `Nx.rfft/2` makes
+// of a signal of odd length along the same axis: it assumes an even one,
+// and gives a signal one shorter, of other values.
+call_error(context, site, "odd_irfft", to_string(length), origin) :-
+  spectrum_source(site, origin),
+  operation_site(origin, "Nx.rfft", _),
+  odd_transform(origin, length),
+  option_absent(site, "axis"),
+  option_absent(origin, "axis"),
+  site_active(context, site).
+
+// A call whose result the operand of an `Nx.irfft/2` with no `:length`
+// is, or is made from by element-wise calls, which keep the transformed
+// axis as it is.
+.decl spectrum_source(site: symbol, source: symbol)
+spectrum_source(site, source) :-
+  operation_site(site, "Nx.irfft", _),
+  option_absent(site, "length"),
+  flow_argument(site, _, 0, "result", source).
+spectrum_source(site, next) :-
+  spectrum_source(site, source),
+  operation_site(source, operation, arity),
+  ( broadcasts(operation), arity = 2 ; preserves_shape(operation, arity) ),
+  flow_argument(source, _, _, "result", next).
+
+// An `Nx.rfft/2` over an odd length: its `:length`, or its axis's size.
+.decl odd_transform(site: symbol, length: number)
+odd_transform(site, length) :-
+  spectrum_source(_, site),
+  option_integer(site, "length", length),
+  length % 2 = 1.
+odd_transform(site, size) :-
+  spectrum_source(_, site),
+  option_absent(site, "length"),
+  site_instance(site, "Nx.rfft", _, [first, _, _]),
+  axis_option(site, "axis", first, axis),
+  axes_axis(first, axis, [size, nil], _),
+  size % 2 = 1.
+
+// ── Scaled log-sum-exp ─────────────────────────────────────────────
+
+// `Nx.logsumexp/2`'s `:exp_scaling_factor` multiplies the exponentials,
+// broadcast with them, before it sums them over `:axes`: a factor of more
+// axes than the tensor makes those axes index their broadcast shape, and
+// the sum runs over other axes than the tensor's.
+call_error(context, site, "scaling_factor_rank", cat(factor_spelled, " scaling ", tensor_spelled), "") :-
+  scaling_factor_axes(context, site, factor),
+  instance(context, site, [first, _, _], _),
+  axes_rank(factor, factor_rank),
+  axes_rank(first, rank),
+  factor_rank > rank,
+  sizes_spelled(factor, factor_spelled),
+  sizes_spelled(first, tensor_spelled).
+
+// The scaling factor's axes, in a context.
+.decl scaling_factor_axes(context: Context, site: symbol, factor: Axes)
+scaling_factor_axes(context, site, axes) :-
+  operation_site(site, "Nx.logsumexp", _),
+  option_pair(site, "exp_scaling_factor", kind, source),
+  site_function(site, function),
+  value_of(context, function, kind, source, $Tensor([_, axes])).
+
+axes_needed(factor) :- scaling_factor_axes(_, _, factor).
+spelling_demand(factor) :- scaling_factor_axes(_, _, factor).

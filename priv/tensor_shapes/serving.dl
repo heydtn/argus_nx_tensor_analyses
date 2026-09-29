@@ -1,3 +1,704 @@
 // `Nx.Serving` and `Nx.Batch`: batch axes, templates and entries a serving cannot merge.
 //
 // Included by `priv/tensor_shapes.dl`, whose words these rules build on.
+//
+// A serving runs its computation over an `Nx.Batch`: the entries a batch
+// is made of, stacked or concatenated along a new first axis, padded at
+// its end, and every leaf of the output sliced back along that axis to
+// the batch's size, a slice for each caller. The computation is the
+// function `Nx.Serving.jit/1,2` is handed, or the one a builder handed to
+// `Nx.Serving.new/1,2` jits or compiles and returns; it takes the batch as
+// its one argument, after what its closure captures.
+//
+// Where the program says what a batch holds (the template it compiles the
+// computation for, or entries of known shapes it builds a batch of and
+// runs the serving on), the computation is analyzed over that batch in a
+// canonical context of its own, whose parameter has the batch size for
+// its first axis: a free size, `$p#{0}` for the parameter at `p`, which no
+// other size equals. Its output and the operations over it then say where
+// the batch axis goes. Where the program does not say, the computation's
+// canonical contexts carry the batch as the parameter's path through the
+// operations that keep its shape, and an operation over it along axis 0,
+// or over every axis, runs along the batch axis whatever its rank.
+//
+// Servings and batches are followed from where they are made to where
+// they are run over the program's calls, returns and parameters, as values
+// are, but not per context: a serving or batch made on either of two paths
+// is both, and the rules find only what holds of every such path.
+//
+// Every relation below starts from a call of `Nx.Serving`'s or
+// `Nx.Batch`'s, and a program with neither derives nothing here. Each
+// relation costs Souffle's front end time whether or not it derives
+// anything, so each bug is a clause of `call_error`, by kind, and the
+// words below them are few.
+
+// ══ The serving's output ════════════════════════════════════════════
+
+// A serving's computation returns what Nx cannot slice back per entry:
+// "serving_scalar_output", a scalar, which has no batch axis (Nx raises
+// "given axis (0) invalid for shape with rank 0" on every batch);
+// "serving_output_batch_axis", a leaf whose first axis is not the batch
+// (Nx slices it along that axis as if it were, and hands each caller a
+// slice of something else, or raises where it is shorter than the batch);
+// "serving_mixes_batch", an operation along the batch axis where the
+// output still keeps that axis first (every entry's result depends on the
+// rest of the batch, other callers' entries and the zero rows padding it).
+
+// The computation returns a reduction over every axis.
+call_error(context, compile, "serving_scalar_output", "it returns a reduction over every axis", origin) :-
+  compiled_for_serving(context, compile, computation),
+  returns_reduction_of_every_axis(computation, origin).
+
+// Over a batch the program says the shape of, the computation's output is
+// a scalar.
+call_error(context, compile, "serving_scalar_output", "its output is a scalar", "") :-
+  batched_run(context, compile, computation, batched),
+  output_off_batch(batched, computation, nil),
+  !returns_reduction_of_every_axis(computation, _).
+
+// The computation is one of Nx's reductions, which reduce every axis
+// given no options.
+call_error(context, serving, "serving_scalar_output", cat("it runs ", operation, ", which reduces every axis"), "") :-
+  serving_computation(_, serving, external, 0),
+  nx_reduction_of_every_axis(external, operation),
+  site_active(context, serving).
+
+// Over a batch the program says the shape of, an output leaf's first axis
+// is another size than the batch's.
+call_error(context, compile, "serving_output_batch_axis", cat("its output's first axis is ", spelled, ", where the batch axis should be"), "") :-
+  batched_run(context, compile, computation, batched),
+  output_off_batch(batched, computation, [first, _, _]),
+  size_spelled(first, spelled).
+
+// Over a batch the program says the shape of, an operation runs along the
+// batch axis, and the output keeps it first.
+call_error(context, site, "serving_mixes_batch", detail, "") :-
+  in_batched_run(batched, context, batch),
+  operates_along(context, site, operand, axis, detail),
+  axes_axis(operand, axis, batch, _),
+  !output_off_batch(batched, _, _).
+
+// An operation runs along the first axis of the batch the computation is
+// handed, whatever its rank, and is not all it returns.
+call_error(context, site, "serving_mixes_batch", detail, "") :-
+  batch_parameter(context, computation, path),
+  runs_along_first_axis(context, site, path, detail),
+  !returns_reduction_of_every_axis(computation, site),
+  !output_off_batch(_, computation, _).
+
+// ══ Batches that do not fit ═════════════════════════════════════════
+
+// A batch its serving, or Nx.Batch itself, cannot take, where `origin` is
+// the call that makes it: "serving_template_batch_size" and
+// "serving_template_type", a batch not of the template the computation is
+// compiled for ("argument at position 1 is not compatible with compiled
+// function template"); "batch_incompatible_entries", entries of different
+// templates ("cannot add to batch due to incompatible
+// tensors/containers"); "batch_scalar_entry", a scalar concatenated
+// ("cannot concatenate scalar tensor"); "batch_empty", a batch of no
+// entries run ("cannot run with empty Nx.Batch");
+// "serving_entry_shape_varies", entries of the shape of each request,
+// which a serving process cannot merge ("cannot merge batches due to
+// incompatible templates", which exits every caller in the batch and the
+// serving's supervisor).
+
+// The computation is compiled for a batch size, and the serving runs over
+// a batch of another, which nothing pads.
+call_error(context, compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), " and runs over a batch of ", to_string(entries)), "") :-
+  serving_compiled_template(context, compile, serving, _, size),
+  size > 0,
+  serving_batch(serving, batch),
+  listed_tensors(_, batch, "stack", entries, _),
+  entries != size,
+  !padded(serving).
+
+// The computation is compiled for a batch size, and a serving process
+// runs it, which runs smaller batches when its batch times out, and
+// nothing pads them.
+call_error(context, compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), ", and a serving process runs smaller ones when its batch times out"), "") :-
+  serving_compiled_template(context, compile, serving, _, size),
+  size > 1,
+  started(serving),
+  !padded(serving).
+
+// The computation is compiled for a type of number its batch's entries
+// are not.
+call_error(context, compile, "serving_template_type", cat("it is compiled for ", name, " and its batch's entries are ", class, "s"), "") :-
+  serving_compiled_template(context, compile, serving, template, _),
+  template_type(template, name, template_class),
+  entry_class(serving, class),
+  class != template_class.
+
+// A batch's entries do not share one template.
+call_error(context, site, "batch_incompatible_entries", cat("it gets entries of shapes ", first_shown, " and ", entry_shown), "") :-
+  entries_conflict(context, site, first, entry),
+  shape_shown(first, first_shown),
+  shape_shown(entry, entry_shown).
+
+// A batch concatenates a scalar, which has no first axis.
+call_error(context, site, "batch_scalar_entry", "it concatenates a scalar, which has no first axis to join", "") :-
+  entries_from(context, site, 1, _, [[nil, nil], _]).
+
+// A serving with the default preprocessing runs a batch that has no
+// entries on its way from where it is made.
+call_error(context, run, "batch_empty", "it is handed a batch with no entries", empty) :-
+  run_without_preprocessing(run, _),
+  run_argument(run, 1, function, kind, source),
+  batch_without_entries(function, kind, source, empty),
+  site_active(context, run).
+
+// A serving process's preprocessing makes its batch of the request as it
+// comes, under the one batch key.
+call_error(context, setting, "serving_entry_shape_varies", "its batch's entry is the request, whose shape the caller decides, so requests of other shapes meet in one batch", batch) :-
+  started(serving),
+  serving_preprocessing(serving, setting, function),
+  returns_first(function, kind, source),
+  comes_from(function, kind, source, batch),
+  batches_request(setting, batch),
+  !on_its_way(function, kind, source, "key", _),
+  site_active(context, setting).
+
+// ══ The serving API ═════════════════════════════════════════════════
+
+// A call of `Nx.Serving`'s handed what it cannot take, which Nx raises
+// for when the serving runs or starts: "serving_run_input",
+// "serving_preprocessing_result", "serving_builder_result",
+// "serving_computation_arity", "serving_postprocessing_input".
+
+// A serving with the default preprocessing, which takes only batches, is
+// run on a tensor.
+call_error(context, run, "serving_run_input", "it is handed a tensor, and the serving has no client preprocessing to make a batch of it", "") :-
+  run_without_preprocessing(run, _),
+  run_argument(run, 1, _, "result", made),
+  operation_site(made, _, _),
+  site_active(context, run).
+
+// A preprocessing returns a batch, not a `{batch, info}` pair.
+call_error(context, setting, "serving_preprocessing_result", "the preprocessing returns a batch, not a {batch, info} pair", "") :-
+  serving_callback(setting, "client_preprocessing", function, _),
+  returns_batch(function),
+  site_active(context, setting).
+
+// A preprocessing returns a tensor first in its pair, where the batch
+// goes.
+call_error(context, setting, "serving_preprocessing_result", "the preprocessing returns a tensor first in its pair, where the batch goes", "") :-
+  serving_callback(setting, "client_preprocessing", function, _),
+  returns_first(function, "result", made),
+  operation_site(made, _, _),
+  site_active(context, setting).
+
+// A builder returns a tensor, not a jitted or compiled function.
+call_error(context, serving, "serving_builder_result", "its builder returns a tensor, not a jitted or compiled function", "") :-
+  builder_returns(serving, made),
+  operation_site(made, _, _),
+  site_active(context, serving).
+
+// The computation takes more than the batch, after its captures.
+call_error(context, compile, "serving_computation_arity", cat("it compiles a function of ", to_string(arity - captured), " arguments, and a serving hands its computation one, the batch"), "") :-
+  serving_computation(_, compile, function, captured),
+  function_def(function, _, _, arity, _),
+  arity != captured + 1,
+  site_active(context, compile).
+
+// A two-argument postprocessing takes the `{output, metadata}` pair it is
+// handed as a tensor.
+call_error(context, site, "serving_postprocessing_input", "the postprocessing takes the output as a tensor, where it is handed an {output, metadata} pair", "") :-
+  callback_input(_, "client_postprocessing", context, path),
+  argument_unshaped(context, site, _, path).
+
+// ══ Words: servings and batches as values ═══════════════════════════
+
+// What a call of `Nx.Serving`'s or `Nx.Batch`'s does, by name: makes a
+// serving ("serving"); hands back its first argument, the serving or
+// batch, with a setting changed ("hands_back"); sets a preprocessing
+// ("preprocessing"); adds entries to a batch ("entries"), sets its key
+// ("key") or pads it ("pad").
+.decl api_role(module: symbol, name: symbol, role: symbol)
+api_role("Nx.Serving", "new", "serving"). api_role("Nx.Serving", "jit", "serving").
+api_role("Nx.Serving", "client_preprocessing", "hands_back").
+api_role("Nx.Serving", "client_preprocessing", "preprocessing").
+api_role("Nx.Serving", "client_postprocessing", "hands_back").
+api_role("Nx.Serving", "distributed_postprocessing", "hands_back").
+api_role("Nx.Serving", "batch_size", "hands_back"). api_role("Nx.Serving", "process_options", "hands_back").
+api_role("Nx.Serving", "defn_options", "hands_back"). api_role("Nx.Serving", "streaming", "hands_back").
+api_role("Nx.Batch", "pad", "hands_back"). api_role("Nx.Batch", "key", "hands_back").
+api_role("Nx.Batch", "stack", "hands_back"). api_role("Nx.Batch", "concatenate", "hands_back").
+api_role("Nx.Batch", "stack", "entries"). api_role("Nx.Batch", "concatenate", "entries").
+api_role("Nx.Batch", "key", "key"). api_role("Nx.Batch", "pad", "pad").
+
+// The value may be the result of `site`, a call of `Nx.Serving`'s or
+// `Nx.Batch`'s: directly, or through calls that hand back their first
+// argument, the program's calls and returns, and the arguments its calls
+// hand a parameter. Every such call on the way is a row, up to the one
+// that made the serving or batch. It runs forward from those calls, so
+// it holds only values that come from one.
+.decl comes_from(function: symbol, kind: symbol, source: symbol, site: symbol)
+comes_from(function, "result", site, site) :- remote_call(site, function, "Nx.Serving", _, _).
+comes_from(function, "result", site, site) :- remote_call(site, function, "Nx.Batch", _, _).
+comes_from(function, "result", site, origin) :-
+  comes_from(function, kind, source, origin),
+  flow_argument(site, function, 0, kind, source),
+  remote_call(site, function, module, name, _),
+  api_role(module, name, "hands_back").
+comes_from(caller, "result", site, origin) :-
+  comes_from(callee, kind, source, origin),
+  flow_return(callee, _, kind, source),
+  program_call(site, caller, callee).
+comes_from(callee, "param", to_string(position), origin) :-
+  comes_from(caller, kind, source, origin),
+  flow_argument(site, caller, position, kind, source),
+  program_call(site, caller, callee).
+
+// The value has on its way, from where it was made, a call of the role
+// at `site`: the call that made the serving, entries added, a key set, a
+// padding, a preprocessing.
+.decl on_its_way(function: symbol, kind: symbol, source: symbol, role: symbol, site: symbol)
+on_its_way(function, kind, source, role, site) :-
+  comes_from(function, kind, source, site),
+  remote_call(site, _, module, name, _),
+  api_role(module, name, role).
+
+// An argument `Nx.Serving.run/2` is handed: the serving, and its input.
+.decl run_argument(run: symbol, position: number, function: symbol, kind: symbol, source: symbol)
+run_argument(run, position, function, kind, source) :-
+  remote_call(run, function, "Nx.Serving", "run", 2),
+  flow_argument(run, function, position, kind, source).
+
+// A serving that is started as a process: the value of a `{:serving,
+// serving}` pair, as the options of `Nx.Serving.start_link/1` and a child
+// specification hold it.
+.decl started(serving: symbol)
+started(serving) :-
+  flow_field(function, pair, "{0}", "literal", ":serving"),
+  flow_field(function, pair, "{1}", kind, source),
+  on_its_way(function, kind, source, "serving", serving).
+
+// The function a fun argument runs, and how many values its closure
+// captures, which the function takes ahead of the arguments it is called
+// with: a closure the caller builds, or a literal external fun.
+.decl fun_demand(site: symbol, position: number)
+fun_demand(site, 0) :- remote_call(site, _, "Nx.Serving", name, _), api_role("Nx.Serving", name, "serving").
+fun_demand(compile, 0) :- builder_returns(_, compile).
+fun_demand(site, 1) :- remote_call(site, _, "Nx.Serving", "client_preprocessing", 2).
+fun_demand(site, 1) :- remote_call(site, _, "Nx.Serving", "client_postprocessing", 2).
+
+.decl fun_argument(site: symbol, position: number, function: symbol, captured: number)
+fun_argument(site, position, function, captured) :-
+  fun_demand(site, position),
+  flow_argument(site, caller, position, "object", closure),
+  flow_closure(closure, function),
+  flow_object(caller, closure, "closure", captured).
+fun_argument(site, position, function, 0) :-
+  fun_demand(site, position),
+  flow_argument(site, caller, position, "literal", _),
+  fun_handed(site, caller, function, position).
+
+// A call a builder handed to `Nx.Serving.new/1,2` returns the result of.
+.decl builder_returns(serving: symbol, made: symbol)
+builder_returns(serving, made) :-
+  remote_call(serving, _, "Nx.Serving", "new", _),
+  fun_argument(serving, 0, builder, _),
+  flow_return(builder, _, "result", made).
+
+// A callback `Nx.Serving.client_preprocessing/2` or
+// `client_postprocessing/2` sets, and how many values its closure
+// captures.
+.decl serving_callback(setting: symbol, name: symbol, function: symbol, captured: number)
+serving_callback(setting, name, function, captured) :-
+  remote_call(setting, _, "Nx.Serving", name, 2),
+  fun_argument(setting, 1, function, captured).
+
+// A canonical context of such a callback, and the path it names the
+// argument Nx hands it by: the request, or the output.
+.decl callback_input(setting: symbol, name: symbol, context: Context, path: symbol)
+callback_input(setting, name, context, cat("$", to_string(captured))) :-
+  serving_callback(setting, name, function, captured),
+  active(context, function),
+  context = $Canonical(function, _).
+
+// The preprocessing set on a serving.
+.decl serving_preprocessing(serving: symbol, setting: symbol, function: symbol)
+serving_preprocessing(serving, setting, function) :-
+  serving_callback(setting, "client_preprocessing", function, _),
+  flow_argument(setting, caller, 0, kind, source),
+  on_its_way(caller, kind, source, "serving", serving).
+
+// What a preprocessing returns first in the pair it builds.
+.decl returns_first(function: symbol, kind: symbol, source: symbol)
+returns_first(function, kind, source) :-
+  serving_callback(_, "client_preprocessing", function, _),
+  flow_return(function, _, "object", tuple),
+  flow_object(function, tuple, "tuple", 2),
+  flow_field(function, tuple, "{0}", kind, source).
+
+// A preprocessing returns a batch, which it makes or is handed.
+.decl returns_batch(function: symbol)
+returns_batch(function) :-
+  serving_callback(_, "client_preprocessing", function, _),
+  flow_return(function, _, kind, source),
+  comes_from(function, kind, source, batch),
+  remote_call(batch, _, "Nx.Batch", _, _).
+
+// A run of a serving no path to which sets a preprocessing.
+.decl run_without_preprocessing(run: symbol, serving: symbol)
+run_without_preprocessing(run, serving) :-
+  run_argument(run, 0, function, kind, source),
+  on_its_way(function, kind, source, "serving", serving),
+  !on_its_way(function, kind, source, "preprocessing", _).
+
+// The value is a batch made by `Nx.Batch.new/0`, with no entries added
+// on its way.
+.decl batch_without_entries(function: symbol, kind: symbol, source: symbol, empty: symbol)
+batch_without_entries(function, kind, source, empty) :-
+  run_argument(_, 1, function, kind, source),
+  comes_from(function, kind, source, empty),
+  remote_call(empty, _, "Nx.Batch", "new", 0),
+  !on_its_way(function, kind, source, "entries", _).
+
+// ══ Words: the computation and its batches ══════════════════════════
+
+// The call that compiles a serving's computation for its batches, the
+// function it compiles, and the position it takes the batch at: the
+// function `Nx.Serving.jit/1,2` is handed, which the call itself jits, or
+// the one a builder `Nx.Serving.new/1,2` is handed jits or compiles and
+// returns.
+.decl serving_computation(serving: symbol, compile: symbol, function: symbol, position: number)
+serving_computation(serving, serving, function, captured) :-
+  remote_call(serving, _, "Nx.Serving", "jit", _),
+  fun_argument(serving, 0, function, captured).
+serving_computation(serving, compile, function, captured) :-
+  builder_returns(serving, compile),
+  fun_argument(compile, 0, function, captured).
+
+// The computation, a function of the program that takes one argument
+// after its captures, compiled at `compile` in a context of the function
+// that compiles it.
+.decl compiled_for_serving(context: Context, compile: symbol, function: symbol)
+compiled_for_serving(context, compile, function) :-
+  serving_computation(_, compile, function, position),
+  function_def(function, _, _, position + 1, _),
+  site_active(context, compile).
+
+// A literal external fun of one of Nx's reductions, which reduces every
+// axis given no options.
+.decl nx_reduction_of_every_axis(function: symbol, operation: symbol)
+nx_reduction_of_every_axis(function, cat("Nx.", name, "/1")) :-
+  serving_computation(_, _, function, 0),
+  match("Nx:[a-z_]+/1", function),
+  name = substr(function, 3, strlen(function) - 5),
+  ( reduction(cat("Nx.", name)) ; axis_reduction(cat("Nx.", name)) ).
+
+// A list of tensors a call is handed: the entries of
+// `Nx.Batch.stack/1,2` and `Nx.Batch.concatenate/1,2`, and the templates
+// `Nx.Defn.compile/2,3` compiles a serving's computation for.
+.decl tensors_at(site: symbol, position: number, kind: symbol)
+tensors_at(site, arity - 1, name) :-
+  remote_call(site, _, "Nx.Batch", name, arity),
+  api_role("Nx.Batch", name, "entries").
+tensors_at(compile, 1, "template") :-
+  serving_computation(_, compile, _, _),
+  remote_call(compile, _, "Nx.Defn", "compile", _).
+
+read_site(site) :- tensors_at(site, _, _).
+list_demand(value, 0) :-
+  argument_value(_, site, position, value),
+  tensors_at(site, position, _).
+
+// Such a list, where every tensor of it has a known shape: how many, and
+// the tensors.
+.decl listed_tensors(context: Context, site: symbol, kind: symbol, length: number, tensors: Tensors)
+listed_tensors(context, site, kind, length, tensors) :-
+  argument_value(context, site, position, value),
+  tensors_at(site, position, kind),
+  list_tensors(value, length, tensors).
+.plan 1:(3,1,2)
+naming_demand($Tensor(first)) :- listed_tensors(_, _, _, _, [first, _]).
+
+// A batch the serving runs over, as a value of a function: one
+// `Nx.Serving.run/2` is handed where the serving has no preprocessing,
+// and one its preprocessing returns first in its pair.
+.decl serving_batch_value(serving: symbol, function: symbol, kind: symbol, source: symbol)
+serving_batch_value(serving, function, kind, source) :-
+  run_without_preprocessing(run, serving),
+  run_argument(run, 1, function, kind, source).
+serving_batch_value(serving, function, kind, source) :-
+  serving_preprocessing(serving, _, function),
+  returns_first(function, kind, source).
+
+// A list that gives the serving's batches their shape: the templates its
+// computation is compiled for, and the entries of a batch it runs over.
+.decl serving_batch(serving: symbol, site: symbol)
+serving_batch(serving, compile) :-
+  tensors_at(compile, _, "template"),
+  serving_computation(serving, compile, _, _).
+serving_batch(serving, batch) :-
+  serving_batch_value(serving, function, kind, source),
+  comes_from(function, kind, source, batch).
+
+// Some batch the serving runs over is padded.
+.decl padded(serving: symbol)
+padded(serving) :-
+  serving_batch_value(serving, function, kind, source),
+  on_its_way(function, kind, source, "pad", _).
+
+// The computation's arguments over a batch of a shape the program says:
+// what it captures by its own names, then the batch, whose first axis is
+// the batch size, a free size of the parameter's, ahead of the axes the
+// first tensor of a list that gives the batch its shape gives it, where
+// they name nothing of the context they are in: a stacked entry's axes,
+// and a concatenated entry's or a template's past its first.
+.decl batch_arguments_from(compile: symbol, function: symbol, position: number, arguments: Arguments)
+batch_arguments_from(compile, function, position, [$Tensor([nil, [batch, "nil", axes]]), nil]) :-
+  serving_computation(serving, compile, function, position),
+  function_def(function, _, _, position + 1, _),
+  serving_batch(serving, site),
+  listed_tensors(_, site, "stack", _, [first, _]),
+  nameless($Tensor(first)),
+  first = [nil, axes],
+  batch = [1, [cat("$", to_string(position), "#{0}"), nil]].
+.plan 1:(5,4,3,1,2)
+batch_arguments_from(compile, function, position, [$Tensor([nil, [batch, "nil", rest]]), nil]) :-
+  serving_computation(serving, compile, function, position),
+  function_def(function, _, _, position + 1, _),
+  serving_batch(serving, site),
+  listed_tensors(_, site, kind, _, [first, _]),
+  kind != "stack",
+  nameless($Tensor(first)),
+  first = [nil, [_, _, rest]],
+  batch = [1, [cat("$", to_string(position), "#{0}"), nil]].
+.plan 1:(5,4,3,1,2)
+batch_arguments_from(compile, function, next - 1, [$Opaque(cat("$", to_string(next - 1))), rest]) :-
+  batch_arguments_from(compile, function, next, rest),
+  next > 0.
+
+// The compile runs the computation over the batch, in a canonical context
+// of its own.
+invocation(context, compile, function, $Canonical(function, arguments)) :-
+  batch_arguments_from(compile, function, 0, arguments),
+  site_active(context, compile).
+.plan 1:(2,1)
+
+// The computation's context over a batch, and the context of the call
+// that compiles it.
+.decl batched_run(context: Context, compile: symbol, function: symbol, batched: Context)
+batched_run(context, compile, function, batched) :-
+  batch_arguments_from(compile, function, 0, arguments),
+  invocation(context, compile, function, batched),
+  batched = $Canonical(function, arguments).
+
+// A context of the computation over a batch, or of what it calls there,
+// which names the batch size as the computation does.
+.decl in_batched_run(batched: Context, context: Context, size: Size)
+in_batched_run(batched, batched, size) :-
+  batched_run(_, compile, function, batched),
+  serving_computation(_, compile, function, position),
+  size = [1, [cat("$", to_string(position), "#{0}"), nil]].
+in_batched_run(batched, $Called(site, context), size) :-
+  in_batched_run(batched, context, size),
+  invocation(context, site, _, $Called(site, context)).
+
+// A serving whose computation is compiled for templates: the call that
+// makes the first, and the size of its first axis, the batch's, where it
+// is known (0 where not).
+.decl serving_compiled_template(context: Context, compile: symbol, serving: symbol, template: symbol, size: number)
+serving_compiled_template(context, compile, serving, template, 0) :-
+  compiled_for_serving(context, compile, _),
+  tensors_at(compile, _, "template"),
+  serving_computation(serving, compile, _, _),
+  flow_argument(compile, caller, 1, "object", cell),
+  flow_field(caller, cell, "head", "result", template).
+serving_compiled_template(context, compile, serving, "", size) :-
+  compiled_for_serving(context, compile, _),
+  serving_computation(serving, compile, _, _),
+  listed_tensors(_, compile, "template", _, [[nil, [[size, nil], _, _]], _]),
+  size > 0.
+
+// The type an `Nx.template/2,3` call writes, and its class.
+.decl template_type(template: symbol, name: symbol, class: symbol)
+template_type(template, name, class) :-
+  serving_compiled_template(_, _, _, template, _),
+  operation_site(template, "Nx.template", _),
+  flow_argument(template, _, 1, "literal", spelled),
+  type_spelling(spelled, name, class).
+
+// A class of number the first entry of a batch can be, as a source of
+// the function that makes the batch, where the serving that runs over it
+// is compiled for a template of a written type.
+.decl entry_class(serving: symbol, class: symbol)
+entry_class(serving, class) :-
+  entry_asked(serving, context, function, kind, source),
+  value_class(context, function, kind, source, class, _).
+
+// The first entry of a batch a serving compiled for such a template runs
+// over, as a source of the function that makes the batch, in a context
+// it makes it in: the values whose class is asked.
+.decl entry_asked(serving: symbol, context: Context, function: symbol, kind: symbol, source: symbol)
+entry_asked(serving, context, function, kind, source) :-
+  serving_compiled_template(_, _, serving, template, _),
+  template_type(template, _, _),
+  serving_batch(serving, batch),
+  tensors_at(batch, position, entries),
+  entries != "template",
+  flow_argument(batch, function, position, "object", cell),
+  flow_field(function, cell, "head", kind, source),
+  site_active(context, batch).
+sign_demand(context, function, kind, source) :- entry_asked(_, context, function, kind, source).
+
+// The tensors of a list of entries from one on, and the first's axes;
+// `from` is the first axis the entries must agree from: 0 stacked, 1
+// concatenated.
+.decl entries_from(context: Context, site: symbol, from: number, first: Axes, tensors: Tensors)
+entries_from(context, site, 0, first, tensors) :-
+  listed_tensors(context, site, "stack", _, tensors),
+  tensors = [[nil, first], _].
+entries_from(context, site, 1, first, tensors) :-
+  listed_tensors(context, site, "concatenate", _, tensors),
+  tensors = [[nil, first], _].
+entries_from(context, site, from, first, rest) :-
+  entries_from(context, site, from, first, [_, rest]).
+axes_known(axes) :- entries_from(_, _, _, _, [[nil, axes], _]).
+spelling_demand(axes) :- entries_from(_, _, _, _, [[nil, axes], _]).
+
+// An entry Nx does not take as the first's template: of another rank, or
+// of another known size or name at an axis the entries must agree at.
+.decl entries_conflict(context: Context, site: symbol, first: Axes, entry: Axes)
+entries_conflict(context, site, first, entry) :-
+  entries_from(context, site, _, first, [[nil, entry], _]),
+  axes_rank(first, first_rank),
+  axes_rank(entry, entry_rank),
+  first_rank != entry_rank.
+entries_conflict(context, site, first, entry) :-
+  entries_from(context, site, from, first, [[nil, entry], _]),
+  axes_axis(first, axis, [first_size, nil], first_name),
+  axes_axis(entry, axis, [entry_size, nil], entry_name),
+  axis >= from,
+  ( first_size > 0, entry_size > 0, first_size != entry_size
+  ; first_name != entry_name, first_name != "nil", entry_name != "nil" ).
+
+// A preprocessing's batch whose first entry is the request it is handed,
+// or, in a canonical context of the preprocessing, a tensor of the
+// request's shape.
+.decl batches_request(setting: symbol, batch: symbol)
+batches_request(setting, batch) :-
+  serving_callback(setting, "client_preprocessing", function, captured),
+  tensors_at(batch, position, "stack"),
+  flow_argument(batch, function, position, "object", cell),
+  flow_field(function, cell, "head", "param", to_string(captured)).
+batches_request(setting, batch) :-
+  callback_input(setting, "client_preprocessing", context, path),
+  tensors_at(batch, position, "stack"),
+  argument_value(context, batch, position, cell),
+  list_head(cell, head),
+  head = $Opaque(path).
+
+// ══ Words: the output and operations along the batch axis ═══════════
+
+// An output leaf that does not keep the batch axis first: a scalar, or
+// one whose first axis is a size the code determines, other than the
+// batch size.
+.decl output_off_batch(batched: Context, function: symbol, axes: Axes)
+output_off_batch(batched, function, axes) :-
+  in_batched_run(batched, batched, batch),
+  output_leaf(batched, function, axes),
+  ( axes = nil, batch = [_, _]
+  ; axes = [first, _, _], first != batch, first = [coefficient, _], coefficient > 0 ).
+field_demand(value, selector) :-
+  invocation(_, compile, function, batched),
+  serving_computation(_, compile, function, _),
+  return_value(batched, function, value),
+  value = $Object(_, object, _),
+  flow_field(_, object, selector, _, _).
+.plan 1:(3,1,2,4)
+size_demand(first) :- output_off_batch(_, _, [first, _, _]).
+
+// A leaf of what the computation returns over a batch: a tensor, or a
+// tensor a tuple or map it builds holds.
+.decl output_leaf(batched: Context, function: symbol, axes: Axes)
+output_leaf(batched, function, axes) :-
+  batched_run(_, _, function, batched),
+  return_value(batched, function, $Tensor([nil, axes])).
+output_leaf(batched, function, axes) :-
+  batched_run(_, _, function, batched),
+  return_value(batched, function, value),
+  field_demand(value, selector),
+  field_value(value, selector, $Tensor([nil, axes])).
+
+// An operation over `operand` in the context that runs along its `axis`:
+// a reduction, a contraction, a sort or a cumulative operation. `detail`
+// says which.
+.decl operates_along(context: Context, site: symbol, operand: Axes, axis: number, detail: symbol)
+operates_along(context, site, first, axis, "it reduces the batch axis") :-
+  in_batched_run(_, context, _),
+  instance(context, site, [first, _, _], _),
+  reduction_axes(site, first, mask, _),
+  axis = range(0, 12),
+  (mask band (1 bshl axis)) != 0.
+operates_along(context, site, first, axis, "it reduces the batch axis") :-
+  in_batched_run(_, context, _),
+  instance(context, site, [first, _, _], _),
+  operation_site(site, operation, _),
+  axis_reduction(operation),
+  option(site, "axis", text, start),
+  term_axis(first, text, start, axis).
+operates_along(context, site, first, axis, "it sorts or accumulates along the batch axis") :-
+  in_batched_run(_, context, _),
+  instance(context, site, [first, _, _], _),
+  operation_site(site, operation, _),
+  axis_preserving(operation),
+  axis_option(site, "axis", first, axis).
+operates_along(context, site, operand, axis, "it contracts the batch axis") :-
+  in_batched_run(_, context, _),
+  instance(context, site, [first, second, third], _),
+  operation_site(site, "Nx.dot", _),
+  dot_mask(site, [first, second, third], role, mask, _),
+  ( role = "left_contract", operand = first ; role = "right_contract", operand = second ),
+  axis = range(0, 12),
+  (mask band (1 bshl axis)) != 0.
+
+// ══ Words: the computation over its own names ═══════════════════════
+
+// The computation's parameter that takes the batch, as the path its
+// canonical contexts name it by, there and in the `defn` body a wrapper
+// runs over it.
+.decl batch_parameter(context: Context, computation: symbol, path: symbol)
+batch_parameter(context, function, cat("$", to_string(position))) :-
+  serving_computation(_, _, function, position),
+  active(context, function),
+  context = $Canonical(function, _).
+batch_parameter(context, computation, path) :-
+  batch_parameter(_, computation, path),
+  defn_wrapper(computation, body),
+  active(context, body),
+  context = $Canonical(body, _).
+
+// An operation over the value at `path`, or a tensor of its shape, that
+// runs along its first axis whatever its rank: a reduction over every
+// axis or over axis 0, one that takes an axis given axis 0 or none, and a
+// sort or cumulative operation along axis 0, its default.
+.decl runs_along_first_axis(context: Context, site: symbol, path: symbol, detail: symbol)
+runs_along_first_axis(context, site, path, "it reduces the batch axis") :-
+  batch_parameter(context, _, path),
+  argument_unshaped(context, site, 0, path),
+  operation_site(site, operation, _),
+  reduction(operation),
+  ( option_absent(site, "axes") ; option(site, "axes", text, start), term_element_integer(text, start, _, 0) ).
+runs_along_first_axis(context, site, path, detail) :-
+  batch_parameter(context, _, path),
+  argument_unshaped(context, site, 0, path),
+  operation_site(site, operation, _),
+  ( axis_reduction(operation), detail = "it reduces the batch axis"
+  ; axis_preserving(operation), detail = "it sorts or accumulates along the batch axis" ),
+  ( option_absent(site, "axis") ; option_integer(site, "axis", 0) ).
+
+// The computation returns what a reduction over every axis makes,
+// whatever its argument: one written without axes, which it returns
+// itself or from a function it returns the result of, as a `defn`'s
+// wrapper returns its body's.
+.decl returns_reduction_of_every_axis(computation: symbol, site: symbol)
+returns_reduction_of_every_axis(computation, site) :-
+  serving_computation(_, _, computation, _),
+  ( flow_return(computation, _, "result", site)
+  ; flow_return(computation, _, "result", call), program_call(call, computation, callee), flow_return(callee, _, "result", site) ),
+  operation_site(site, operation, _),
+  ( reduction(operation), operation != "Nx.reduce", option_absent(site, "axes"), option_flag(site, "keep_axes", 0)
+  ; axis_reduction(operation), option_absent(site, "axis"), option_flag(site, "keep_axis", 0) ).

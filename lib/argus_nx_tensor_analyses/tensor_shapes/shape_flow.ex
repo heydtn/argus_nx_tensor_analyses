@@ -44,7 +44,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       code);
     * `flow_operation(object, operator)` — the BIF an operation applies;
     * `flow_closure(object, target)` — the function a closure runs, which
-      takes the captured values first;
+      takes the arguments it is called with first, then the captured
+      values;
     * `flow_field(func, object, selector, source_kind, source)` — the
       field `selector` of `object` may hold the source: `{i}` for a
       tuple's element, an operation's operand or a closure's captured
@@ -94,7 +95,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       :flow_field,
       :flow_base,
       :flow_sets,
-      :flow_load
+      :flow_load,
+      :flow_operand,
+      :flow_next
     ]
 
   @impl true
@@ -140,7 +143,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       end)
 
     function = Map.put(function, :guards, path_guards(function, outs))
-    Enum.reduce(indexes, facts, &emit(&2, function, &1, outs))
+    facts = Enum.reduce(indexes, facts, &emit(&2, function, &1, outs))
+
+    indexes
+    |> Enum.reduce(facts, &emit_operands(&2, function, &1, outs))
+    |> call_order(function)
   end
 
   # ── What an instruction writes ───────────────────────────────────────
@@ -840,4 +847,143 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
   defp load_id(function, index, selector), do: id(function, index) <> " " <> selector
 
   defp id(function, index), do: InstrId.mint(function.id, index)
+
+  # ── The operands of Elixir's operators and tests ─────────────────────
+  #
+  # `flow_operand(site, func, operator, position, source_kind, source)`:
+  # the instruction at `site` applies an Elixir operator or test to the
+  # source as its operand at `position`, a literal operand as a `literal`
+  # source. The operator is an arithmetic, comparison or boolean BIF
+  # outside a guard (where it would fail the guard rather than raise), by
+  # its name (`*`, `<`, `not`); `fconv`, which takes a term into float
+  # arithmetic (`/`, and the other operators on floats); a test that
+  # compares two terms, by the test's name (`is_lt`, `is_eq_exact`); or
+  # `select_val`, whose value is its operand 0 and whose choices, in order,
+  # the literals after it.
+
+  @host_operators [:+, :-, :*, :/, :div, :rem, :abs, :float, :trunc, :round, :ceil, :floor] ++
+                    [:bnot, :band, :bor, :bxor, :bsl, :bsr, :not, :and, :or, :xor] ++
+                    [:<, :>, :"=<", :>=, :==, :"/=", :"=:=", :"=/=", :min, :max]
+
+  @comparison_tests [:is_lt, :is_ge, :is_eq, :is_ne, :is_eq_exact, :is_ne_exact]
+
+  defp emit_operands(facts, function, index, outs),
+    do: operands(facts, function, index, outs, elem(function.code, index))
+
+  defp operands(facts, function, index, outs, {:bif, name, {:f, 0}, arguments, _destination})
+       when name in @host_operators,
+       do: operand_rows(facts, function, index, outs, Atom.to_string(name), arguments)
+
+  defp operands(
+         facts,
+         function,
+         index,
+         outs,
+         {:gc_bif, name, {:f, 0}, _live, arguments, _destination}
+       )
+       when name in @host_operators,
+       do: operand_rows(facts, function, index, outs, Atom.to_string(name), arguments)
+
+  defp operands(facts, function, index, outs, {:fconv, source, _destination}),
+    do: operand_rows(facts, function, index, outs, "fconv", [source])
+
+  defp operands(facts, function, index, outs, {:test, test, _fail, [_left, _right] = arguments})
+       when test in @comparison_tests,
+       do: operand_rows(facts, function, index, outs, Atom.to_string(test), arguments)
+
+  defp operands(facts, function, index, outs, {:select_val, operand, _fail, {:list, pairs}}) do
+    choices = for [choice, _label] <- Enum.chunk_every(pairs, 2), do: choice
+    operand_rows(facts, function, index, outs, "select_val", [operand | choices])
+  end
+
+  defp operands(facts, _function, _index, _outs, _instruction), do: facts
+
+  defp operand_rows(facts, function, index, outs, operator, arguments) do
+    site = id(function, index)
+
+    arguments
+    |> Enum.with_index()
+    |> Enum.reduce(facts, fn {argument, position}, acc ->
+      sourced(
+        acc,
+        :flow_operand,
+        [site, function.id, operator, Integer.to_string(position)],
+        value(function, index, outs, argument)
+      )
+    end)
+  end
+
+  # ── The order of calls and returns ───────────────────────────────────
+  #
+  # `flow_next(at, func, next)`: control can pass from the call at `at` to
+  # the call or return at `next` with no call or return between them, in
+  # one trip through `func`. The calls are the sites the facts above name
+  # (a function's, or a value's through `call_fun` or `apply`), and the
+  # returns the `return` instructions `flow_return` names, so a rule asks
+  # whether a use of a value comes after another in the words the value
+  # flow uses. The closure of this relation is the order between them: a
+  # rule takes it from the few calls it asks about.
+  #
+  # A trip follows `Argus.Cfg.Function.forward_succs/2`: an edge into a
+  # block that dominates its source closes a loop and is no flow. The BEAM
+  # loops within a function only in a receive; elsewhere each trip of a
+  # loop is a call of its own.
+
+  defp call_order(facts, %{cfg: nil}), do: facts
+
+  defp call_order(facts, function) do
+    blocks =
+      0..(tuple_size(function.code) - 1)//1
+      |> Enum.filter(&ordered_point?(function, &1))
+      |> Enum.group_by(&Argus.Cfg.Function.block_at(function.cfg, &1).id)
+
+    firsts = Map.new(blocks, fn {block, [first | _rest]} -> {block, first} end)
+
+    Enum.reduce(blocks, facts, fn {block, points}, acc ->
+      last = List.last(points)
+
+      successors =
+        function.cfg
+        |> Argus.Cfg.Function.forward_succs(Map.fetch!(function.cfg.blocks, block))
+        |> first_points(function.cfg, firsts, MapSet.new(), [])
+
+      points
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.concat(for successor <- successors, do: [last, successor])
+      |> Enum.reduce(acc, fn [from, to], rows ->
+        Facts.add_fact(rows, :flow_next, [id(function, from), function.id, id(function, to)])
+      end)
+    end)
+  end
+
+  # A call or a return: the instructions the value flow names as sites
+  # and returns.
+  defp ordered_point?(function, index) do
+    instruction = elem(function.code, index)
+
+    Map.has_key?(function.sites, index) or dynamic_call(instruction) != nil or
+      instruction == :return
+  end
+
+  # The first call or return in each block reached from `blocks` through
+  # blocks holding none.
+  defp first_points([], _cfg, _firsts, _seen, found), do: found
+
+  defp first_points([block | rest], cfg, firsts, seen, found) do
+    cond do
+      MapSet.member?(seen, block) ->
+        first_points(rest, cfg, firsts, seen, found)
+
+      Map.has_key?(firsts, block) ->
+        first_points(rest, cfg, firsts, MapSet.put(seen, block), [
+          Map.fetch!(firsts, block) | found
+        ])
+
+      true ->
+        cfg
+        |> Argus.Cfg.Function.forward_succs(Map.fetch!(cfg.blocks, block))
+        |> Enum.concat(rest)
+        |> first_points(cfg, firsts, MapSet.put(seen, block), found)
+    end
+  end
 end
