@@ -8,7 +8,7 @@ defmodule ArgusNxTensorAnalyses.MixProject do
     [
       app: :argus_nx_tensor_analyses,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description:
@@ -27,7 +27,7 @@ defmodule ArgusNxTensorAnalyses.MixProject do
 
   defp deps do
     [
-      {:argus_beam, "~> 0.20.0"},
+      {:argus_beam, "~> 0.20.1"},
       {:jason, "~> 1.4"},
       {:nx, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}

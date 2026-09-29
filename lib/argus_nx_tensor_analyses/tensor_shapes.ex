@@ -423,21 +423,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       Default: nil, no cache.
   """
   @spec solve([module() | Path.t()], Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def solve(modules, program \\ rules_file(), options \\ []) do
-    directory =
-      Path.join(System.tmp_dir!(), "tensor_shapes_#{System.unique_integer([:positive])}")
-
-    try do
-      with {:ok, _directory} <- extract(modules, directory) do
-        case Keyword.get(options, :cache) do
-          nil -> solve_rules(directory, program)
-          cache -> solve_cached(directory, program, cache)
-        end
-      end
-    after
-      File.rm_rf!(directory)
-    end
-  end
+  def solve(modules, program \\ rules_file(), options \\ []),
+    do: with_facts(modules, &solve_facts(&1, program, options))
 
   @doc """
   Solves the program over the modules (atoms or `.beam` paths) and returns
@@ -446,18 +433,36 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   """
   @spec run([module() | Path.t()], keyword()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
   def run(modules, options \\ []) do
-    with {:ok, rows} <- solve(modules, rules_file(), options) do
-      findings = Findings.build(__MODULE__, rows)
+    solved =
+      with_facts(modules, fn directory ->
+        with {:ok, rows} <- solve_facts(directory, rules_file(), options),
+             do: {:ok, rows, Argus.Lines.from_facts_dir(directory)}
+      end)
+
+    with {:ok, rows, lines} <- solved do
       beams = beams(modules)
-
-      lines =
-        findings
-        |> Enum.flat_map(&[&1.module | Enum.map(&1.related, fn frame -> frame.module end)])
-        |> Enum.uniq()
-        |> Enum.flat_map(&line_rows(Map.get(beams, &1)))
-        |> then(&Argus.Lines.from_facts(%{line_info: &1}))
-
+      findings = Findings.build(__MODULE__, rows)
       {:ok, Enum.map(findings, &place(&1, beams, lines))}
+    end
+  end
+
+  # Extracts the modules into a directory of facts, hands it to `solve`,
+  # and removes it.
+  defp with_facts(modules, solve) do
+    directory =
+      Path.join(System.tmp_dir!(), "tensor_shapes_#{System.unique_integer([:positive])}")
+
+    try do
+      with {:ok, directory} <- extract(modules, directory), do: solve.(directory)
+    after
+      File.rm_rf!(directory)
+    end
+  end
+
+  defp solve_facts(directory, program, options) do
+    case Keyword.get(options, :cache) do
+      nil -> solve_rules(directory, program)
+      cache -> solve_cached(directory, program, cache)
     end
   end
 
@@ -566,40 +571,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
 
   defp source_path(nil), do: nil
   defp source_path(source), do: List.to_string(source)
-
-  # A module's `line_info` rows, stamped as Argus's emitter stamps them: a
-  # line marker sets the line for the instructions after it, and one with
-  # no location leaves them without one. Argus's own rows are empty under
-  # OTP 29, whose disassembler resolves a marker to its location, where
-  # the emitter reads a reference into the Line chunk, as OTP 28's gives.
-  defp line_rows(nil), do: []
-
-  defp line_rows(%{path: path}) do
-    {:ok, %{module: module, functions: functions, line_table: table}} =
-      Argus.Pipeline.Disassemble.disassemble_path(path)
-
-    for {:function, name, arity, _entry, instructions} <- functions,
-        function <- [Argus.InstrId.func_id(module, name, arity)],
-        row <- stamped(function, instructions, table),
-        do: row
-  end
-
-  defp stamped(function, instructions, table) do
-    {rows, _line} =
-      instructions
-      |> Enum.with_index()
-      |> Enum.flat_map_reduce(nil, fn
-        {{:line, marker}, _index}, _current -> {[], marker_line(marker, table)}
-        {_instruction, _index}, nil -> {[], nil}
-        {_instruction, index}, line -> {[[Argus.InstrId.mint(function, index), "#{line}"]], line}
-      end)
-
-    rows
-  end
-
-  defp marker_line([{:location, _file, line} | _rest], _table), do: line
-  defp marker_line(reference, table) when is_integer(reference), do: Map.get(table, reference)
-  defp marker_line(_none, _table), do: nil
 
   defp place(finding, beams, lines) do
     %Argus.Located{
