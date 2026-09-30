@@ -3247,23 +3247,28 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   # Lint cases, and modules of their own compiled with the fixtures.
   @lint_cases_consumption [
     # a key drawn from twice, and the key threaded through
-    {{:finds, {"tensor_call_error", "reused_key", "Nx.Random.uniform after Nx.Random.uniform"},
-      :finite},
+    {{:finds,
+      {"tensor_call_error", "reused_key",
+       "Nx.Random.uniform after Nx.Random.uniform from the result of Nx.Random.key/1"}, :finite},
      "key = Nx.Random.key(42)\n{a, _} = Nx.Random.uniform(key)\n{b, _} = Nx.Random.uniform(key)\nNx.subtract(a, b)"},
     {{:finds_none, :finite},
      "key = Nx.Random.key(42)\n{a, key} = Nx.Random.uniform(key)\n{b, _} = Nx.Random.uniform(key)\nNx.subtract(a, b)"},
     # two samplers on one key, as a variable or a part of a split, and on two parts
-    {{:finds, {"tensor_call_error", "reused_key", "Nx.Random.normal after Nx.Random.uniform"},
-      :finite},
+    {{:finds,
+      {"tensor_call_error", "reused_key",
+       "Nx.Random.normal after Nx.Random.uniform from the result of Nx.Random.key/1"}, :finite},
      "key = Nx.Random.key(42)\n{a, _} = Nx.Random.uniform(key, shape: {4})\n{b, _} = Nx.Random.normal(key, shape: {4})\nNx.add(a, b)"},
-    {{:finds, {"tensor_call_error", "reused_key", "Nx.Random.normal after Nx.Random.uniform"},
+    {{:finds,
+      {"tensor_call_error", "reused_key",
+       "Nx.Random.normal after Nx.Random.uniform from the result of Nx.Random.split/1[0]"},
       :finite},
      "keys = Nx.Random.split(Nx.Random.key(42))\n{a, _} = Nx.Random.uniform(keys[0], shape: {4})\n{b, _} = Nx.Random.normal(keys[0], shape: {4})\nNx.add(a, b)"},
     {{:finds_none, :finite},
      "keys = Nx.Random.split(Nx.Random.key(42))\n{a, _} = Nx.Random.uniform(keys[0], shape: {4})\n{b, _} = Nx.Random.normal(keys[1], shape: {4})\nNx.add(a, b)"},
     # a key split, then drawn from itself
-    {{:finds, {"tensor_call_error", "reused_key", "Nx.Random.uniform after Nx.Random.split"},
-      :finite},
+    {{:finds,
+      {"tensor_call_error", "reused_key",
+       "Nx.Random.uniform after Nx.Random.split from the result of Nx.Random.key/1"}, :finite},
      "key = Nx.Random.key(42)\nkeys = Nx.Random.split(key)\n{a, _} = Nx.Random.uniform(key)\n{a, keys}"},
     # two keys made of one written seed, and of two
     {{:finds,
@@ -3293,29 +3298,31 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :finite},
      "{rows, _key} = Enum.map_reduce(1..3, Nx.Random.key(42), fn _, key -> Nx.Random.uniform(key) end)\nrows"},
     # a function that returns the key it drew from, and one that returns the new key
-    {{:finds, {"tensor_call_error", "spent_key_returned", "Nx.Random.uniform"}, :finite},
+    {{:finds,
+      {"tensor_call_error", "spent_key_returned",
+       "Nx.Random.uniform from the result of Nx.Random.key/1"}, :finite},
      "key = Nx.Random.key(42)\n{sample, _} = Nx.Random.uniform(key)\n{sample, key}"},
     {{:finds_none, :finite},
      "key = Nx.Random.key(42)\n{sample, key} = Nx.Random.uniform(key)\n{sample, key}"},
     # a tensor read after a transfer freed it, and the tensor the transfer returns
-    {{:finds, {"tensor_call_error", "used_after_transfer", "read"}, :accepted},
-     "x = Nx.iota({3})\n_ = Nx.backend_transfer(x)\nNx.add(x, 1)"},
+    {{:finds, {"tensor_call_error", "used_after_transfer", "read the result of Nx.iota/1"},
+      :accepted}, "x = Nx.iota({3})\n_ = Nx.backend_transfer(x)\nNx.add(x, 1)"},
     {{:finds_none, :finite}, "x = Nx.iota({3})\nx = Nx.backend_transfer(x)\nNx.add(x, 1)"},
-    {{:finds, {"tensor_call_error", "used_after_transfer", "read"}, :accepted},
+    {{:finds, {"tensor_call_error", "used_after_transfer", "read argument 2"}, :accepted},
      "_ = inspect(Nx.backend_transfer(t))\nNx.multiply(t, 2)"},
-    {{:finds, {"tensor_call_error", "used_after_transfer", "read"}, :accepted},
+    {{:finds, {"tensor_call_error", "used_after_transfer", "read argument 2"}, :accepted},
      "_ = Nx.backend_transfer(t, Nx.BinaryBackend)\nNx.sum(t)"},
-    {{:finds, {"tensor_call_error", "used_after_transfer", "returned"}, :accepted},
+    {{:finds, {"tensor_call_error", "used_after_transfer", "returned argument 2"}, :accepted},
      "_ = Nx.backend_transfer(t)\nt"},
     # its shape is in the struct, which the transfer leaves
     {{:finds_none, :finite}, "_ = Nx.backend_transfer(t)\nNx.shape(t)"},
     # a tensor read after it is deallocated, and read before
-    {{:finds, {"tensor_call_error", "used_after_deallocation", "read"}, :accepted},
-     "x = Nx.iota({3})\nNx.backend_deallocate(x)\nNx.sum(x)"},
+    {{:finds, {"tensor_call_error", "used_after_deallocation", "read the result of Nx.iota/1"},
+      :accepted}, "x = Nx.iota({3})\nNx.backend_deallocate(x)\nNx.sum(x)"},
     {{:finds_none, :finite},
      "x = Nx.iota({3})\ntotal = Nx.sum(x)\nNx.backend_deallocate(x)\ntotal"},
     # a tensor read after a JIT call it was donated to, and what the call returns
-    {{:finds, {"tensor_call_error", "used_after_donation", "read"}, :accepted},
+    {{:finds, {"tensor_call_error", "used_after_donation", "read argument 2"}, :accepted},
      "doubled = Nx.Defn.jit(&Nx.multiply(&1, 2))\n_ = doubled.(Nx.donatable(t))\nNx.add(t, 1)"},
     {{:finds_none, :finite},
      "doubled = Nx.Defn.jit(&Nx.multiply(&1, 2))\nt = doubled.(Nx.donatable(t))\nNx.add(t, 1)"}
@@ -5284,7 +5291,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert Nx.to_flat_list(first) == Nx.to_flat_list(second)
 
     assert consumption_findings(rows, "drawn_twice") == [
-             {"reused_key", "Nx.Random.uniform after Nx.Random.uniform"}
+             {"reused_key", "Nx.Random.uniform after Nx.Random.uniform from argument 1"}
            ]
 
     {first, second} = consume(:drawn_threaded, [key])
@@ -5318,7 +5325,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert Nx.to_flat_list(Nx.argsort(uniform)) == Nx.to_flat_list(Nx.argsort(normal))
 
     assert consumption_findings(rows, "normal_after_uniform") == [
-             {"reused_key", "Nx.Random.normal after Nx.Random.uniform"}
+             {"reused_key", "Nx.Random.normal after Nx.Random.uniform from argument 1"}
            ]
   end
 
@@ -5335,7 +5342,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert Nx.to_flat_list(first) == Nx.to_flat_list(second)
 
     assert consumption_findings(rows, "field_drawn_twice") == [
-             {"reused_key", "Nx.Random.uniform after Nx.Random.uniform"}
+             {"reused_key", "Nx.Random.uniform after Nx.Random.uniform from argument 1.key"}
            ]
   end
 
@@ -5345,7 +5352,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
     assert consumption_findings(rows, "recursive_rows") == [
              {"reused_key",
-              "#{inspect(@consumption_fixtures)}.recursive_rows after Nx.Random.uniform"}
+              "#{inspect(@consumption_fixtures)}.recursive_rows after Nx.Random.uniform from argument 1"}
            ]
 
     assert :recursive_threaded_rows
@@ -5411,14 +5418,17 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {sample, returned} = consume(:spent, [key])
     {again, _key} = Nx.Random.uniform(returned, shape: {4})
     assert Nx.to_flat_list(again) == Nx.to_flat_list(sample)
-    assert consumption_findings(rows, "spent") == [{"spent_key_returned", "Nx.Random.uniform"}]
+
+    assert consumption_findings(rows, "spent") == [
+             {"spent_key_returned", "Nx.Random.uniform from argument 1"}
+           ]
 
     state = consume(:spent_in_state, [%{key: key, sample: nil}])
     {again, _key} = Nx.Random.uniform(state.key, shape: {4})
     assert Nx.to_flat_list(again) == Nx.to_flat_list(state.sample)
 
     assert consumption_findings(rows, "spent_in_state") == [
-             {"spent_key_returned", "Nx.Random.uniform"}
+             {"spent_key_returned", "Nx.Random.uniform from argument 1.key"}
            ]
 
     state = consume(:threaded_state, [%{key: key, sample: nil}])
@@ -5431,12 +5441,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert Nx.to_flat_list(again) == Nx.to_flat_list(sample)
 
     assert consumption_findings(rows, "sample_reply") == [
-             {"spent_key_returned", "Nx.Random.uniform"}
+             {"spent_key_returned", "Nx.Random.uniform from argument 1.key"}
            ]
   end
 
   test "a state handed back holding the tensor a transfer freed", %{rows: rows} do
-    assert consumption_findings(rows, "host_reply") == [{"used_after_transfer", "returned"}]
+    assert consumption_findings(rows, "host_reply") == [
+             {"used_after_transfer", "returned argument 1.tensor"}
+           ]
+
     assert consumption_findings(rows, "host_reply_updated") == []
   end
 
@@ -5444,14 +5457,16 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     rows: rows
   } do
     assert consumption_findings(rows, "transfer_then_helper") == [
-             {"used_after_transfer", "handed_on"}
+             {"used_after_transfer", "handed_on argument 1"}
            ]
 
     assert consumption_findings(rows, "deallocate_then_defn") == [
-             {"used_after_deallocation", "read"}
+             {"used_after_deallocation", "read argument 1"}
            ]
 
-    assert consumption_findings(rows, "transfer_container") == [{"used_after_transfer", "read"}]
+    assert consumption_findings(rows, "transfer_container") == [
+             {"used_after_transfer", "read argument 2"}
+           ]
   end
 
   test "a read of a freed tensor is an error, and a key drawn from twice a warning", %{

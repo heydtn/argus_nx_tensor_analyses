@@ -333,13 +333,14 @@ holds_mark(function, "object", object, mark) :-
   holds_mark(function, kind, source, mark),
   flow_field(function, object, _, kind, source).
 
-// A tensor whose memory the call `freed` frees, by name, the call a
-// finding points back to, and the kind a later use of it reports.
-.decl frees_memory(freed: symbol, origin: symbol, function: symbol, tensor: symbol, kind: symbol)
-frees_memory(site, site, function, tensor, kind) :-
+// A tensor whose memory the call `freed` frees, by name and by the source
+// the call reads it from, the call a finding points back to, and the kind
+// a later use of it reports.
+.decl frees_memory(freed: symbol, origin: symbol, function: symbol, tensor: symbol, kind: symbol, source_kind: symbol, source: symbol)
+frees_memory(site, site, function, tensor, kind, source_kind, source) :-
   frees_tensor(site, function, source_kind, source, kind),
   value_named(function, source_kind, source, tensor).
-frees_memory(call, mark, function, tensor, "used_after_donation") :-
+frees_memory(call, mark, function, tensor, "used_after_donation", "result", mark) :-
   donates(call, function, mark),
   value_named(function, "result", mark, tensor).
 
@@ -388,19 +389,62 @@ uses_tensor(use, function, tensor, "handed_on") :-
 uses_tensor(at, function, tensor, "returned") :- return_holds(at, function, tensor).
 
 // A tensor used after a call that freed its memory: EMLX and EXLA raise
-// on reading it.
-.decl freed_tensor_used(use: symbol, freed: symbol, origin: symbol, function: symbol, kind: symbol, how: symbol)
-freed_tensor_used(use, freed, origin, function, kind, how) :-
-  frees_memory(freed, origin, function, tensor, kind),
+// on reading it. `source_kind` and `source` are where the call that freed
+// it read it.
+.decl freed_tensor_used(use: symbol, freed: symbol, origin: symbol, function: symbol, kind: symbol, how: symbol, source_kind: symbol, source: symbol)
+freed_tensor_used(use, freed, origin, function, kind, how, source_kind, source) :-
+  frees_memory(freed, origin, function, tensor, kind, source_kind, source),
   uses_tensor(use, function, tensor, how),
   runs_later(freed, use).
 
+// ══ Values as a finding names them ═══════════════════════════════════
+
+// A spent value as a finding names it, from the source a call that spends
+// it reads it from: a parameter by its place (`argument 1`), but one a
+// closure captured; an Nx call's result by the call (`the result of
+// Nx.Random.key/1`); a field read, or a renaming call's result, after what
+// it reads (`argument 1.key`, `argument 1{0}`, `argument 1[0]`). A value
+// a reader sees no name for (a captured one, a result of the program's own
+// function, a term the function builds) has none, nor has what is read
+// from one. Asked of the values the rules name.
+.decl value_spelled(function: symbol, kind: symbol, source: symbol, spelled: symbol)
+value_spelled(function, "param", position, cat("argument ", to_string(to_number(position) + 1))) :-
+  value_name_demand(function, "param", position),
+  !captured_parameter(_, _, function, to_number(position)).
+value_spelled(function, "result", site, cat("the result of ", operation, "/", to_string(arity))) :-
+  value_name_demand(function, "result", site),
+  operation_site(site, operation, arity),
+  !renames_value(site, function, _).
+value_spelled(function, "result", site, cat(base, suffix)) :-
+  value_name_demand(function, "result", site),
+  renames_value(site, function, suffix),
+  argument_source(site, function, 0, kind, source),
+  value_spelled(function, kind, source, base),
+  strlen(base) < 240.
+value_spelled(function, "load", load, cat(base, suffix)) :-
+  value_name_demand(function, "load", load),
+  flow_load(function, load, selector, kind, source),
+  value_spelled(function, kind, source, base),
+  strlen(base) < 240,
+  selector_suffix(selector, suffix).
+
+
 // ══ Findings ═════════════════════════════════════════════════════════
 
+// A spent key's finding names the draws, then the key, where exactly one
+// of the sources the draw reads it from has a name: a finding is one per
+// detail, and a key read from a field has a source of Elixir's own too.
+call_error(second, "reused_key", cat(shown, " after ", first_shown, " from ", spelled), first) :-
+  reused_key(first, second, function),
+  consumes_key(second, function, kind, source, shown),
+  consumes_key(first, function, _, _, first_shown),
+  value_spelled(function, kind, source, spelled),
+  1 = count : { consumes_key(second, function, other_kind, other_source, _), value_spelled(function, other_kind, other_source, other) }.
 call_error(second, "reused_key", cat(shown, " after ", first_shown), first) :-
   reused_key(first, second, function),
   consumes_key(second, function, _, _, shown),
-  consumes_key(first, function, _, _, first_shown).
+  consumes_key(first, function, _, _, first_shown),
+  1 != count : { consumes_key(second, function, other_kind, other_source, _), value_spelled(function, other_kind, other_source, other) }.
 // Two keys made of one written seed, each drawn from, one draw after the
 // other on some path: `Nx.Random.key/1` makes equal keys of equal seeds,
 // so the draws get the same bits.
@@ -415,7 +459,21 @@ call_error(draw, "captured_loop_key", shown, loop) :-
 call_error(draw, "passed_back_key", shown, loop) :-
   key_passed_back(draw, loop, body),
   consumes_key(draw, body, _, _, shown).
+call_error(return, "spent_key_returned", cat(shown, " from ", spelled), draw) :-
+  spent_key_returned(return, draw, function),
+  consumes_key(draw, function, kind, source, shown),
+  value_spelled(function, kind, source, spelled),
+  1 = count : { consumes_key(draw, function, other_kind, other_source, _), value_spelled(function, other_kind, other_source, other) }.
 call_error(return, "spent_key_returned", shown, draw) :-
   spent_key_returned(return, draw, function),
-  consumes_key(draw, function, _, _, shown).
-call_error(use, kind, how, origin) :- freed_tensor_used(use, _, origin, _, kind, how).
+  consumes_key(draw, function, _, _, shown),
+  1 != count : { consumes_key(draw, function, other_kind, other_source, _), value_spelled(function, other_kind, other_source, other) }.
+// A freed tensor's finding names how it is used, then the tensor, where
+// exactly one freed tensor the use reads has a name.
+call_error(use, kind, cat(how, " ", spelled), origin) :-
+  freed_tensor_used(use, _, origin, function, kind, how, source_kind, source),
+  value_spelled(function, source_kind, source, spelled),
+  1 = count : { freed_tensor_used(use, _, _, function, kind, how, other_kind, other_source), value_spelled(function, other_kind, other_source, other) }.
+call_error(use, kind, how, origin) :-
+  freed_tensor_used(use, _, origin, function, kind, how, _, _),
+  1 != count : { freed_tensor_used(use, _, _, function, kind, how, other_kind, other_source), value_spelled(function, other_kind, other_source, other) }.
