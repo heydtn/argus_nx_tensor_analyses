@@ -6,8 +6,7 @@ defmodule ArgusNxTensorAnalyses.Categories do
   # it holds. A finding is in its kind's category; a report relation whose
   # rows carry no kind is a kind of its own.
 
-  # Each category, in the order a run lists them, with its kinds in the
-  # order `docs/checks.md` lists them.
+  # Each category, in the order a run lists them, with the kinds it holds.
   @categories [
     nx_shapes: %{
       description:

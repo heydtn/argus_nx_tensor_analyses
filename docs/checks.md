@@ -22,16 +22,18 @@ reported as a warning when its finding is on some path: a mismatch whose
 text says "on some path", a type error whose operand is a float or
 complex only on some paths, or a container that "can hold" a bad value.
 
-Each finding carries a kind, the string in the tables below. `tensor_shapes`
-reports its findings in `tensor_shape_mismatch`,
-`tensor_axis_misalignment`, `tensor_nonfinite_result`, `tensor_type_error`
-and `tensor_call_error`, and `tensor_emlx` in `tensor_emlx_divergence` and
-`tensor_emlx_mixed_backends`.
+Each finding carries a kind, the string in the tables below, and is
+reported under the category of the section its kind is in
+(`error[argus.nx_shapes]`). A run reports the categories it selects: by
+default every one but `emlx`. The Nx categories' findings are rows of
+`tensor_shape_mismatch`, `tensor_axis_misalignment`,
+`tensor_nonfinite_result`, `tensor_type_error` and `tensor_call_error`,
+and `emlx`'s of `tensor_emlx_divergence` and `tensor_emlx_mixed_backends`.
 
 In the examples, `t` is a tensor and `config` a map that the function is
 handed, whose contents the analysis cannot see. `key` is a random key.
 
-## `tensor_shapes`
+## `nx_shapes`: shapes, tensor access and tuples
 
 ### Shapes
 
@@ -91,7 +93,31 @@ handed, whose contents the analysis cannot see. `key` is a random key.
 A shape the analysis cannot follow gives no finding. `Nx.template/2` of a
 size 0 is not reported: Nx builds it.
 
-### Axis alignment
+### Tensor access and tuples
+
+| Kind | Severity | Catches | Example |
+|---|---|---|---|
+| `access_scalar` | error | Indexing a scalar. | `Nx.sum(Nx.iota({4}))[0]` |
+| `access_out_of_bounds` | error | A written index or range bound outside its axis. | `Nx.iota({4, 5})[4]` |
+| `access_negative_step` | error | A range that steps backwards, as `1..-1` does, and as `0..(k - 1)` does in a `defn` where `k` is 0: a Kernel operator on two numbers computes a number. | `Nx.iota({4, 5})[1..-1//-1]` |
+| `access_empty_range` | error | A range that holds no index of its axis. | `Nx.iota({4, 5})[3..1//1]` |
+| `access_too_many_indices` | error | More indices than the tensor has axes. | `Nx.iota({4, 5})[[0, 0, 0]]` |
+| `access_unknown_name` | error | A name the tensor has no axis for. | `Nx.iota({4, 5}, names: [:a, :b])[c: 1]` |
+| `access_duplicate_name` | error | One axis named twice. | `Nx.iota({4, 5}, names: [:a, :b])[[a: 1, a: 0]]` |
+| `access_float_index` | error | A float index. | `Nx.iota({4, 5})[1.0]` |
+| `access_float_index_tensor` | error | A float tensor as the index. | `Nx.iota({4, 5})[Nx.divide(Nx.iota({2}), 2)]` |
+| `access_tensor_in_list` | error | A tensor with axes in a list of indices. | `Nx.iota({4, 5})[[Nx.iota({2})]]` |
+| `access_update` | error | `put_in`, `update_in`, `get_and_update_in` or `pop_in` on a tensor. | `x = Nx.iota({4, 5}); put_in(x[0], Nx.iota({5}))` |
+| `access_index_clamped` | warning | A written scalar tensor index outside its axis, which Nx clamps rather than raising. | `Nx.iota({4, 5})[Nx.tensor(7)]` |
+| `tuple_as_tensor` | error | A tuple of tensors (from `split`, `top_k`, a sampler, a decomposition, or one the code builds) where a tensor goes. | `Nx.add(Nx.top_k(Nx.iota({4}), k: 2), 1)` |
+| `tensors_in_tensor_data` | error | `Nx.tensor/2` given a list that holds tensors. | `Nx.tensor([Nx.sum(Nx.iota({2})), Nx.sum(Nx.iota({3}))])` |
+
+`t[key]` gets the shape Nx gives it, inside `defn` and out, and so do the
+elements of the tuples Nx returns (the `Nx.Random` samplers, the
+`Nx.LinAlg` decompositions, `Nx.split`), so both meet the shape checks.
+The halves of a float `Nx.split` have sizes that are not known.
+
+## `nx_names`: axis alignment
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -105,6 +131,8 @@ A size only an input's shape decides (`Nx.axis_size(t, 0)`) is none of the
 code's variables and meets anything. `reshape_order` leaves out splits and
 merges in place, literal factors (a pixel shuffle), and a reshape with a
 size it does not know or a variable on several axes of one side.
+
+## `nx_math`: infinities, NaNs and unchecked operands
 
 ### Values that turn infinite or NaN
 
@@ -144,7 +172,7 @@ definite finding gets no unchecked one. A sample of `Nx.Random.uniform` or
 `randint` has its bounds' signs, so the logarithm of
 `uniform(key, -1.0, 1.0)` is unchecked.
 
-### Types and literals
+## `nx_types`: types and literals
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -191,7 +219,7 @@ such a type one for each type.
 Literals are read by their spelling, so integers of any size compare
 exactly, and a value known only at run time is not checked.
 
-### Options
+## `nx_options`: options
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -212,7 +240,7 @@ the pair
 (`if is_list(axes), do: axes, else: [axes]`) is not taken for the value.
 `Nx.reshape/3` does not check its options, so it is not reported.
 
-### Indices, slices and ranges
+## `nx_indices`: indices, slices and ranges
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -232,31 +260,7 @@ A finding says why the value can be negative and points at the call that
 makes it so. Integer arithmetic outside Nx (`Nx.axis_size(t, 0) - 1`) is
 not checked.
 
-### Tensor access and tuples
-
-| Kind | Severity | Catches | Example |
-|---|---|---|---|
-| `access_scalar` | error | Indexing a scalar. | `Nx.sum(Nx.iota({4}))[0]` |
-| `access_out_of_bounds` | error | A written index or range bound outside its axis. | `Nx.iota({4, 5})[4]` |
-| `access_negative_step` | error | A range that steps backwards, as `1..-1` does, and as `0..(k - 1)` does in a `defn` where `k` is 0: a Kernel operator on two numbers computes a number. | `Nx.iota({4, 5})[1..-1//-1]` |
-| `access_empty_range` | error | A range that holds no index of its axis. | `Nx.iota({4, 5})[3..1//1]` |
-| `access_too_many_indices` | error | More indices than the tensor has axes. | `Nx.iota({4, 5})[[0, 0, 0]]` |
-| `access_unknown_name` | error | A name the tensor has no axis for. | `Nx.iota({4, 5}, names: [:a, :b])[c: 1]` |
-| `access_duplicate_name` | error | One axis named twice. | `Nx.iota({4, 5}, names: [:a, :b])[[a: 1, a: 0]]` |
-| `access_float_index` | error | A float index. | `Nx.iota({4, 5})[1.0]` |
-| `access_float_index_tensor` | error | A float tensor as the index. | `Nx.iota({4, 5})[Nx.divide(Nx.iota({2}), 2)]` |
-| `access_tensor_in_list` | error | A tensor with axes in a list of indices. | `Nx.iota({4, 5})[[Nx.iota({2})]]` |
-| `access_update` | error | `put_in`, `update_in`, `get_and_update_in` or `pop_in` on a tensor. | `x = Nx.iota({4, 5}); put_in(x[0], Nx.iota({5}))` |
-| `access_index_clamped` | warning | A written scalar tensor index outside its axis, which Nx clamps rather than raising. | `Nx.iota({4, 5})[Nx.tensor(7)]` |
-| `tuple_as_tensor` | error | A tuple of tensors (from `split`, `top_k`, a sampler, a decomposition, or one the code builds) where a tensor goes. | `Nx.add(Nx.top_k(Nx.iota({4}), k: 2), 1)` |
-| `tensors_in_tensor_data` | error | `Nx.tensor/2` given a list that holds tensors. | `Nx.tensor([Nx.sum(Nx.iota({2})), Nx.sum(Nx.iota({3}))])` |
-
-`t[key]` gets the shape Nx gives it, inside `defn` and out, and so do the
-elements of the tuples Nx returns (the `Nx.Random` samplers, the
-`Nx.LinAlg` decompositions, `Nx.split`), so both meet the shape checks.
-The halves of a float `Nx.split` have sizes that are not known.
-
-### Traced code and defn control flow
+## `nx_traced`: traced code and defn control flow
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -290,7 +294,7 @@ or `assert_keys/2` names counts as given, a `case` on an atom is fine, and
 public `defn`'s own arguments in its own body, so a `defnp` that other
 `defn`s hand integers is not reported.
 
-### Gradients
+## `nx_gradients`: gradients
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -314,7 +318,7 @@ the function it is handed and what that calls. Nothing behind `stop_grad`
 is reported, nor the double select that masks the operand too, nor a norm
 or root inside a `custom_grad`.
 
-### Containers
+## `nx_containers`: containers
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -329,7 +333,7 @@ takes it as it is, and a `defn` called while Nx traces traverses nothing.
 A struct or container is known only where the code builds it or writes
 it as a literal.
 
-### Randomness and spent values
+## `nx_random`: random keys
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -339,16 +343,22 @@ it as a literal.
 | `passed_back_key` | warning | A loop's function that draws from its key and hands that same key to the next pass. | `Enum.map_reduce(1..3, key, fn _, key -> {elem(Nx.Random.uniform(key), 0), key} end)` |
 | `spent_key_returned` | warning | A function that returns a key it drew from: alone, in a term, or in the state it read it from. | `{sample, _} = Nx.Random.uniform(key); {sample, key}` |
 | `shared_draw` | warning | A normal sampler whose mean or standard deviation has more elements than `:shape`, which repeats one draw across them. | `Nx.Random.normal(key, Nx.iota({2, 3}, type: :f32), 1.0)` |
+
+`Nx.Random.fold_in/2` is no draw, and draws on two branches are one draw
+on either path. A draw inside a `defn` is checked as one outside it is.
+
+## `nx_freed`: freed tensors
+
+| Kind | Severity | Catches | Example |
+|---|---|---|---|
 | `used_after_transfer` | error for a read by an Nx call; warning when handed on or returned | A tensor used after `Nx.backend_transfer/1`, or `/2` to `Nx.BinaryBackend`, freed it. | `_ = Nx.backend_transfer(t); Nx.add(t, 1)` |
 | `used_after_deallocation` | error for a read by an Nx call; warning when handed on or returned | A tensor used after `Nx.backend_deallocate/1`. | `Nx.backend_deallocate(t); Nx.sum(t)` |
 | `used_after_donation` | warning | A tensor marked with `Nx.donatable/1` read, handed on or returned after the jitted call it was donated to. | `_ = doubled.(Nx.donatable(t)); Nx.add(t, 1)` |
 
-`Nx.Random.fold_in/2` is no draw, and draws on two branches are one draw
-on either path. EMLX and EXLA raise reading a freed tensor; the
-BinaryBackend frees nothing, so tests there pass. A draw inside a `defn`
-is checked as one outside it is.
+EMLX and EXLA raise reading a freed tensor; the BinaryBackend frees
+nothing, so tests there pass.
 
-### Servings and batches
+## `nx_serving`: servings and batches
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -378,11 +388,11 @@ as its argument. `serving_entry_shape_varies` covers servings started as
 processes (`{Nx.Serving, serving: serving, ...}`), and `Nx.Batch.key/2` on
 the batch quiets it.
 
-## `tensor_emlx`
+## `emlx`: EMLX
 
-`ArgusNxTensorAnalyses.EMLX` reports what [EMLX](https://github.com/elixir-nx/emlx)
-computes differently from the BinaryBackend and EXLA. It is not a default
-analysis: run `mix argus tensor_emlx`, or add it to `analyses`.
+What [EMLX](https://github.com/elixir-nx/emlx) computes differently from
+the BinaryBackend and EXLA. It is not a default category: run
+`mix argus emlx`, or add it to `analyses`.
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
@@ -401,7 +411,7 @@ the code picks one (`backend:`, `Nx.backend_transfer/2`,
 `Nx.default_backend/1`), and EMLX is the default otherwise. Code Nx traces
 is not checked for mixed backends: the compiler, configured outside the
 code, decides. A type listed in `unsupported_types` is reported as
-`unsupported_type` by `tensor_shapes`, not as `narrowed_type`.
+`unsupported_type` in `nx_types`, not as `narrowed_type`.
 
 ## Project options
 
@@ -413,7 +423,7 @@ def project do
   [
     # ...
     argus_nx_tensor_analyses: [
-      analyses: [:default, :tensor_emlx],
+      analyses: [:default, :emlx],
       unsupported_types: [:f64],
       float_types: [:f16, :bf16, :f32]
     ]
@@ -421,13 +431,13 @@ def project do
 end
 ```
 
-- `analyses`: the analyses a run that names none runs, by name
-  (`:tensor_shapes`, `:tensor_emlx`) or as the sets `:default`
-  (`tensor_shapes`) and `:all`. Default: `[:default]`. `mix argus --all`,
-  or analyses named on the command line, take its place.
+- `analyses`: the categories a run that names none runs, by name
+  (`:nx_shapes`, `:emlx`) or as the sets `:default` (every category but
+  `emlx`) and `:all`. Default: `[:default]`. `mix argus --all`, or
+  categories named on the command line, take its place.
 - `unsupported_types`: the types the backend lacks, as Nx names them
   (`:f64`, `{:f, 64}`). Every call that makes a tensor of one is an
-  `unsupported_type` error, and `tensor_emlx` leaves such a type to it.
+  `unsupported_type` error, and `emlx` leaves such a type to it.
   Default: none.
 - `float_types`: the float types the code may run at. A type the code reads
   from configuration (a `type:` or type argument it does not write) is

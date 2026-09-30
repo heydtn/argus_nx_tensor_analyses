@@ -2,9 +2,12 @@ defmodule ArgusNxTensorAnalyses.CategoriesTest do
   # Every kind of finding the rules can emit, read from them as they are,
   # is in exactly one category, and a category holds no other kind but a
   # report relation whose rows carry none, which is a kind of its own.
+  # docs/checks.md documents each category's kinds in a section of its
+  # own.
   use ExUnit.Case, async: true
 
   alias ArgusNxTensorAnalyses.Categories
+  alias ArgusNxTensorAnalyses.DocumentedKinds
   alias ArgusNxTensorAnalyses.EMLX
   alias ArgusNxTensorAnalyses.EmittedKinds
   alias ArgusNxTensorAnalyses.TensorShapes
@@ -31,6 +34,23 @@ defmodule ArgusNxTensorAnalyses.CategoriesTest do
     held = for category <- Categories.names(), kind <- Categories.kinds(category), do: kind
 
     assert held -- (emitted_kinds() ++ kindless_relations()) == []
+  end
+
+  test "docs/checks.md documents each category's kinds in a section named for it" do
+    {categories, others} =
+      DocumentedKinds.sections()
+      |> Enum.map(fn {heading, kinds} ->
+        {Regex.run(~r/^`([a-z_]+)`/, heading, capture: :all_but_first), heading, kinds}
+      end)
+      |> Enum.split_with(fn {name, _heading, _kinds} -> name != nil end)
+
+    assert for({[name], _heading, kinds} <- categories, do: {name, Enum.sort(kinds)}) ==
+             for(
+               category <- Categories.names(),
+               do: {Atom.to_string(category), Enum.sort(Categories.kinds(category))}
+             )
+
+    assert for({nil, heading, [_kind | _kinds]} <- others, do: heading) == []
   end
 
   # A finding's rows are the rows its relation's key joins, and its
