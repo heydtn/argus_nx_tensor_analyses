@@ -813,6 +813,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "data = Nx.iota({1}, type: :f32)\nNx.Defn.grad(Nx.as_type(t, :f32), fn x -> Nx.sum(Nx.multiply(x, data)) end)"},
     {{:finds, {"tensor_call_error", "captured_tensor", "jit"}, :accepted},
      "data = Nx.iota({1})\nNx.Defn.jit(fn x -> Nx.add(x, data) end).(t)"},
+    {{:finds, {"tensor_call_error", "captured_tensor", "jit"}, :accepted},
+     "data = Nx.iota({4})\nNx.Defn.jit(fn x -> Nx.add(x, elem(Nx.top_k(data, k: 2), 0)) end).(t)"},
+    {{:finds_none, :accepted},
+     "data = Nx.iota({4})\nNx.Defn.jit(fn x -> Nx.add(x, Nx.size(data)) end).(t)"},
     {{:finds_none, :accepted},
      "data = Nx.iota({1})\nNx.Defn.jit(fn x, y -> Nx.add(x, y) end).(t, data)"},
     # templates computed with

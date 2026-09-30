@@ -581,13 +581,19 @@ captures_tensor(function, closure, origin) :-
   computes_with_captured(closure, selector).
 
 // A closure's function hands the value it captured at `selector` to an
-// Nx call that computes a tensor.
+// Nx call that computes a tensor, or a tuple of them.
 .decl computes_with_captured(closure: symbol, selector: symbol)
 computes_with_captured(closure, selector) :-
   hands_closure_to_trace(_, _, closure, _),
   captured_parameter(closure, selector, target, position),
   flow_argument(site, target, _, "param", to_string(position)),
   returns_tensor(site).
+computes_with_captured(closure, selector) :-
+  hands_closure_to_trace(_, _, closure, _),
+  captured_parameter(closure, selector, target, position),
+  flow_argument(site, target, _, "param", to_string(position)),
+  operation_site(site, operation, _),
+  nx_class(operation, "tuple", _).
 
 // ══ Templates computed with ═════════════════════════════════════════
 
