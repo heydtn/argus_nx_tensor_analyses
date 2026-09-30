@@ -121,21 +121,32 @@ defmodule ArgusNxTensorAnalyses.Graph do
 
     :ok = Input.set(db, :program, @program, paths)
 
+    # The code extraction runs: `Argus.Pipeline` and the extractors, which
+    # the pipeline calls by name, and Argus's schema, whose relations it
+    # reads by name.
+    roots = [Argus.Pipeline | extractors] ++ schema_modules()
+
     :ok =
       Input.set(db, :extraction, :all, %{
         extractors: extractors,
-        code: extraction_code(extractors, db.blob),
-        relations: extracted_relations(extractors)
+        code: code(roots, db.blob),
+        relations: extracted_relations(extractors),
+        kept: not reads_specs?(roots)
       })
 
     sources
   end
 
-  # The code extraction runs: `Argus.Pipeline` and the extractors, which
-  # the pipeline calls by name, and Argus's schema, whose relations it
-  # reads by name.
-  defp extraction_code(extractors, store),
-    do: code([Argus.Pipeline | extractors] ++ schema_modules(), store)
+  # Whether the code can read the specs of the modules a module calls from
+  # wherever they are installed (`Argus.Specs`): the rows it gives then
+  # depend on those modules too, which no key here names. A closure that
+  # cannot be read may.
+  defp reads_specs?(roots) do
+    case Roux.Code.closure(roots) do
+      {:ok, modules} -> List.keymember?(modules, Argus.Specs, 0)
+      {:error, _reason} -> true
+    end
+  end
 
   # The digest of the code `roots` reach. A module compiled in memory has
   # no object code to read, and is named for this VM alone.

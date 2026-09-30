@@ -10,11 +10,13 @@ defmodule ArgusNxTensorAnalyses.Graph.Inputs do
   #   * `beam` (a beam's path) — `%{hash: digest}`, the SHA-256 of the
   #     file's bytes.
   #   * `extraction` (`:all`) — `%{extractors: modules, code: digest,
-  #     relations: names}`: the extractors that run after Argus's base
-  #     over every module, the digest of the code extraction runs
-  #     (`Roux.Code`: `Argus.Pipeline`, the extractors, which the pipeline
-  #     reaches only by name, and Argus's schema, which it reads by name),
-  #     and every relation extraction gives a file, rows or not.
+  #     relations: names, kept: boolean}`: the extractors that run after
+  #     Argus's base over every module, the digest of the code extraction
+  #     runs (`Roux.Code`: `Argus.Pipeline`, the extractors, which the
+  #     pipeline reaches only by name, and Argus's schema, which it reads
+  #     by name), every relation extraction gives a file, rows or not, and
+  #     whether a module's facts may be kept: not when that code can read
+  #     other modules' specs from where they are installed.
   #   * `rules` (`:all`) — the program the analysis solves, after the Argus
   #     files it builds on (`ArgusNxTensorAnalyses.Solve.argus_includes/0`),
   #     as a solve reads it (`ArgusNxTensorAnalyses.Graph.Program`): its

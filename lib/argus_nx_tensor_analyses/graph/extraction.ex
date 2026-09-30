@@ -10,10 +10,14 @@ defmodule ArgusNxTensorAnalyses.Graph.Extraction do
   # extraction runs (`extraction`), and by this query's code: an edit to an
   # extractor moves that code, and every module is extracted again; an edit
   # to the rules, or to code extraction does not run (the findings'
-  # wording), extracts nothing. A module that outlived the pipeline's
-  # per-module timeout is its one error row, which depends on the
-  # machine's load: it is not kept, nor is anything that read it, and the
-  # next run extracts it again.
+  # wording), extracts nothing.
+  #
+  # Some facts depend on more than that, and are not kept, nor is anything
+  # that read them, so the next run extracts the module again: a module
+  # that outlived the pipeline's per-module timeout, which is its one error
+  # row and depends on the machine's load, and a module whose extraction
+  # can read other modules' specs from where they are installed
+  # (`extraction`'s `kept: false`).
 
   use Roux.Query, code: true
 
@@ -23,10 +27,10 @@ defmodule ArgusNxTensorAnalyses.Graph.Extraction do
   defquery :module_facts,
     key: path,
     store: :blob,
-    transient: &match?({:ok, %{lost: true}}, &1),
+    transient: &match?({:ok, %{kept: false}}, &1),
     returns: {:ok, map()} | {:error, term()} do
     _content = Runtime.input(db, :beam, path)
-    %{extractors: extractors} = Runtime.input(db, :extraction, :all)
+    %{extractors: extractors, kept: kept} = Runtime.input(db, :extraction, :all)
 
     :telemetry.execute([:argus_nx_tensor_analyses, :graph, :extract], %{}, %{
       path: path,
@@ -41,7 +45,7 @@ defmodule ArgusNxTensorAnalyses.Graph.Extraction do
        %{
          segment: segment,
          relations: Map.new(chunks, fn {relation, bytes} -> {relation, Blob.digest(bytes)} end),
-         lost: status == :lost
+         kept: kept and status != :lost
        }}
     end
   end

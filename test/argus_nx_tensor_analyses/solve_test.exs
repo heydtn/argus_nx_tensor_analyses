@@ -13,6 +13,12 @@ defmodule ArgusNxTensorAnalyses.SolveTest do
     def extractors, do: [ArgusNxTensorAnalyses.SolveTest.Extractor]
   end
 
+  # An analysis whose extractor reads the specs of the modules a module
+  # calls from where they are installed.
+  defmodule SpecsAnalysis do
+    def extractors, do: [Argus.Extractors.Specs]
+  end
+
   test "the Argus files a program is solved after exist" do
     for path <- Solve.argus_includes(), do: assert(File.regular?(path), path)
   end
@@ -186,6 +192,22 @@ defmodule ArgusNxTensorAnalyses.SolveTest do
                extract: "solve_test_second.beam",
                extract: "solve_test_third.beam"
              ]
+    end
+
+    test "facts that can depend on other modules' installed specs are never kept", context do
+      solve = fn ->
+        Solve.solve(SpecsAnalysis, context.beams, context.program, cache: context.cache)
+      end
+
+      {rows, _events} = events(context.cache, solve)
+
+      # Its solves are read back from the store, by what they read.
+      assert {^rows,
+              [
+                extract: "solve_test_first.beam",
+                extract: "solve_test_second.beam",
+                extract: "solve_test_third.beam"
+              ]} = events(context.cache, solve)
     end
 
     test "a changed rule file, or a file it includes, solves again", context do
