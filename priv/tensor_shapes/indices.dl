@@ -531,14 +531,10 @@ call_error(context, site, "random_bound_truncated", "float", "") :-
 type_asked(context, site) :- random_sampling(site, _), site_active(context, site).
 
 .decl random_sampling(site: symbol, sampler: symbol)
-random_sampling(site, "randint") :-
+random_sampling(site, sampler) :-
   operation_site(site, operation, arity),
   arity >= 3,
-  match("Nx\\.Random\\.randint(_split)?", operation).
-random_sampling(site, "uniform") :-
-  operation_site(site, operation, arity),
-  arity >= 3,
-  match("Nx\\.Random\\.uniform(_split)?", operation).
+  nx_class(operation, "bounds", sampler).
 
 // A bound as a number, where the code writes it or it is a size the rules
 // know, and as written.

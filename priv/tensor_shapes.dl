@@ -327,6 +327,17 @@ remote_defn_site(site, caller) :- remote_call(site, caller, "Nx.Defn.Compiler", 
 
 list_asked(list) :- remote_defn_site(site, caller), flow_argument(site, caller, 3, "object", list).
 
+// The Nx function a `defn` of Nx that `__remote__` runs is named as, as a
+// call names it (`Nx.Random.uniform`): Nx writes `Nx.Random`'s samplers as
+// `defn`s.
+.decl remote_operation(site: symbol, caller: symbol, operation: symbol)
+remote_operation(site, caller, cat(module, ".", substr(atom, 1, strlen(atom) - 1))) :-
+  remote_defn_site(site, caller),
+  flow_argument(site, caller, 0, "literal", module),
+  nx_module(module),
+  flow_argument(site, caller, 1, "literal", atom),
+  match(":[a-z_][a-zA-Z0-9_]*[?!]?", atom).
+
 // The argument at `index` of the list `__remote__` passes on.
 .decl remote_argument(site: symbol, caller: symbol, index: number, kind: symbol, source: symbol)
 remote_argument(site, caller, index, kind, source) :-
@@ -518,12 +529,14 @@ function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 .decl nx_members(facet: symbol, value: symbol, members: symbol)
 
 // The Nx functions the program names, by arity: those it calls, `Nx.Defn`'s
-// among them, and those of Nx it hands as a literal external fun
-// (`&Nx.sum/1`). Read from the code alone, so that rules may negate what
-// the views derive from it.
+// among them, those a `defn` calls through `__remote__` (arity -1: named,
+// not called, as the call hands the arguments in a list), and those of Nx
+// it hands as a literal external fun (`&Nx.sum/1`). Read from the code
+// alone, so that rules may negate what the views derive from it.
 .decl nx_named(operation: symbol, arity: number)
 nx_named(operation, arity) :- called_name(_, operation, arity).
 nx_named(cat("Nx.Defn.", name), arity) :- remote_call(_, _, "Nx.Defn", name, arity).
+nx_named(operation, -1) :- remote_operation(_, _, operation).
 nx_named(cat("Nx.", substr(function, 3, strlen(function) - 5)), 1) :-
   fun_handed(_, _, function, _),
   match("Nx:[a-z_]+/1", function).
@@ -7322,21 +7335,23 @@ creation(site, [[parts, nil], "nil", [[2, nil], "nil", nil]]) :-
   option_number(site, "parts", 2, parts),
   parts >= 1.
 
-.decl random_sampler(operation: symbol)
-random_sampler("Nx.Random.randint_split"). random_sampler("Nx.Random.uniform_split").
-random_sampler("Nx.Random.normal_split"). random_sampler("Nx.Random.gumbel_split").
+// The samplers that return their sample alone, the shape their `:shape`
+// option gives.
+nx_members("trait", "random_sampler", cat(
+  " Nx.Random.randint_split Nx.Random.uniform_split Nx.Random.normal_split",
+  " Nx.Random.gumbel_split ")).
 
 // `Nx.Random.normal_split/4`'s result takes the shapes of its mean and
 // standard deviation too, which its draw broadcasts against.
 creation(site, axes) :-
   operation_site(site, operation, _),
-  random_sampler(operation),
+  nx_trait(operation, "random_sampler"),
   operation != "Nx.Random.normal_split",
   option(site, "shape", text, start),
   shape_term(text, start, axes).
 creation(site, nil) :-
   operation_site(site, operation, _),
-  random_sampler(operation),
+  nx_trait(operation, "random_sampler"),
   operation != "Nx.Random.normal_split",
   option_absent(site, "shape").
 

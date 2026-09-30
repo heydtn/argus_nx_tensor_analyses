@@ -332,7 +332,7 @@ written_misfit(site, "nonpositive", cat("invalid dimension in axis ", to_string(
   term_element_integer(text, 0, axis, value),
   value < 1.
 written_misfit(site, "nonpositive", cat("invalid dimension in axis ", to_string(axis), " found in shape. Each dimension must be a positive integer, got ", to_string(value), " in shape ", spelled)) :-
-  random_sampler(operation),
+  nx_trait(operation, "random_sampler"),
   operation_site(site, operation, _),
   option(site, "shape", text, start),
   term_tuple(text, start),

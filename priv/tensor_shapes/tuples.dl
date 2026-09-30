@@ -19,16 +19,13 @@
 // by the selector that reads it: `{0}` for the first.
 .decl tuple_element(context: Context, site: symbol, selector: symbol, tensor: Tensor)
 
-// The Nx functions that return a tuple: a sample and the key to use
-// next, or the parts of what they compute.
-.decl returns_tuple(operation: symbol, kind: symbol)
-returns_tuple("Nx.Random.uniform", "sample"). returns_tuple("Nx.Random.normal", "sample").
-returns_tuple("Nx.Random.randint", "sample"). returns_tuple("Nx.Random.gumbel", "sample").
-returns_tuple("Nx.Random.shuffle", "sample"). returns_tuple("Nx.Random.choice", "sample").
-returns_tuple("Nx.Random.multivariate_normal", "sample").
-returns_tuple("Nx.LinAlg.qr", "parts"). returns_tuple("Nx.LinAlg.eigh", "parts").
-returns_tuple("Nx.LinAlg.svd", "parts"). returns_tuple("Nx.LinAlg.lu", "parts").
-returns_tuple("Nx.split", "parts").
+// The Nx functions that return a tuple, by their class "tuple": a sample
+// and the key to use next ("sample"), or the parts of what they compute
+// ("parts").
+nx_members("tuple", "sample", cat(
+  " Nx.Random.uniform Nx.Random.normal Nx.Random.randint Nx.Random.gumbel Nx.Random.shuffle",
+  " Nx.Random.choice Nx.Random.multivariate_normal ")).
+nx_members("tuple", "parts", " Nx.LinAlg.qr Nx.LinAlg.eigh Nx.LinAlg.svd Nx.LinAlg.lu Nx.split ").
 
 result_value(context, site, $Object(context, site, nil)) :- tuple_element(context, site, "{0}", _).
 
@@ -36,7 +33,7 @@ result_value(context, site, $Object(context, site, nil)) :- tuple_element(contex
 // else: a position a rule gives no tensor has no value.
 object_holds(site, selector) :-
   operation_site(site, operation, _),
-  returns_tuple(operation, _),
+  nx_class(operation, "tuple", _),
   selector_position(selector, _).
 object_field(context, site, selector, $Tensor(tensor)) :-
   object_field_demand(context, site, selector),
@@ -47,7 +44,7 @@ object_field(context, site, selector, $Tensor(tensor)) :-
 tuple_element(context, site, "{1}", [nil, [[2, nil], "nil", nil]]) :-
   tuple_element(context, site, "{0}", _),
   operation_site(site, operation, _),
-  returns_tuple(operation, "sample").
+  nx_class(operation, "tuple", "sample").
 
 // ══ Random ══════════════════════════════════════════════════════════
 
@@ -55,21 +52,20 @@ tuple_element(context, site, "{1}", [nil, [[2, nil], "nil", nil]]) :-
 
 // The functions of `Nx.Random` that take a key first, which must be a
 // single key, a tensor of shape {2}.
-.decl takes_key(operation: symbol)
-takes_key("Nx.Random.split"). takes_key("Nx.Random.fold_in"). takes_key("Nx.Random.shuffle").
-takes_key("Nx.Random.choice"). takes_key(operation) :- draws_shape(operation).
+nx_members("trait", "takes_key", " Nx.Random.split Nx.Random.fold_in Nx.Random.shuffle Nx.Random.choice ").
+nx_trait(operation, "takes_key") :- nx_trait(operation, "draws_shape").
 
 // A call handed a key of another shape, such as the keys
 // `Nx.Random.split/2` makes before one is taken from them.
 violation(context, site, "key", cat("expected key to have shape {2}, got tensor with shape ", spelled)) :-
   operation_site(site, operation, _),
-  takes_key(operation),
+  nx_trait(operation, "takes_key"),
   argument_tensor(context, site, 0, [_, axes]),
   ( axes = nil ; axes = [_, _, [_, _, _]] ; axes = [[size, nil], _, nil], size > 0, size != 2 ),
   sizes_spelled(axes, spelled).
 spelling_demand(axes) :-
   operation_site(site, operation, _),
-  takes_key(operation),
+  nx_trait(operation, "takes_key"),
   argument_tensor(_, site, 0, [_, axes]).
 
 // `Nx.Random.fold_in/2` folds each element of its data into the key: a
@@ -89,13 +85,12 @@ append_demand(data, [[2, nil], "nil", nil]) :-
 // ── Samplers ───────────────────────────────────────────────────────
 
 // The samplers that draw the shape their `:shape` option gives.
-.decl draws_shape(operation: symbol)
-draws_shape(operation) :-
-  returns_tuple(operation, "sample"),
+nx_trait(operation, "draws_shape") :-
+  nx_class(operation, "tuple", "sample"),
   operation != "Nx.Random.shuffle",
   operation != "Nx.Random.choice".
-draws_shape(operation) :- random_sampler(operation).
-draws_shape("Nx.Random.multivariate_normal_split").
+nx_trait(operation, "draws_shape") :- nx_trait(operation, "random_sampler").
+nx_members("trait", "draws_shape", " Nx.Random.multivariate_normal_split ").
 
 nx_members("argument", "options", cat(
   " Nx.Random.uniform/1:1 Nx.Random.uniform/2:1 Nx.Random.normal/1:1 Nx.Random.normal/2:1",
@@ -109,12 +104,12 @@ nx_members("argument", "options", cat(
 .decl drawn_shape(site: symbol, axes: Axes)
 drawn_shape(site, axes) :-
   operation_site(site, operation, _),
-  draws_shape(operation),
+  nx_trait(operation, "draws_shape"),
   option(site, "shape", text, start),
   shape_term(text, start, axes).
 drawn_shape(site, nil) :-
   operation_site(site, operation, _),
-  draws_shape(operation),
+  nx_trait(operation, "draws_shape"),
   option_absent(site, "shape").
 
 axes_needed(axes) :- drawn_shape(_, axes).
@@ -124,7 +119,7 @@ axes_needed(axes) :- drawn_shape(_, axes).
 named_by_option(site, base) :-
   drawn_shape(site, base),
   operation_site(site, operation, _),
-  ( returns_tuple(operation, "sample"), operation != "Nx.Random.multivariate_normal"
+  ( nx_class(operation, "tuple", "sample"), operation != "Nx.Random.multivariate_normal"
   ; operation = "Nx.Random.normal_split" ).
 
 // A sampler whose sample is what it draws, whatever else it is handed:
@@ -134,7 +129,7 @@ tuple_element(context, site, "{0}", [nil, sample]) :-
   built(site, [base, nil, nil], sample),
   drawn_shape(site, base),
   operation_site(site, operation, arity),
-  returns_tuple(operation, "sample"),
+  nx_class(operation, "tuple", "sample"),
   !slot_used(operation, arity, 1),
   site_active(context, site).
 .plan 1:(5,1,2,3,4)
@@ -146,8 +141,7 @@ tuple_element(context, site, "{0}", [nil, sample]) :-
 // (`deviation * draw + mean`): the sample has the shape all three
 // broadcast to.
 
-.decl normal_sampler(operation: symbol)
-normal_sampler("Nx.Random.normal"). normal_sampler("Nx.Random.normal_split").
+nx_members("trait", "normal_sampler", " Nx.Random.normal Nx.Random.normal_split ").
 nx_members("argument", "first_operand", cat(
   " Nx.Random.normal_split/3:1 Nx.Random.normal_split/4:1 Nx.Random.normal/3:1",
   " Nx.Random.normal/4:1 ")).
@@ -159,7 +153,7 @@ nx_members("argument", "second_operand", cat(
 .decl normal_draw(site: symbol, operands: Operands, draw: Axes)
 normal_draw(site, [mean_axes, deviation, third], draw) :-
   site_instance(site, operation, _, [mean_axes, deviation, third]),
-  normal_sampler(operation),
+  nx_trait(operation, "normal_sampler"),
   drawn_shape(site, base),
   built(site, [base, nil, nil], draw).
 .plan 1:(4,3,1,2)
@@ -233,45 +227,46 @@ call_error(context, site, "shared_draw", cat("draws ", draw_spelled, " and retur
 // reshapes the result to that shape; `randint` broadcasts each bound to
 // its shape. Their sample has the shape, where the bounds fit it.
 
-// A sampler of bounds, and whether it broadcasts them against its draw.
-.decl bounded_sampler(operation: symbol, against_draw: number)
-bounded_sampler("Nx.Random.uniform", 1). bounded_sampler("Nx.Random.uniform_split", 1).
-bounded_sampler("Nx.Random.randint", 0). bounded_sampler("Nx.Random.randint_split", 0).
+// A sampler of bounds, by how it takes them (its class "bounds"):
+// "uniform" broadcasts them against its draw, "randint" to its shape.
+nx_members("bounds", "uniform", " Nx.Random.uniform Nx.Random.uniform_split ").
+nx_members("bounds", "randint", " Nx.Random.randint Nx.Random.randint_split ").
 
-// A bound a sampler is handed, and the shape it draws.
-.decl sampler_bound(context: Context, site: symbol, against_draw: number, bound: Axes, shape: Axes)
-sampler_bound(context, site, against_draw, bound, shape) :-
+// A bound a sampler is handed, how the sampler takes it, and the shape it
+// draws.
+.decl sampler_bound(context: Context, site: symbol, sampler: symbol, bound: Axes, shape: Axes)
+sampler_bound(context, site, sampler, bound, shape) :-
   argument_tensor(context, site, position, [_, bound]),
   position >= 1,
   position <= 2,
   operation_site(site, operation, arity),
   arity >= 3,
-  bounded_sampler(operation, against_draw),
+  nx_class(operation, "bounds", sampler),
   drawn_shape(site, shape).
 broadcast_demand(shape, bound) :- sampler_bound(_, _, _, bound, shape).
 axes_needed(bound) :- sampler_bound(_, _, _, bound, _).
 spelling_demand(bound) :- sampler_bound(_, _, _, bound, _).
 spelling_demand(shape) :- sampler_bound(_, _, _, _, shape).
-spelling_demand(grown) :- sampler_bound(_, _, 1, bound, shape), broadcast(shape, bound, grown).
+spelling_demand(grown) :- sampler_bound(_, _, "uniform", bound, shape), broadcast(shape, bound, grown).
 
 // A bound that does not fit the shape, and what Nx raises: `uniform`'s
 // bound that does not broadcast with the draw, or broadcasts it to more
 // elements; `randint`'s bound that does not broadcast to the shape.
 violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", shape_spelled, " to ", bound_spelled)) :-
-  sampler_bound(context, site, 1, bound, shape),
+  sampler_bound(context, site, "uniform", bound, shape),
   broadcast_axis(shape, bound, _, shape_size, _, bound_size, _),
   broadcast_conflict(shape_size, bound_size),
   sizes_spelled(shape, shape_spelled),
   sizes_spelled(bound, bound_spelled).
 violation(context, site, "sampler_parameters", cat("cannot reshape, current shape ", grown_spelled, " is not compatible with new shape ", shape_spelled)) :-
-  sampler_bound(context, site, 1, bound, shape),
+  sampler_bound(context, site, "uniform", bound, shape),
   broadcast(shape, bound, grown),
   broadcast_axis(shape, bound, _, [1, nil], _, [bound_size, nil], _),
   bound_size > 1,
   sizes_spelled(grown, grown_spelled),
   sizes_spelled(shape, shape_spelled).
 violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", bound_spelled, " to ", shape_spelled)) :-
-  sampler_bound(context, site, 0, bound, shape),
+  sampler_bound(context, site, "randint", bound, shape),
   axes_rank(bound, bound_rank),
   axes_rank(shape, shape_rank),
   broadcast_axis(shape, bound, _, [shape_size, shape_factors], _, [bound_size, nil], _),
@@ -379,9 +374,7 @@ violation(context, site, "choice", cat("probability tensor of size ", to_string(
 // for each element of `:shape`: its sample is `:shape` then that size.
 // `:names` names the whole sample; the rules give it a shape where it has
 // none.
-.decl multivariate_sampler(operation: symbol)
-multivariate_sampler("Nx.Random.multivariate_normal").
-multivariate_sampler("Nx.Random.multivariate_normal_split").
+nx_members("trait", "multivariate_sampler", " Nx.Random.multivariate_normal Nx.Random.multivariate_normal_split ").
 nx_members("argument", "first_operand", cat(
   " Nx.Random.multivariate_normal/3:1 Nx.Random.multivariate_normal/4:1",
   " Nx.Random.multivariate_normal_split/3:1 Nx.Random.multivariate_normal_split/4:1 ")).
@@ -392,7 +385,7 @@ nx_members("argument", "second_operand", cat(
 .decl multivariate_sample(site: symbol, operands: Operands, sample: Axes)
 multivariate_sample(site, [[size, name, nil], covariance, third], sample) :-
   site_instance(site, operation, _, [[size, name, nil], covariance, third]),
-  multivariate_sampler(operation),
+  nx_trait(operation, "multivariate_sampler"),
   covariance = [_, _, [_, _, nil]],
   option_absent(site, "names"),
   drawn_shape(site, shape),
@@ -400,7 +393,7 @@ multivariate_sample(site, [[size, name, nil], covariance, third], sample) :-
 .plan 1:(5,1,2,3,4)
 append_demand(shape, [size, "nil", nil]) :-
   site_instance(site, operation, _, [[size, _, nil], [_, _, [_, _, nil]], _]),
-  multivariate_sampler(operation),
+  nx_trait(operation, "multivariate_sampler"),
   drawn_shape(site, shape).
 
 result_axes(site, operands, sample) :-
@@ -415,19 +408,19 @@ tuple_element(context, site, "{0}", [vectorized, sample]) :-
 // A mean or covariance Nx rejects, and what it raises.
 violation(context, site, "multivariate_normal", cat("expected mean to have rank 1, got tensor with rank ", to_string(rank))) :-
   site_instance(site, operation, _, [mean_axes, covariance, third]),
-  multivariate_sampler(operation),
+  nx_trait(operation, "multivariate_sampler"),
   instance(context, site, [mean_axes, covariance, third], _),
   axes_rank(mean_axes, rank),
   rank != 1.
 violation(context, site, "multivariate_normal", cat("expected covariance to have rank 2, got tensor with rank ", to_string(rank))) :-
   site_instance(site, operation, _, [[size, name, nil], covariance, third]),
-  multivariate_sampler(operation),
+  nx_trait(operation, "multivariate_sampler"),
   instance(context, site, [[size, name, nil], covariance, third], _),
   axes_rank(covariance, rank),
   rank != 2.
 violation(context, site, "multivariate_normal", detail) :-
   site_instance(site, operation, _, [[size, name, nil], covariance, third]),
-  multivariate_sampler(operation),
+  nx_trait(operation, "multivariate_sampler"),
   instance(context, site, [[size, name, nil], covariance, third], _),
   covariance = [[rows, nil], _, [[columns, nil], _, nil]],
   rows > 0,
@@ -441,8 +434,7 @@ violation(context, site, "multivariate_normal", detail) :-
 
 // The decompositions that return a tuple. Each part is the operand's
 // batch axes, then axes of its own, none named.
-.decl decomposition(operation: symbol)
-decomposition(operation) :- returns_tuple(operation, "parts"), operation != "Nx.split".
+nx_trait(operation, "decomposition") :- nx_class(operation, "tuple", "parts"), operation != "Nx.split".
 
 nx_members("argument", "options", cat(
   " Nx.LinAlg.qr/1:1 Nx.LinAlg.qr/2:1 Nx.LinAlg.svd/1:1 Nx.LinAlg.svd/2:1",
@@ -454,14 +446,14 @@ option_key("mode"). option_key("full_matrices?").
 .decl decomposed(site: symbol, operands: Operands, batch: Axes, rows: Size, columns: Size)
 decomposed(site, [first, second, third], batch, rows, columns) :-
   site_instance(site, operation, _, [first, second, third]),
-  decomposition(operation),
+  nx_trait(operation, "decomposition"),
   matrix_split(first, batch, rows, columns).
 .plan 1:(3,1,2)
 
 // A matrix or a batch of them: the axes before its last two, with no
 // names, and the sizes of the last two.
 .decl matrix_demand(axes: Axes)
-matrix_demand(first) :- site_instance(_, operation, _, [first, _, _]), decomposition(operation).
+matrix_demand(first) :- site_instance(_, operation, _, [first, _, _]), nx_trait(operation, "decomposition").
 matrix_demand(rest) :- matrix_demand([_, _, rest]), rest = [_, _, [_, _, _]].
 
 .decl matrix_split(axes: Axes, batch: Axes, rows: Size, columns: Size)

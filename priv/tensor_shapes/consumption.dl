@@ -120,14 +120,10 @@ value_named(function, "result", site, cat(name, suffix)) :-
 // split once into as many keys as draws, gives independent samples.
 
 // The `Nx.Random` functions that draw from the key they take first: the
-// samplers, their `_split` forms, and `split`. `fold_in` makes a new key
-// of its data and draws nothing.
-.decl random_draw(name: symbol)
-random_draw("split"). random_draw("uniform"). random_draw("uniform_split").
-random_draw("normal"). random_draw("normal_split"). random_draw("randint").
-random_draw("randint_split"). random_draw("gumbel"). random_draw("gumbel_split").
-random_draw("shuffle"). random_draw("choice"). random_draw("multivariate_normal").
-random_draw("multivariate_normal_split").
+// samplers, their `_split` forms, and `split`, every one that takes a key
+// (`takes_key`) but `fold_in`, which makes a new key of its data and
+// draws nothing.
+nx_trait(operation, "draws_key") :- nx_trait(operation, "takes_key"), operation != "Nx.Random.fold_in".
 
 // A call that draws from a key, the source of the key it is handed, and
 // the function it calls as a finding shows it: an `Nx.Random` function
@@ -135,14 +131,13 @@ random_draw("multivariate_normal_split").
 // which hands it its arguments in a list), or a function of the program
 // that draws from the key it is handed.
 .decl consumes_key(site: symbol, function: symbol, kind: symbol, source: symbol, shown: symbol)
-consumes_key(site, function, kind, source, cat("Nx.Random.", name)) :-
-  remote_call(site, function, "Nx.Random", name, _),
-  random_draw(name),
+consumes_key(site, function, kind, source, operation) :-
+  operation_site(site, operation, _),
+  nx_trait(operation, "draws_key"),
   flow_argument(site, function, 0, kind, source).
-consumes_key(site, function, kind, source, cat("Nx.Random.", name)) :-
-  random_draw(name),
-  flow_argument(site, function, 1, "literal", cat(":", name)),
-  flow_argument(site, function, 0, "literal", "Nx.Random"),
+consumes_key(site, function, kind, source, operation) :-
+  remote_operation(site, function, operation),
+  nx_trait(operation, "draws_key"),
   remote_argument(site, function, 0, kind, source).
 consumes_key(site, function, kind, source, cat(module, ".", name)) :-
   consumes_key_parameter(callee, position),

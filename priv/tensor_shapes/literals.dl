@@ -124,7 +124,7 @@ made_as(site, 0, text, element, name, "written") :-
 // has a rule of its own, and the tensor of `Nx.as_type/2` or
 // `Nx.bitcast/2`, whose number takes or keeps the bits of the type given;
 // and the bounds of `Nx.Random`'s samplers, which a `:type` does not
-// widen either.
+// widen either (a normal sampler's mean and deviation are its operands).
 .decl inferred_operand(site: symbol, position: number)
 inferred_operand(site, position) :-
   operation_site(site, operation, arity),
@@ -134,7 +134,7 @@ inferred_operand(site, position) :-
   operation != "Nx.bitcast".
 inferred_operand(site, position) :-
   operation_site(site, operation, arity),
-  match("Nx\\.Random\\.(randint|uniform|normal)(_split)?", operation),
+  nx_class(operation, "bounds", _),
   arity >= 3,
   position = range(1, 3).
 
@@ -286,9 +286,9 @@ short_type_atom(spelled, name) :- type_spelling(spelled, name, _), match(":.*", 
 
 // A call of `Nx.Random.gumbel/2` or `Nx.Random.gumbel_split/2`.
 .decl samples_gumbel(site: symbol)
-samples_gumbel(site) :-
-  operation_site(site, operation, _),
-  match("Nx\\.Random\\.gumbel(_split)?", operation).
+samples_gumbel(site) :- operation_site(site, operation, _), nx_trait(operation, "gumbel_sampler").
+
+nx_members("trait", "gumbel_sampler", " Nx.Random.gumbel Nx.Random.gumbel_split ").
 
 // ══ Types Nx does not have ══════════════════════════════════════════
 
@@ -343,6 +343,9 @@ type_term(context, site, -1, text, start) :-
 // The calls whose `:type` option is a tensor type and whose options the
 // options above read.
 .decl takes_type_option(site: symbol)
-takes_type_option(site) :-
-  operation_site(site, operation, _),
-  match("Nx\\.(tensor|iota|eye|argmax|argmin|argsort|fill|linspace|reduce|Random\\.(randint|uniform|normal|gumbel)(_split)?)", operation).
+takes_type_option(site) :- operation_site(site, operation, _), nx_trait(operation, "takes_type_option").
+
+nx_members("trait", "takes_type_option", cat(
+  " Nx.tensor Nx.iota Nx.eye Nx.argmax Nx.argmin Nx.argsort Nx.fill Nx.linspace Nx.reduce",
+  " Nx.Random.randint Nx.Random.randint_split Nx.Random.uniform Nx.Random.uniform_split",
+  " Nx.Random.normal Nx.Random.normal_split Nx.Random.gumbel Nx.Random.gumbel_split ")).

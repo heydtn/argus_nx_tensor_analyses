@@ -246,11 +246,11 @@ sign_demand(context, function, "result", site) :-
 .decl sampled_by_rule(site: symbol)
 sampled_by_rule(site) :-
   operation_site(site, operation, arity),
-  tuple_sampler(operation),
+  nx_trait(operation, "tuple_sampler"),
   arity >= 3.
 sampled_by_rule(site) :-
   operation_site(site, operation, _),
-  tensor_sampler(operation).
+  nx_trait(operation, "tensor_sampler").
 
 signed_load(function, load) :- sample_element(function, load, _).
 
@@ -259,7 +259,7 @@ signed_load(function, load) :- sample_element(function, load, _).
 // from its tensor, its second argument.
 sign_rule(site, "add") :-
   operation_site(site, operation, arity),
-  tuple_sampler(operation),
+  nx_trait(operation, "tuple_sampler"),
   arity >= 3.
 nx_members("argument", "sign_first", cat(
   " Nx.Random.uniform/3:1 Nx.Random.uniform/4:1 Nx.Random.randint/3:1",
@@ -269,37 +269,33 @@ nx_members("argument", "sign_second", cat(
   " Nx.Random.randint/4:2 ")).
 sign_rule(site, "preserve") :-
   operation_site(site, operation, _),
-  tensor_sampler(operation).
+  nx_trait(operation, "tensor_sampler").
 nx_members("argument", "sign_first", " Nx.Random.shuffle:1 Nx.Random.choice:1 ").
 
 // ── Words ──────────────────────────────────────────────────────────
 
 // The samplers over a range `[min, max)` handed as their second and third
 // arguments, which return the sample itself.
-.decl range_sampler(operation: symbol)
-range_sampler("Nx.Random.uniform_split"). range_sampler("Nx.Random.randint_split").
+nx_members("trait", "range_sampler", " Nx.Random.uniform_split Nx.Random.randint_split ").
 
 // A range sampler's result whose signs are asked.
 .decl sampler_call(context: Context, site: symbol, function: symbol)
 sampler_call(context, site, function) :-
   signed_call(context, site, function, "add"),
   operation_site(site, operation, _),
-  range_sampler(operation).
+  nx_trait(operation, "range_sampler").
 
 // The samplers that return `{sample, key}`, from a `min` handed as their
 // second argument where they take one.
-.decl tuple_sampler(operation: symbol)
-tuple_sampler("Nx.Random.uniform"). tuple_sampler("Nx.Random.randint").
+nx_members("trait", "tuple_sampler", " Nx.Random.uniform Nx.Random.randint ").
 
 // The samplers of either sign, and those that draw a tensor's elements
 // (its second argument), which return `{sample, key}` too.
 .decl either_sign_sampler(site: symbol)
-either_sign_sampler(site) :-
-  operation_site(site, operation, _),
-  match("Nx\\.Random\\.(normal|gumbel|multivariate_normal)", operation).
+either_sign_sampler(site) :- operation_site(site, operation, _), nx_trait(operation, "either_sign_sampler").
 
-.decl tensor_sampler(operation: symbol)
-tensor_sampler("Nx.Random.shuffle"). tensor_sampler("Nx.Random.choice").
+nx_members("trait", "either_sign_sampler", " Nx.Random.normal Nx.Random.gumbel Nx.Random.multivariate_normal ").
+nx_members("trait", "tensor_sampler", " Nx.Random.shuffle Nx.Random.choice ").
 
 // The sample a sampler returns in `{sample, key}`, as the function that
 // calls it reads it out of the tuple.
@@ -307,13 +303,7 @@ tensor_sampler("Nx.Random.shuffle"). tensor_sampler("Nx.Random.choice").
 sample_element(function, load, site) :-
   flow_load(function, load, "{0}", "result", site),
   operation_site(site, operation, _),
-  sample_tuple_sampler(operation).
-
-.decl sample_tuple_sampler(operation: symbol)
-sample_tuple_sampler(operation) :- tuple_sampler(operation).
-sample_tuple_sampler(operation) :- tensor_sampler(operation).
-sample_tuple_sampler("Nx.Random.normal"). sample_tuple_sampler("Nx.Random.gumbel").
-sample_tuple_sampler("Nx.Random.multivariate_normal").
+  nx_class(operation, "tuple", "sample").
 
 // A tuple sampler whose minimum is zero, written or by default: a uniform
 // sample from `uniform/1` or `uniform/2`, which take a key and options.
@@ -323,7 +313,7 @@ samples_from_zero(site) :-
   arity <= 2.
 samples_from_zero(site) :-
   operation_site(site, operation, arity),
-  tuple_sampler(operation),
+  nx_trait(operation, "tuple_sampler"),
   arity >= 3,
   flow_argument(site, _, 1, "literal", text),
   written_number(text, "sign", "zero").
@@ -334,7 +324,7 @@ samples_from_zero(site) :-
 samples_from_nonnegative(site) :- samples_from_zero(site).
 samples_from_nonnegative(site) :-
   operation_site(site, operation, arity),
-  tuple_sampler(operation),
+  nx_trait(operation, "tuple_sampler"),
   arity >= 3,
   flow_argument(site, _, 1, "literal", text),
   written_number(text, "sign", "positive").
