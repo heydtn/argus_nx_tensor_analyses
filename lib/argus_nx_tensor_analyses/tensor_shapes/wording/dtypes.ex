@@ -186,11 +186,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     %{
       title: "pads with a value of another type",
       detail:
-        "It pads #{article(from)} #{from} tensor with a value whose type makes the result " <>
-          "#{to}. Nx's binary backend splices the value's raw bits, as #{article(to)} #{to}, " <>
-          "into the #{from} tensor (0.5 padded into s32 is 1056964608, and -1 padded onto u8 " <>
-          "[1] gives [255, 255]), and EMLX raises; only EXLA converts it.",
-      label: "pads #{article(from)} #{from} tensor with a value that makes it #{to}",
+        "It pads #{article(from)} #{from} tensor with a value Nx makes #{to}. Nx's binary " <>
+          "backend keeps the tensor #{from} and writes the value's #{to} bits into it, which " <>
+          "can overwrite the elements beside them too (0.5 padded before [1.0] in f16 gives " <>
+          "[0.0, 1.75], and 0.5 padded into s32 is 1056964608), and EMLX raises; only EXLA " <>
+          "converts it.",
+      label: "pads #{article(from)} #{from} tensor with a value Nx makes #{to}",
       help:
         "give the pad value the tensor's type, as in Nx.pad(t, Nx.tensor(0, type: Nx.type(t)), config)",
       frame: "",

@@ -5115,7 +5115,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
     assert Enum.any?(
              found,
-             &(&1.at_label == "pads an f16 or bf16 tensor with a value that makes it f32")
+             &(&1.at_label == "pads an f16 or bf16 tensor with a value Nx makes f32")
            )
 
     # the configured type is each float type, never a type a finding names
