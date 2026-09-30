@@ -58,7 +58,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Access do
       detail:
         "Counted from the start of its axis, the range's first bound comes after its last, so it " <>
           "selects nothing. Nx raises: #{detail}.",
-      label: "range #{range}, counted from the start, holds no index",
+      label: "counts from the start as #{range}, which holds no index",
       help: "make the range's first bound come no later than its last",
       frame: "makes the tensor:"
     }
