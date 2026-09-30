@@ -143,13 +143,13 @@ call_error(site, "access_update", "Access.get_and_update/3 is not supported. Ple
   site_active(context, site),
   remote_call(site, function, module, name, 3),
   match("Access\\.get_and_update|Kernel\\.(put_in|update_in|get_and_update_in)", cat(module, ".", name)),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   value_of(context, function, kind, source, $Tensor(_)).
 call_error(site, "access_update", "Access.pop/2 is not yet supported by Nx.Tensor", "") :-
   site_active(context, site),
   remote_call(site, function, module, name, 2),
   match("Access\\.pop|Kernel\\.pop_in", cat(module, ".", name)),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   value_of(context, function, kind, source, $Tensor(_)).
 
 // A scalar tensor the code writes as the key (`t[Nx.tensor(7)]`) that
@@ -158,7 +158,7 @@ call_error(site, "access_update", "Access.pop/2 is not yet supported by Nx.Tenso
 // would raise or count from the end.
 call_error(site, "access_index_clamped", detail, "") :-
   tensor_indexed_by(_, site, axes, _),
-  flow_argument(site, _, 1, "result", made),
+  argument_source(site, _, 1, "result", made),
   operation_site(made, "Nx.tensor", _),
   argument_literal(made, 0, text),
   term_integer(text, 0, value),
@@ -176,18 +176,18 @@ call_error(site, "access_index_clamped", detail, "") :-
 call_error(site, "tuple_as_tensor", to_string(position), origin) :-
   takes_tensor(site, position),
   active_site(site),
-  flow_argument(site, _, position, "result", origin),
+  argument_source(site, _, position, "result", origin),
   makes_tuple(origin).
 call_error(site, "tuple_as_tensor", to_string(position), "") :-
   takes_tensor(site, position),
   site_active(context, site),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   !makes_tuple(source),
   value_of(context, function, kind, source, $Uniform(_)).
 call_error(site, "tuple_as_tensor", to_string(position), "") :-
   takes_tensor(site, position),
   site_active(context, site),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   value_of(context, function, kind, source, $Object(object_context, tuple, mapping)),
   flow_object(_, tuple, "tuple", _),
   field_value($Object(object_context, tuple, mapping), _, $Tensor(_)).
@@ -239,17 +239,17 @@ access_key(context, site, key) :-
 .plan 1:(2,1)
 access_key(context, site, $Term(text, 0)) :-
   indexed_tensor(context, site, _),
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   range_written(text, 0, _).
 access_key(context, site, $Term(text, 0)) :-
   indexed_tensor(context, site, _),
-  flow_argument(site, _, 1, "result", made),
+  argument_source(site, _, 1, "result", made),
   made_range(context, made, first, last, step),
   range_spelled(text, first, last, step).
 .plan 1:(3,1,2,4), 2:(4,3,1,2)
 access_key(context, site, $Term("Range.new", -1)) :-
   indexed_tensor(context, site, _),
-  flow_argument(site, _, 1, "result", made),
+  argument_source(site, _, 1, "result", made),
   remote_call(made, _, "Range", "new", _).
 
 // The axes of a tensor, and a key it is indexed with.
@@ -265,7 +265,7 @@ axes_needed(axes) :- indexed_tensor(_, _, [_, axes]).
 // call).
 looked_up(context, site, $Opaque("")) :-
   indexed_tensor(context, site, _),
-  flow_argument(site, function, 1, kind, source),
+  argument_source(site, function, 1, kind, source),
   value_of(context, function, kind, source, $Opaque(_)),
   !range_written(source, 0, _),
   !makes_range(source).

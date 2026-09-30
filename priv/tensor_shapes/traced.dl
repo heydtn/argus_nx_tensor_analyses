@@ -159,10 +159,10 @@ holds(function, "result", site, "expression", "") :-
 held_asked(function, kind, source, "expression") :-
   held_asked(function, "result", site, "expression"),
   returns_tensor(site),
-  flow_argument(site, function, _, kind, source).
+  argument_source(site, function, _, kind, source).
 holds(function, "result", site, "expression", "") :-
   holds(function, kind, source, "expression", _),
-  flow_argument(site, function, _, kind, source),
+  argument_source(site, function, _, kind, source),
   returns_tensor(site),
   held_asked(function, "result", site, "expression").
 holds(function, "result", site, "expression", "") :-
@@ -170,7 +170,7 @@ holds(function, "result", site, "expression", "") :-
   returns_tensor(site),
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
-  flow_argument(site, function, position, "literal", text),
+  argument_source(site, function, position, "literal", text),
   written_number(text, "sign", _).
 
 // A field read of an expression: a leaf of a container.
@@ -186,7 +186,7 @@ holds(function, "load", load, "expression", "leaf") :-
 held_asked(function, kind, source, "expression") :-
   reads_data(site, function),
   runs_in_trace(function),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 held_asked(function, kind, source, "expression") :-
   tensor_asked(function, kind, source),
   runs_in_trace(function).
@@ -280,9 +280,9 @@ nx_members("trait", "reads_data", " Nx.backend_deallocate ").
 .decl reads_expression(site: symbol, function: symbol)
 reads_expression(site, function) :-
   reads_data(site, function),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   holds(function, kind, source, "expression", ""),
-  1 = count : { flow_argument(site, function, 0, _, _) }.
+  1 = count : { argument_source(site, function, 0, _, _) }.
 
 // ══ Conversions ═════════════════════════════════════════════════════
 
@@ -401,7 +401,7 @@ applies_operator(site, "select_val", "comparison", 0) :-
 .decl raises_bad_boolean(site: symbol, operator: symbol, function: symbol, kind: symbol, source: symbol)
 raises_bad_boolean(site, substr(atom, 1, strlen(atom) - 1), function, kind, source) :-
   remote_call(site, function, ":erlang", "error", 1),
-  flow_argument(site, function, 0, "object", reason),
+  argument_source(site, function, 0, "object", reason),
   flow_field(function, reason, "{0}", "literal", ":badbool"),
   flow_field(function, reason, "{1}", "literal", atom),
   flow_field(function, reason, "{2}", kind, source).
@@ -568,7 +568,7 @@ captured_in_trace(site, function, how, origin) :-
 .decl hands_closure_to_trace(site: symbol, function: symbol, closure: symbol, how: symbol)
 hands_closure_to_trace(site, function, closure, how) :-
   trace_call(site, function, position, how),
-  flow_argument(site, function, position, "object", closure),
+  argument_source(site, function, position, "object", closure),
   flow_closure(closure, _).
 
 // The closure captures a tensor, which the Nx call `origin` makes, and
@@ -586,12 +586,12 @@ captures_tensor(function, closure, origin) :-
 computes_with_captured(closure, selector) :-
   hands_closure_to_trace(_, _, closure, _),
   captured_parameter(closure, selector, target, position),
-  flow_argument(site, target, _, "param", to_string(position)),
+  argument_source(site, target, _, "param", to_string(position)),
   returns_tensor(site).
 computes_with_captured(closure, selector) :-
   hands_closure_to_trace(_, _, closure, _),
   captured_parameter(closure, selector, target, position),
-  flow_argument(site, target, _, "param", to_string(position)),
+  argument_source(site, target, _, "param", to_string(position)),
   operation_site(site, operation, _),
   nx_class(operation, "tuple", _).
 
@@ -624,13 +624,13 @@ computes_on(site, function, position, kind, source) :-
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
   !nx_trait(operation, "takes_template"),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 computes_on(site, function, 0, kind, source) :-
   reads_data(site, function),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 computes_on(site, function, position, kind, source) :-
   flow_dynamic(site, function, _),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 computes_on(site, function, position, kind, source) :-
   remote_call(site, function, "Nx.Defn", "jit_apply", _),
   compiled_argument_cell(site, function, position, cell),
@@ -649,12 +649,12 @@ nx_members("trait", "takes_template", " Nx.tensor Nx.transpose Nx.flatten Nx.fil
 compiled_argument_cell(site, function, index, cell) :-
   remote_call(site, function, "Nx.Defn", name, _),
   match("compile|jit_apply", name),
-  flow_argument(site, function, 1, "object", list),
+  argument_source(site, function, 1, "object", list),
   list_cell(list, index, cell).
 list_asked(list) :-
   remote_call(site, function, "Nx.Defn", name, _),
   match("compile|jit_apply", name),
-  flow_argument(site, function, 1, "object", list).
+  argument_source(site, function, 1, "object", list).
 
 // ══ Findings ════════════════════════════════════════════════════════
 
@@ -671,12 +671,12 @@ reported_function(function) :- template_computed(_, function, _, _).
 call_error(site, "data_read_in_trace", how, origin) :-
   data_read_in_trace(site, function),
   traced_first_as(function, how),
-  flow_argument(site, function, 0, "result", origin),
+  argument_source(site, function, 0, "result", origin),
   operation_site(origin, _, _).
 call_error(site, "data_read_in_trace", how, "") :-
   data_read_in_trace(site, function),
   traced_first_as(function, how),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   ( kind != "result" ; !operation_site(source, _, _) ).
 call_error(site, "jit_in_trace", how, maker) :-
   jit_in_trace(site, function, maker),

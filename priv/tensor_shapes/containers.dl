@@ -278,7 +278,7 @@ untraceable_leaf(context, site, root, "", cat("a ", struct, " struct"), object, 
 .decl defn_argument(context: Context, site: symbol, root: symbol, value: Value)
 defn_argument(context, site, cat("argument ", to_string(position + 1)), value) :-
   held(context, caller, kind, source, value),
-  flow_argument(site, caller, position, kind, source),
+  argument_source(site, caller, position, kind, source),
   defn_call(site, caller),
   entry_context(context, site, caller).
 defn_argument(context, site, cat(entry, to_string(index + 1)), value) :-
@@ -327,11 +327,11 @@ held(context, function, kind, source, value) :-
 held_demand(context, caller, kind, source) :-
   entry_context(context, site, caller),
   defn_call(site, caller),
-  flow_argument(site, caller, _, kind, source).
+  argument_source(site, caller, _, kind, source).
 held_demand(context, caller, kind, source) :-
   entry_context(context, site, caller),
   listing_call(site, caller, position, _),
-  flow_argument(site, caller, position, kind, source).
+  argument_source(site, caller, position, kind, source).
 held_demand(cell_context, builder, kind, source) :-
   entry_cell(_, _, _, cell_context, cell),
   flow_field(builder, cell, field, kind, source),
@@ -361,7 +361,7 @@ listing_call(site, caller, arity - 1, "entry ") :-
 entry_cell(context, site, 0, cell_context, cell) :-
   entry_context(context, site, caller),
   listing_call(site, caller, position, _),
-  flow_argument(site, caller, position, kind, source),
+  argument_source(site, caller, position, kind, source),
   held(context, caller, kind, source, $Object(cell_context, cell, _)),
   flow_object(_, cell, "list", _).
 entry_cell(context, site, index + 1, next_context, next) :-
@@ -494,8 +494,8 @@ written_leaf(site, object, selector) :-
 .decl sole_part(site: symbol, object: symbol)
 sole_part(site, object) :-
   defn_call(site, caller),
-  flow_argument(site, caller, position, "object", object),
-  1 = count : { flow_argument(site, caller, position, _, _) }.
+  argument_source(site, caller, position, "object", object),
+  1 = count : { argument_source(site, caller, position, _, _) }.
 sole_part(site, object) :-
   sole_cell(site, cell),
   flow_field(_, cell, "head", "object", object),
@@ -511,8 +511,8 @@ sole_part(site, inner) :-
 .decl sole_cell(site: symbol, cell: symbol)
 sole_cell(site, cell) :-
   listing_call(site, caller, position, _),
-  flow_argument(site, caller, position, "object", cell),
-  1 = count : { flow_argument(site, caller, position, _, _) }.
+  argument_source(site, caller, position, "object", cell),
+  1 = count : { argument_source(site, caller, position, _, _) }.
 sole_cell(site, next) :-
   sole_cell(site, cell),
   flow_field(_, cell, "tail", "object", next),
@@ -542,7 +542,7 @@ captured_gradient(site, path) :-
 .decl captures(site: symbol, caller: symbol, kind: symbol, source: symbol)
 captures(site, caller, kind, source) :-
   trace_call(site, caller, 1, "grad"),
-  flow_argument(site, caller, 1, "object", closure),
+  argument_source(site, caller, 1, "object", closure),
   flow_object(caller, closure, "closure", _),
   flow_field(caller, closure, _, kind, source),
   kind != "literal".
@@ -553,7 +553,7 @@ captures(site, caller, kind, source) :-
 .decl differentiates(site: symbol, caller: symbol, kind: symbol, source: symbol, path: symbol)
 differentiates(site, caller, kind, source, "") :-
   trace_call(site, caller, 1, "grad"),
-  flow_argument(site, caller, 0, kind, source),
+  argument_source(site, caller, 0, kind, source),
   kind != "literal".
 differentiates(site, caller, kind, source, cat(path, suffix)) :-
   differentiates(site, caller, "object", object, path),
@@ -601,7 +601,7 @@ visit_call(function, field, visit, index) :-
   function_def(function, implementation, name, 3, _),
   match("traverse|reduce", name),
   flow_callee(visit, function, "fun", "param", "2"),
-  flow_argument(visit, function, 0, "load", load),
+  argument_source(visit, function, 0, "load", load),
   flow_load(function, load, field, "param", "0"),
   instruction(visit, function, index, _).
 

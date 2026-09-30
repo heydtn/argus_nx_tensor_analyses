@@ -87,7 +87,7 @@ made_off_emlx(context, site) :-
 made_off_emlx(context, site) :-
   makes_type_emlx_lacks(context, site, _),
   site_function(site, function),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   placed_on(context, function, kind, source, backend, _),
   backend != "EMLX.Backend".
 
@@ -224,7 +224,7 @@ rounds_to_nearest(site) :- operation_site(site, "Nx.round", 1).
 .decl rounded_operand(site: symbol, operand: symbol)
 rounded_operand(site, operand) :-
   rounds_to_nearest(site),
-  flow_argument(site, _, 0, "result", operand),
+  argument_source(site, _, 0, "result", operand),
   operation_site(operand, _, _).
 
 // An Nx call whose result can lie exactly on a half: an integer divided
@@ -265,7 +265,7 @@ sign_site(context, site) :- rounded_operand(_, site), site_active(context, site)
 .decl written_operand(site: symbol, position: number, text: symbol)
 written_operand(site, position, text) :-
   rounded_operand(_, site),
-  flow_argument(site, _, position, "literal", text).
+  argument_source(site, _, position, "literal", text).
 
 // ══ Tensors of two backends ═════════════════════════════════════════
 //
@@ -319,11 +319,11 @@ places_on(site, backend, site) :-
   runs_under(function, backend).
 places_on(site, backend, site) :-
   transfers_backend(site),
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   backend_spelling(text, 0, backend).
 places_on(site, backend, site) :-
   remote_call(site, _, "Nx", "with_default_backend", 2),
-  flow_argument(site, _, 0, "literal", text),
+  argument_source(site, _, 0, "literal", text),
   backend_spelling(text, 0, backend).
 places_on(site, backend, site) :- compiles_for(site, backend, "runs").
 places_on(call, backend, site) :-
@@ -396,7 +396,7 @@ backend_reach.root(backend, function) :-
   fun_argument(site, 0, function, _).
 backend_reach.root(backend, function) :-
   remote_call(site, _, "Nx", "with_default_backend", 2),
-  flow_argument(site, _, 0, "literal", text),
+  argument_source(site, _, 0, "literal", text),
   backend_spelling(text, 0, backend),
   fun_argument(site, 1, function, _).
 
@@ -411,7 +411,7 @@ default_backend("EMLX.Backend") :- !sets_default_backend(_, _).
 sets_default_backend(site, backend) :-
   remote_call(site, _, "Nx", name, 1),
   ( name = "default_backend" ; name = "global_default_backend" ),
-  flow_argument(site, _, 0, "literal", text),
+  argument_source(site, _, 0, "literal", text),
   written_backend(text, 0, backend).
 
 // ── Where a tensor goes ────────────────────────────────────────────
@@ -444,7 +444,7 @@ placed_on(context, function, "load", load, backend, origin) :-
   flow_load(function, load, _, kind, source).
 placed_on(context, function, "result", site, backend, origin) :-
   placed_on(context, function, kind, source, backend, origin),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   lookup_site(site).
 
 // A field of a term the code builds, read where the term is.
@@ -606,14 +606,14 @@ named_backend(backend) :- default_backend(backend).
 .decl tensor_argument(site: symbol, function: symbol, operand: symbol, kind: symbol, source: symbol)
 tensor_argument(site, function, to_string(position), kind, source) :-
   operation_site(site, _, _),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   !shape_position(site, position).
 tensor_argument(site, function, cat(to_string(position), " ", cell), kind, source) :-
   operation_site(site, _, _),
-  flow_argument(site, function, position, "object", list),
+  argument_source(site, function, position, "object", list),
   list_cell(list, _, cell),
   flow_field(function, cell, "head", kind, source).
-list_asked(list) :- operation_site(site, _, _), flow_argument(site, _, _, "object", list).
+list_asked(list) :- operation_site(site, _, _), argument_source(site, _, _, "object", list).
 
 // An Nx call whose result is a tensor on its operands' backend: every
 // one but those that choose a backend, and those that return a number,

@@ -38,7 +38,7 @@ sign_demand(context, function, kind, source) :- negative_asked(context, function
 negative_asked(context, function, kind, source) :-
   negative_asked(context, function, "result", site),
   slot_position(site, _, position),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 negative_asked(from_context, from_function, from_kind, from_source) :-
   negative_asked(context, function, kind, source),
   arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source).
@@ -182,8 +182,8 @@ can_go_negative(context, function, kind, source, origin, cause) :-
 select_nonnegative(site, position) :-
   select_demand(site, function, predicate),
   compares_with_zero(predicate, function, kind, source, relation),
-  flow_argument(site, function, position, kind, source),
-  1 = count : { flow_argument(site, function, position, _, _) },
+  argument_source(site, function, position, kind, source),
+  1 = count : { argument_source(site, function, position, _, _) },
   branch_nonnegative(relation, position).
 
 .decl branch_nonnegative(relation: symbol, position: number)
@@ -213,7 +213,7 @@ negative_asked(context, function, kind, source) :-
   operation_site(site, operation, arity),
   nx_argument(operation, arity, 1, "indices"),
   site_active(context, site),
-  flow_argument(site, function, 1, kind, source).
+  argument_source(site, function, 1, kind, source).
 
 call_error(site, "negative_index", cause, origin) :- negative_index(_, site, origin, cause).
 
@@ -303,7 +303,7 @@ nx_members("argument", "starts", cat(
 slice_start(context, site, function, kind, source) :-
   slices_from(site, "Nx.slice_along_axis"),
   site_active(context, site),
-  flow_argument(site, function, 1, kind, source).
+  argument_source(site, function, 1, kind, source).
 slice_start(context, site, function, kind, source) :-
   start_cell(site, function, _, cell),
   flow_field(function, cell, "head", kind, source),
@@ -317,12 +317,12 @@ negative_asked(context, function, kind, source) :- slice_start(context, _, funct
 start_cell(site, function, index, cell) :-
   slices_from(site, operation),
   operation != "Nx.slice_along_axis",
-  flow_argument(site, function, 1, "object", list),
+  argument_source(site, function, 1, "object", list),
   list_cell(list, index, cell).
 list_asked(list) :-
   slices_from(site, operation),
   operation != "Nx.slice_along_axis",
-  flow_argument(site, _, 1, "object", list).
+  argument_source(site, _, 1, "object", list).
 
 // A list of starts written as a literal, at the call or as the constant
 // tail of a list after `offset` elements the code builds: its element at
@@ -331,12 +331,12 @@ list_asked(list) :-
 start_literal(site, function, 0, text) :-
   slices_from(site, operation),
   operation != "Nx.slice_along_axis",
-  flow_argument(site, function, 1, "literal", text),
+  argument_source(site, function, 1, "literal", text),
   term_list(text, 0).
 start_literal(site, function, offset, text) :-
   slices_from(site, operation),
   operation != "Nx.slice_along_axis",
-  flow_argument(site, function, 1, "object", list),
+  argument_source(site, function, 1, "object", list),
   list_rest(list, offset, text),
   term_list(text, 0).
 
@@ -374,7 +374,7 @@ start_value(context, site, function, kind, source) :-
   slices_from(site, operation),
   operation != "Nx.slice_along_axis",
   site_active(context, site),
-  flow_argument(site, function, 1, kind, source),
+  argument_source(site, function, 1, kind, source),
   kind != "object".
 start_value(context, site, function, "literal", text) :-
   start_literal(site, function, offset, text),
@@ -629,14 +629,14 @@ operand_class(context, site, position, requirement, class, origin) :-
   operand_requirement(site, position, requirement),
   in_set("real", requirement),
   site_active(context, site),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   value_class(context, function, kind, source, class, origin).
 
 sign_demand(context, function, kind, source) :-
   operand_requirement(site, position, requirement),
   in_set("real", requirement),
   site_active(context, site),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 
 nx_members("set", "real", " real real_spread ").
 

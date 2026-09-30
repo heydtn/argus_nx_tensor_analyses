@@ -255,11 +255,11 @@ atom_type_outcome("merge_number", "f(8|16|64)|bf16|c64|c128", "atom_type_misread
 .decl type_argument_spelled(site: symbol, position: number, spelled: symbol)
 type_argument_spelled(site, position, spelled) :-
   tuple_type_argument(site, _, position),
-  flow_argument(site, _, position, "literal", spelled).
+  argument_source(site, _, position, "literal", spelled).
 type_argument_spelled(site, position, spelled) :-
   tuple_type_argument(site, _, position),
   site_active(context, site),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   kind != "literal",
   value_of(context, function, kind, source, $Term(text, start)),
   term_spelling(text, start, spelled).
@@ -324,7 +324,7 @@ type_term(context, site, -1, text, start) :-
 type_term(context, site, position, text, start) :-
   type_position(site, position),
   site_active(context, site),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   value_of(context, function, kind, source, $Term(text, start)).
 type_term(context, site, -1, text, start) :-
   takes_type_option(site),

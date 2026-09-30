@@ -205,25 +205,25 @@ container_gradient(site, shape) :-
 carries_gradient(root, "param", "0") :- trace_reach.root("grad", root).
 carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
-  flow_argument(site, function, _, kind, source),
+  argument_source(site, function, _, kind, source),
   operation_site(site, operation, _),
   !nx_trait(operation, "blocks_gradient").
 carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
-  flow_argument(site, function, _, kind, source),
+  argument_source(site, function, _, kind, source),
   remote_call(site, _, module, _, _),
   !nx_module(module),
   !program_call(site, _, _).
 carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
-  flow_argument(site, function, _, kind, source),
+  argument_source(site, function, _, kind, source),
   flow_dynamic(site, function, _).
 carries_gradient(function, kind, source) :-
   carries_gradient(from_function, from_kind, from_source),
   source_arrives_from(function, kind, source, from_function, from_kind, from_source).
 carries_gradient(callee, "param", to_string(position)) :-
   carries_gradient(function, kind, source),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   flow_dynamic(site, function, _),
   site_active(context, site),
   invocation(context, site, callee, _).
@@ -266,7 +266,7 @@ nx_members("set", "blocks_gradient_from_sign", " compare round index ").
 .decl differentiated_operand(site: symbol, position: number)
 differentiated_operand(site, position) :-
   carries_gradient(function, kind, source),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 
 // ── The angle at the origin ───────────────────────────────────────────
 
@@ -277,7 +277,7 @@ differentiated_operand(site, position) :-
 takes_angle(site, site) :- operation_site(site, "Nx.atan2", 2).
 takes_angle(site, coordinates) :-
   operation_site(site, "Nx.phase", 1),
-  flow_argument(site, _, 0, "result", coordinates),
+  argument_source(site, _, 0, "result", coordinates),
   operation_site(coordinates, "Nx.complex", 2).
 
 // The signs of such coordinates are asked where a grad differentiates
@@ -313,9 +313,9 @@ differentiated_at_edge(context, site, origin, cause) :-
 differentiated_at_edge(context, site, origin, cause) :-
   takes_domain(site, "at_least_one"),
   differentiated_operand(site, 0),
-  flow_argument(site, function, 0, "result", addition),
+  argument_source(site, function, 0, "result", addition),
   sign_rule(addition, "add"),
-  flow_argument(addition, function, position, "literal", one),
+  argument_source(addition, function, position, "literal", one),
   written_number(one, "region", "one"),
   argument_sign(context, addition, 1 - position, "zero", origin, cause),
   made_by_math(cause).
@@ -328,8 +328,8 @@ select_demand(select, function, predicate) :-
   operation_site(select, "Nx.select", 3),
   differentiated_operand(select, branch),
   branch > 0,
-  flow_argument(select, function, 0, "result", predicate),
-  1 = count : { flow_argument(select, function, 0, _, _) }.
+  argument_source(select, function, 0, "result", predicate),
+  1 = count : { argument_source(select, function, 0, _, _) }.
 
 // A select's branch (1 for `on_true`, 2 for `on_false`) a gradient flows
 // back through, which it keeps only where a value is away from zero, as
@@ -347,12 +347,12 @@ kept_away_from_zero(select, function, branch, kind, source) :-
 .decl computes_branch(select: symbol, branch: number, site: symbol)
 computes_branch(select, branch, site) :-
   kept_away_from_zero(select, function, branch, _, _),
-  flow_argument(select, function, branch, "result", site),
+  argument_source(select, function, branch, "result", site),
   operation_site(site, operation, _),
   !nx_trait(operation, "blocks_gradient").
 computes_branch(select, branch, site) :-
   computes_branch(select, branch, later),
-  flow_argument(later, _, _, "result", site),
+  argument_source(later, _, _, "result", site),
   operation_site(site, operation, _),
   !nx_trait(operation, "blocks_gradient").
 
@@ -363,16 +363,16 @@ computes_branch(select, branch, site) :-
 singular_where_zero(site, function, kind, source, "logarithm") :-
   computes_branch(_, _, site),
   takes_logarithm(site, position),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 singular_where_zero(site, function, kind, source, "root") :-
   computes_branch(_, _, site),
   singular_derivative(site, _),
   !divides_by(site, 0),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 singular_where_zero(site, function, kind, source, "division") :-
   computes_branch(_, _, site),
   divides_by(site, position),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 
 // ── Exponents ─────────────────────────────────────────────────────────
 
@@ -390,7 +390,7 @@ sign_site(context, site) :- differentiated_exponent(site), site_active(context, 
 .decl negative_base_written(site: symbol)
 negative_base_written(site) :-
   differentiated_exponent(site),
-  flow_argument(site, _, 0, "literal", text),
+  argument_source(site, _, 0, "literal", text),
   written_number(text, "sign", "negative").
 
 // An exponent a power holds where the call does not write it: a value the
@@ -401,7 +401,7 @@ negative_base_written(site) :-
 held_exponent(site, spelled) :-
   operation_site(site, operation, 2),
   nx_class(operation, "sign", "power"),
-  flow_argument(site, function, 1, kind, source),
+  argument_source(site, function, 1, kind, source),
   kind != "literal",
   site_active(context, site),
   value_of(context, function, kind, source, $Term(text, start)),
@@ -413,10 +413,10 @@ held_exponent(site, spelled) :-
 exponent_quotient(site, numerator, denominator) :-
   operation_site(site, operation, 2),
   nx_class(operation, "sign", "power"),
-  flow_argument(site, function, 1, "result", quotient),
+  argument_source(site, function, 1, "result", quotient),
   sign_rule(quotient, "divide"),
-  flow_argument(quotient, function, 0, "literal", numerator),
-  flow_argument(quotient, function, 1, "literal", denominator).
+  argument_source(quotient, function, 0, "literal", numerator),
+  argument_source(quotient, function, 1, "literal", denominator).
 
 // The value of an exponent's quotient.
 .decl divided_exponent(site: symbol, exponent: float)
@@ -460,7 +460,7 @@ root_power(site) :- divided_exponent(site, exponent), exponent > 0.0, exponent <
 sigmoid_of_sum(site, addition) :-
   operation_site(site, "Nx.sigmoid", 1),
   differentiated_operand(site, 0),
-  flow_argument(site, _, 0, "result", addition),
+  argument_source(site, _, 0, "result", addition),
   sign_rule(addition, class),
   ( class = "add" ; class = "subtract" ).
 
@@ -469,7 +469,7 @@ sigmoid_of_sum(site, addition) :-
 .decl adds_far_below_zero(addition: symbol, other: number, cause: symbol)
 adds_far_below_zero(addition, 1 - position, cause) :-
   sigmoid_of_sum(_, addition),
-  flow_argument(addition, function, position, kind, source),
+  argument_source(addition, function, position, kind, source),
   holds_far_value(function, kind, source, direction, cause),
   sign_rule(addition, class),
   ( direction = "below", ( class = "add" ; position = 0 ) ;
@@ -480,12 +480,12 @@ adds_far_below_zero(addition, 1 - position, cause) :-
 .decl far_value_demand(function: symbol, kind: symbol, source: symbol)
 far_value_demand(function, kind, source) :-
   sigmoid_of_sum(_, addition),
-  flow_argument(addition, function, _, kind, source).
+  argument_source(addition, function, _, kind, source).
 far_value_demand(function, kind, source) :-
   far_value_demand(function, "result", site),
   operation_site(site, operation, arity),
   nx_argument(operation, arity, position, "keeps_far_value"),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 
 // A value can hold a written number far below or above zero
 // (`direction`), past where exp overflows in f32 and bf16 (e^88.73,
@@ -507,7 +507,7 @@ holds_far_value(function, "result", site, direction, "overflow") :-
     name = "infinity", direction = "above" ; name = "max_finite", direction = "above" ).
 holds_far_value(function, "result", site, direction, cause) :-
   holds_far_value(function, kind, source, direction, cause),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   far_value_demand(function, "result", site),
   operation_site(site, operation, arity),
   nx_argument(operation, arity, position, "keeps_far_value").
@@ -535,7 +535,7 @@ differentiated_decomposition(site, operation, origin) :-
   operation_site(site, operation, _),
   nx_class(operation, "degenerate_outcome", _),
   differentiated_operand(site, 0),
-  flow_argument(site, _, 0, "result", origin).
+  argument_source(site, _, 0, "result", origin).
 
 // A decomposition's operand, made by `origin`, degenerate by construction:
 // an outer product ("rank_one"), a product of two matrices over an axis
@@ -557,7 +557,7 @@ degenerate_operand(site, origin, "low_rank") :-
 degenerate_operand(site, origin, "scaled_identity") :-
   differentiated_decomposition(site, _, origin),
   sign_rule(origin, "multiply"),
-  flow_argument(origin, _, position, "result", identity),
+  argument_source(origin, _, position, "result", identity),
   operation_site(identity, "Nx.eye", _),
   site_active(context, origin),
   argument_tensor(context, origin, 1 - position, [_, nil]).
@@ -599,7 +599,7 @@ nx_members("argument", "no_derivative", cat(
 .decl stopped_result(site: symbol)
 stopped_result(site) :-
   underivable_call(site),
-  flow_argument(stop, _, 0, "result", site),
+  argument_source(stop, _, 0, "result", site),
   operation_site(stop, "Nx.Defn.Kernel.stop_grad", 1).
 
 // ── Fourier transforms ────────────────────────────────────────────────
@@ -614,11 +614,11 @@ fourier_transform(site) :- operation_site(site, operation, _), nx_trait(operatio
 .decl already_complex_operand(site: symbol)
 already_complex_operand(site) :-
   fourier_transform(site),
-  flow_argument(site, _, 0, "result", made),
+  argument_source(site, _, 0, "result", made),
   fourier_transform(made).
 already_complex_operand(site) :-
   fourier_transform(site),
-  flow_argument(site, _, 0, "result", made),
+  argument_source(site, _, 0, "result", made),
   operation_site(made, "Nx.complex", 2).
 
 // ── custom_grad ───────────────────────────────────────────────────────
@@ -640,7 +640,7 @@ custom_gradient_function(site, gradient_function) :-
 .decl gradient_function_object(object: symbol)
 gradient_function_object(object) :-
   custom_gradient(site, function),
-  flow_argument(site, function, 2, "object", object).
+  argument_source(site, function, 2, "object", object).
 
 // An input a `custom_grad` lists.
 .decl custom_gradient_input(site: symbol, function: symbol, kind: symbol, source: symbol)
@@ -671,7 +671,7 @@ returns_other_than_list(gradient_function) :-
 .decl counted_list(site: symbol, role: symbol, function: symbol, list: symbol)
 counted_list(site, "inputs", function, list) :-
   custom_gradient(site, function),
-  flow_argument(site, function, 1, "object", list).
+  argument_source(site, function, 1, "object", list).
 counted_list(site, "gradients", gradient_function, list) :-
   custom_gradient_function(site, gradient_function),
   flow_return(gradient_function, _, "object", list).
@@ -691,13 +691,13 @@ counted_length(site, "gradients", 0) :-
 .decl custom_gradient_reaches(site: symbol, function: symbol, kind: symbol, source: symbol)
 custom_gradient_reaches(site, function, kind, source) :-
   custom_gradient(site, function),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   !custom_gradient_input(site, function, kind, source).
 custom_gradient_reaches(site, function, kind, source) :-
   custom_gradient_reaches(site, function, "result", later),
   operation_site(later, operation, _),
   !nx_trait(operation, "blocks_gradient"),
-  flow_argument(later, function, _, kind, source),
+  argument_source(later, function, _, kind, source),
   !custom_gradient_input(site, function, kind, source).
 
 // A value the function is handed: a parameter, or a field read from one.

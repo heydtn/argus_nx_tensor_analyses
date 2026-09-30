@@ -48,11 +48,11 @@ returned_value(at, function, kind, source) :-
 handed_later(use, function, position, kind, source) :-
   frees_tensor(freed, function, _, _, _),
   runs_later(freed, use),
-  flow_argument(use, function, position, kind, source).
+  argument_source(use, function, position, kind, source).
 handed_later(use, function, position, kind, source) :-
   donates(freed, function, _),
   runs_later(freed, use),
-  flow_argument(use, function, position, kind, source).
+  argument_source(use, function, position, kind, source).
 handed_later(use, function, position, kind, source) :-
   handed_later(use, function, position, "object", object),
   flow_field(function, object, _, kind, source).
@@ -72,7 +72,7 @@ value_name_demand(function, kind, source) :-
   flow_load(function, load, _, kind, source).
 value_name_demand(function, kind, source) :-
   renames_value(site, function, _),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 
 // A call whose result is another name for the value it is handed:
 // `Access.get` of a literal index (`keys[1]`), and the Nx functions that
@@ -82,7 +82,7 @@ value_name_demand(function, kind, source) :-
 renames_value(site, function, cat("[", index, "]")) :-
   value_name_demand(function, "result", site),
   remote_call(site, function, "Access", "get", 2),
-  flow_argument(site, function, 1, "literal", index).
+  argument_source(site, function, 1, "literal", index).
 renames_value(site, function, "") :-
   value_name_demand(function, "result", site),
   remote_call(site, function, "Nx", name, _),
@@ -106,7 +106,7 @@ value_named(function, "load", load, cat(name, selector)) :-
   strlen(name) < 240.
 value_named(function, "result", site, cat(name, suffix)) :-
   value_named(function, kind, source, name),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   renames_value(site, function, suffix),
   strlen(name) < 240.
 
@@ -134,7 +134,7 @@ nx_trait(operation, "draws_key") :- nx_trait(operation, "takes_key"), operation 
 consumes_key(site, function, kind, source, operation) :-
   operation_site(site, operation, _),
   nx_trait(operation, "draws_key"),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 consumes_key(site, function, kind, source, operation) :-
   remote_operation(site, function, operation),
   nx_trait(operation, "draws_key"),
@@ -143,7 +143,7 @@ consumes_key(site, function, kind, source, cat(module, ".", name)) :-
   consumes_key_parameter(callee, position),
   program_call(site, function, callee),
   function_def(callee, module, name, _, _),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 consumes_key(site, function, kind, source, cat(module, ".", name)) :-
   consumes_key_parameter(callee, position),
   remote_defn(site, function, callee),
@@ -181,13 +181,13 @@ reused_key(first, second, function) :-
 loop_body(loop, function, closure, body) :-
   consumes_key(_, body, _, _, _),
   flow_closure(closure, body),
-  flow_argument(loop, function, _, "object", closure),
+  argument_source(loop, function, _, "object", closure),
   remote_call(loop, function, module, _, _),
   match("Enum|Stream|:lists", module).
 loop_body(loop, function, closure, body) :-
   consumes_key(_, body, _, _, _),
   flow_closure(closure, body),
-  flow_argument(loop, function, 4, "object", closure),
+  argument_source(loop, function, 4, "object", closure),
   remote_call(loop, function, "Nx.Defn.Kernel", "__while__", 6).
 
 // A key a loop's fun captured and draws from: every pass draws the same
@@ -267,7 +267,7 @@ spent_field(function, base, selector) :-
   value_named(function, kind, source, base).
 spent_field(function, base, selector) :-
   donates(_, function, mark),
-  flow_argument(mark, function, 0, "load", load),
+  argument_source(mark, function, 0, "load", load),
   flow_load(function, load, selector, kind, source),
   value_named(function, kind, source, base).
 
@@ -290,14 +290,14 @@ spent_field(function, base, selector) :-
 .decl frees_tensor(site: symbol, function: symbol, kind: symbol, source: symbol, freed: symbol)
 frees_tensor(site, function, kind, source, "used_after_transfer") :-
   remote_call(site, function, "Nx", "backend_transfer", 1),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 frees_tensor(site, function, kind, source, "used_after_transfer") :-
   remote_call(site, function, "Nx", "backend_transfer", 2),
-  flow_argument(site, function, 1, "literal", "Nx.BinaryBackend"),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 1, "literal", "Nx.BinaryBackend"),
+  argument_source(site, function, 0, kind, source).
 frees_tensor(site, function, kind, source, "used_after_deallocation") :-
   remote_call(site, function, "Nx", "backend_deallocate", 1),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 frees_tensor(site, function, kind, source, freed) :-
   frees_tensor(site, function, "object", object, freed),
   flow_field(function, object, _, kind, source).
@@ -324,11 +324,11 @@ nx_members("trait", "struct_only", " Nx.to_template ").
 .decl donates(call: symbol, function: symbol, mark: symbol)
 donates(call, function, mark) :-
   holds_mark(function, kind, source, mark),
-  flow_argument(call, function, _, kind, source),
+  argument_source(call, function, _, kind, source),
   reads_tensor_data(call).
 donates(call, function, mark) :-
   holds_mark(function, kind, source, mark),
-  flow_argument(call, function, _, kind, source),
+  argument_source(call, function, _, kind, source),
   flow_dynamic(call, function, _).
 
 .decl holds_mark(function: symbol, kind: symbol, source: symbol, mark: symbol)
@@ -362,7 +362,7 @@ parameter_read_demand(callee) :-
 .decl reads_parameter(function: symbol, position: number)
 reads_parameter(function, to_number(position)) :-
   parameter_read_demand(function),
-  flow_argument(site, function, _, "param", position),
+  argument_source(site, function, _, "param", position),
   reads_tensor_data(site).
 reads_parameter(function, to_number(position)) :-
   reads_parameter(callee, argument),

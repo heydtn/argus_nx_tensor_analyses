@@ -442,8 +442,8 @@ difference_stays_nonnegative(context, site) :-
 difference_stays_nonnegative(context, site) :-
   dtype_call(site, "subtract"),
   site_active(context, site),
-  flow_argument(site, function, 1, kind, source),
-  flow_argument(site, function, 0, "result", maximum),
+  argument_source(site, function, 1, kind, source),
+  argument_source(site, function, 0, "result", maximum),
   at_least_maximum(maximum, function, kind, source).
 
 .decl reaches_below_one(context: Context, site: symbol, position: number)
@@ -472,7 +472,7 @@ sign_site(context, site) :-
 .decl rises_along_axis(site: symbol)
 rises_along_axis(site) :-
   dtype_call(site, "difference"),
-  flow_argument(site, _, 0, "result", operand),
+  argument_source(site, _, 0, "result", operand),
   dtype_call(operand, "rising"),
   !option_atom(operand, "reverse", "true"),
   !option_atom(operand, "direction", ":desc").
@@ -688,24 +688,24 @@ cast_operand_can_be_negative(context, site) :- casts_written_negative(context, s
 .decl cast_operand_goes_negative(context: Context, site: symbol)
 cast_operand_goes_negative(context, site) :-
   dtype_call(site, "cast"),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   can_go_negative(context, function, kind, source, _, _).
 cast_operand_goes_negative(context, site) :- casts_written_negative(context, site).
 
 negative_asked(context, function, kind, source) :-
   dtype_call(site, "cast"),
   site_active(context, site),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 
 // A cast of a tensor made of written data with a negative number in it.
 .decl casts_written_negative(context: Context, site: symbol)
 casts_written_negative(context, site) :-
   dtype_call(site, "cast"),
   site_active(context, site),
-  flow_argument(site, _, 0, "result", made),
+  argument_source(site, _, 0, "result", made),
   operation_site(made, operation, _),
   nx_argument(operation, _, 0, "data"),
-  flow_argument(made, _, 0, "literal", text),
+  argument_source(made, _, 0, "literal", text),
   match(".*-[0-9].*", text).
 
 .decl operand_sign_unknown(context: Context, site: symbol)
@@ -718,7 +718,7 @@ operand_sign_unknown(context, site) :-
 .decl rounded_first(site: symbol)
 rounded_first(site) :-
   dtype_call(site, "cast"),
-  flow_argument(site, _, 0, "result", operand),
+  argument_source(site, _, 0, "result", operand),
   sign_rule(operand, "round").
 
 // A number the code writes made a type: meeting a tensor of that type (a
@@ -1157,7 +1157,7 @@ nx_members("argument", "typed_operand", cat(
 typed_argument(context, site, position, function, kind, source) :-
   typed_site(context, site),
   dtype_operand(site, position),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 
 // Where a call's type comes from, as a source: its `type:` option built as
 // a pair, or its type argument.
@@ -1166,7 +1166,7 @@ type_argument(site, function, kind, source) :-
   option_pair(site, "type", function, kind, source).
 type_argument(site, function, kind, source) :-
   type_position(site, position),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 
 // The types a value in a context can be, with the call that makes it so.
 .decl value_dtype(context: Context, function: symbol, kind: symbol, source: symbol, type: symbol, origin: symbol)
@@ -1436,14 +1436,14 @@ nx_members("default_dtype", "f32", " Nx.linspace ").
 .decl joined_cell(site: symbol, function: symbol, cell: symbol)
 joined_cell(site, function, cell) :-
   dtype_rule(site, "join"),
-  flow_argument(site, function, 0, "object", list),
+  argument_source(site, function, 0, "object", list),
   list_cell(list, _, cell).
 // Asked of the joining calls by their function's class alone: the rule a
 // call has (`dtype_rule`) reads its options, which read the lists asked.
 list_asked(list) :-
   operation_site(site, operation, _),
   nx_class(operation, "dtype", "join"),
-  flow_argument(site, _, 0, "object", list).
+  argument_source(site, _, 0, "object", list).
 
 // A cell of such a list: its element, and the cell after it, "" for the
 // last.
@@ -1486,4 +1486,4 @@ joined_type(context, site, cell, merged) :-
 call_type(context, site, type, site) :-
   joined_type(context, site, cell, type),
   joined_cell(site, function, cell),
-  flow_argument(site, function, 0, "object", cell).
+  argument_source(site, function, 0, "object", cell).

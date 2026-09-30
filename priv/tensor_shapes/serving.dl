@@ -237,7 +237,7 @@ comes_from(function, "result", site, site) :- remote_call(site, function, "Nx.Se
 comes_from(function, "result", site, site) :- remote_call(site, function, "Nx.Batch", _, _).
 comes_from(function, "result", site, origin) :-
   comes_from(function, kind, source, origin),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   remote_call(site, function, module, name, _),
   api_role(module, name, "hands_back").
 comes_from(function, kind, source, origin) :-
@@ -257,7 +257,7 @@ on_its_way(function, kind, source, role, site) :-
 .decl run_argument(run: symbol, position: number, function: symbol, kind: symbol, source: symbol)
 run_argument(run, position, function, kind, source) :-
   remote_call(run, function, "Nx.Serving", "run", 2),
-  flow_argument(run, function, position, kind, source).
+  argument_source(run, function, position, kind, source).
 
 // A serving that is started as a process: the value of a `{:serving,
 // serving}` pair, as the options of `Nx.Serving.start_link/1` and a child
@@ -295,7 +295,7 @@ callback_input(setting, name, context, "$0") :-
 .decl serving_preprocessing(serving: symbol, setting: symbol, function: symbol)
 serving_preprocessing(serving, setting, function) :-
   serving_callback(setting, "client_preprocessing", function),
-  flow_argument(setting, caller, 0, kind, source),
+  argument_source(setting, caller, 0, kind, source),
   on_its_way(caller, kind, source, "serving", serving).
 
 // What a preprocessing returns first in the pair it builds.
@@ -475,7 +475,7 @@ serving_compiled_template(context, compile, serving, template, 0) :-
   compiled_for_serving(context, compile, _),
   tensors_at(compile, _, "template"),
   serving_computation(serving, compile, _, _),
-  flow_argument(compile, caller, 1, "object", cell),
+  argument_source(compile, caller, 1, "object", cell),
   flow_field(caller, cell, "head", "result", template).
 serving_compiled_template(context, compile, serving, "", size) :-
   compiled_for_serving(context, compile, _),
@@ -488,7 +488,7 @@ serving_compiled_template(context, compile, serving, "", size) :-
 template_type(template, name, class) :-
   serving_compiled_template(_, _, _, template, _),
   operation_site(template, "Nx.template", _),
-  flow_argument(template, _, 1, "literal", spelled),
+  argument_source(template, _, 1, "literal", spelled),
   type_spelling(spelled, name, class).
 
 // A class of number the first entry of a batch can be, as a source of
@@ -509,7 +509,7 @@ entry_asked(serving, context, function, kind, source) :-
   serving_batch(serving, batch),
   tensors_at(batch, position, entries),
   entries != "template",
-  flow_argument(batch, function, position, "object", cell),
+  argument_source(batch, function, position, "object", cell),
   flow_field(function, cell, "head", kind, source),
   site_active(context, batch).
 sign_demand(context, function, kind, source) :- entry_asked(_, context, function, kind, source).
@@ -552,7 +552,7 @@ entries_conflict(context, site, first, entry) :-
 batches_request(setting, batch) :-
   serving_callback(setting, "client_preprocessing", function),
   tensors_at(batch, position, "stack"),
-  flow_argument(batch, function, position, "object", cell),
+  argument_source(batch, function, position, "object", cell),
   flow_field(function, cell, "head", "param", "0").
 batches_request(setting, batch) :-
   callback_input(setting, "client_preprocessing", context, path),

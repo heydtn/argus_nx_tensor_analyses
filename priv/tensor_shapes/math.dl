@@ -64,11 +64,11 @@ nonfinite(site, "log_of_zero", "sigmoid", sigmoid) :-
 .decl written_softplus(site: symbol, exponential: symbol)
 written_softplus(site, exponential) :-
   operation_site(site, "Nx.log1p", 1),
-  flow_argument(site, _, 0, "result", exponential),
+  argument_source(site, _, 0, "result", exponential),
   operation_site(exponential, "Nx.exp", 1).
 written_softplus(site, exponential) :-
   takes_logarithm(site, 0),
-  flow_argument(site, function, 0, "result", total),
+  argument_source(site, function, 0, "result", total),
   plus_exponential(total, function, exponential).
 
 // An exponential over a written number plus the same exponential, or one
@@ -76,9 +76,9 @@ written_softplus(site, exponential) :-
 .decl written_logistic(site: symbol, exponential: symbol)
 written_logistic(site, exponential) :-
   divides_by(site, 1),
-  flow_argument(site, function, 0, "result", dividend),
+  argument_source(site, function, 0, "result", dividend),
   exponential_of(dividend, function, kind, source),
-  flow_argument(site, function, 1, "result", total),
+  argument_source(site, function, 1, "result", total),
   plus_exponential(total, function, exponential),
   exponential_of(exponential, function, kind, source).
 
@@ -87,9 +87,9 @@ written_logistic(site, exponential) :-
 plus_exponential(total, function, exponential) :-
   operation_site(total, operation, 2),
   ( operation = "Nx.add" ; operation = "Nx.Defn.Kernel.+" ),
-  flow_argument(total, function, position, "result", exponential),
+  argument_source(total, function, position, "result", exponential),
   operation_site(exponential, "Nx.exp", 1),
-  flow_argument(total, function, 1 - position, "literal", _).
+  argument_source(total, function, 1 - position, "literal", _).
 
 // An exponential whose exponent can be positive and is not shifted down
 // by its maximum: nothing keeps it from overflowing.
@@ -102,7 +102,7 @@ can_overflow(context, exponential) :-
 .decl logarithm_of_sigmoid(site: symbol, sigmoid: symbol)
 logarithm_of_sigmoid(site, sigmoid) :-
   takes_logarithm(site, 0),
-  flow_argument(site, _, 0, "result", sigmoid),
+  argument_source(site, _, 0, "result", sigmoid),
   operation_site(sigmoid, "Nx.sigmoid", 1).
 
 // The signs of the exponentials and sigmoids written out, which nothing
@@ -314,7 +314,7 @@ samples_from_zero(site) :-
   operation_site(site, operation, arity),
   nx_trait(operation, "tuple_sampler"),
   arity >= 3,
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   written_number(text, "sign", "zero").
 
 // A tuple sampler whose minimum cannot be negative: its sample is
@@ -325,7 +325,7 @@ samples_from_nonnegative(site) :-
   operation_site(site, operation, arity),
   nx_trait(operation, "tuple_sampler"),
   arity >= 3,
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   written_number(text, "sign", "positive").
 
 // A sample is a float, or an integer for randint, unless the sampler is
@@ -465,7 +465,7 @@ compares(site, relation) :-
 .decl nan_operand(site: symbol, origin: symbol)
 nan_operand(site, origin) :-
   compares(site, _),
-  flow_argument(site, _, _, kind, source),
+  argument_source(site, _, _, kind, source),
   not_a_number(kind, source, origin).
 
 // A value that is NaN: `Nx.Constants.nan`, a tensor of `:nan`, or `:nan`
@@ -475,7 +475,7 @@ not_a_number("result", site, site) :- remote_call(site, _, "Nx.Constants", "nan"
 not_a_number("result", site, site) :-
   operation_site(site, operation, arity),
   nx_argument(operation, arity, 0, "data"),
-  flow_argument(site, _, 0, "literal", ":nan").
+  argument_source(site, _, 0, "literal", ":nan").
 not_a_number("literal", ":nan", "").
 
 // A power whose base and exponent can both be integers, which makes it an
@@ -492,7 +492,7 @@ integer_power(context, site) :-
 .decl computed_power(site: symbol)
 computed_power(site) :-
   sign_rule(site, "power"),
-  flow_argument(site, _, 1, kind, _),
+  argument_source(site, _, 1, kind, _),
   kind != "literal".
 
 sign_site(context, site) :- computed_power(site), site_active(context, site).
@@ -530,14 +530,14 @@ rounds_to_integer(site, "floor") :- operation_site(site, "Nx.floor", 1).
 rounds_to_integer(site, "ceil") :- operation_site(site, "Nx.ceil", 1).
 rounds_to_integer(site, "truncation") :-
   operation_site(site, "Nx.as_type", 2),
-  flow_argument(site, _, 1, "literal", spelled),
+  argument_source(site, _, 1, "literal", spelled),
   type_spelling(spelled, _, "integer").
 
 // A whole number taken of a logarithm to a base.
 .decl rounds_logarithm_to_base(site: symbol, logarithm: symbol)
 rounds_logarithm_to_base(site, logarithm) :-
   rounds_to_integer(site, _),
-  flow_argument(site, function, 0, "result", logarithm),
+  argument_source(site, function, 0, "result", logarithm),
   logarithm_to_base(logarithm, function).
 
 // A logarithm to a base: `log2`, `log10`, `Nx.log/2`, or a natural
@@ -552,14 +552,14 @@ logarithm_to_base(site, function) :-
   site_function(site, function).
 logarithm_to_base(site, function) :-
   divides_by(site, 1),
-  flow_argument(site, function, 0, "result", logarithm),
+  argument_source(site, function, 0, "result", logarithm),
   natural_logarithm(logarithm),
-  flow_argument(site, function, 1, "literal", _).
+  argument_source(site, function, 1, "literal", _).
 logarithm_to_base(site, function) :-
   divides_by(site, 1),
-  flow_argument(site, function, 0, "result", logarithm),
+  argument_source(site, function, 0, "result", logarithm),
   natural_logarithm(logarithm),
-  flow_argument(site, function, 1, "result", base),
+  argument_source(site, function, 1, "result", base),
   natural_logarithm(base).
 
 // A natural logarithm: Nx's, or Erlang's of a number.

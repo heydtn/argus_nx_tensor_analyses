@@ -313,7 +313,7 @@ source_arrives_from(function, "result", site, callee, kind, source) :-
   flow_return(callee, _, kind, source).
 source_arrives_from(callee, "param", to_string(position), caller, kind, source) :-
   program_call(site, caller, callee),
-  flow_argument(site, caller, position, kind, source).
+  argument_source(site, caller, position, kind, source).
 
 // A protocol implementation's module, and the type it is for.
 .decl implementation_type(module: symbol, type: symbol)
@@ -324,6 +324,12 @@ implementation_type(module, substr(module, strlen(protocol) + 1, strlen(module) 
 // name it compiled to (`:"__defn:name__"`), over a list of arguments.
 .decl remote_defn_site(site: symbol, caller: symbol)
 remote_defn_site(site, caller) :- remote_call(site, caller, "Nx.Defn.Compiler", "__remote__", 4).
+
+// The source a call hands the function it runs as its argument at
+// `position`. Read calls' arguments here, not in `flow_argument`.
+.decl argument_source(site: symbol, function: symbol, position: number, kind: symbol, source: symbol)
+argument_source(site, function, position, kind, source) :-
+  flow_argument(site, function, position, kind, source).
 
 list_asked(list) :- remote_defn_site(site, caller), flow_argument(site, caller, 3, "object", list).
 
@@ -708,7 +714,7 @@ forwarding_site(site) :-
 
 .decl reordered_argument(site: symbol)
 reordered_argument(site) :-
-  flow_argument(site, _, position, kind, source),
+  argument_source(site, _, position, kind, source),
   ( kind != "param" ; source != to_string(position) ).
 
 .decl context_depth(context: Context, depth: number)
@@ -765,7 +771,7 @@ dispatch_candidate(site, function) :- protocol_site(site, _, _, _), site_functio
 .decl path_demand(function: symbol, kind: symbol, source: symbol)
 path_demand(function, kind, source) :-
   dispatch_candidate(site, function),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 path_demand(function, kind, source) :-
   path_demand(function, "load", load),
   flow_load(function, load, _, kind, source).
@@ -784,7 +790,7 @@ source_path(function, "load", load, cat(path, suffix)) :-
 .decl dispatch_path(site: symbol, function: symbol, path: symbol)
 dispatch_path(site, function, path) :-
   dispatch_candidate(site, function),
-  flow_argument(site, function, 0, kind, source),
+  argument_source(site, function, 0, kind, source),
   source_path(function, kind, source, path).
 
 .decl correlated_site(site: symbol, path: symbol)
@@ -1063,11 +1069,11 @@ captured_parameter(object, selector, function, arity - captured + index) :-
 // code hands a call, as `captured_parameter` is over every closure.
 .decl fun_argument(site: symbol, position: number, function: symbol, captured: number)
 fun_argument(site, position, function, captured) :-
-  flow_argument(site, caller, position, "object", closure),
+  argument_source(site, caller, position, "object", closure),
   flow_object(caller, closure, "closure", captured),
   flow_closure(closure, function).
 fun_argument(site, position, function, 0) :-
-  flow_argument(site, caller, position, "literal", _),
+  argument_source(site, caller, position, "literal", _),
   fun_handed(site, caller, function, position).
 
 .decl call_made(context: Context, site: symbol, callee: symbol)
@@ -1371,7 +1377,7 @@ parameter_value($Called(site, context), callee, position, value) :-
 argument_value(context, site, position, value) :-
   site_active(context, site),
   read_site(site),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   value_of(context, function, kind, source, value).
 .plan 1:(4,3,1,2)
 
@@ -1620,7 +1626,7 @@ implementation_found(context, site, module) :-
 // ── Literals ───────────────────────────────────────────────────────
 
 .decl literal_source(function: symbol, text: symbol)
-literal_source(function, text) :- flow_argument(_, function, _, "literal", text).
+literal_source(function, text) :- argument_source(_, function, _, "literal", text).
 literal_source(function, text) :- flow_callee(_, function, _, "literal", text).
 literal_source(function, text) :- flow_field(function, _, _, "literal", text).
 literal_source(function, text) :- flow_return(function, _, "literal", text).
@@ -2382,7 +2388,7 @@ argument_unshaped(context, site, position, path) :-
 .decl argument_literal(site: symbol, position: number, text: symbol)
 argument_literal(site, position, text) :-
   operation_site(site, _, _),
-  flow_argument(site, _, position, "literal", text).
+  argument_source(site, _, position, "literal", text).
 
 // The tensors a list holds, head first, as many as a list keeps.
 .decl list_demand(value: Value, depth: number)
@@ -3263,11 +3269,11 @@ options_source(site, function, kind, source) :-
   remote_call(site, _, module, name, arity),
   nx_argument(cat(module, ".", name), arity, position, "options"),
   position < arity,
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 options_source(site, function, kind, source) :-
   remote_call(site, _, "Nx.Constants", _, arity),
   arity >= 2,
-  flow_argument(site, function, arity - 1, kind, source).
+  argument_source(site, function, arity - 1, kind, source).
 
 // A keyword list the code builds, cell by cell.
 .decl options_cell(site: symbol, function: symbol, cell: symbol) inline
@@ -8307,7 +8313,7 @@ root_of_cancellation(context, site, kind, difference) :-
 .decl logarithm_of_softmax(site: symbol, softmax: symbol)
 logarithm_of_softmax(site, softmax) :-
   takes_logarithm(site, 0),
-  flow_argument(site, _, 0, "result", softmax),
+  argument_source(site, _, 0, "result", softmax),
   divides_by(softmax, 1),
   normalizes_exponentials(softmax, _).
 
@@ -8542,7 +8548,7 @@ nx_members("argument", "nonzero", cat(
 negative_power(site) :-
   operation_site(site, operation, 2),
   nx_class(operation, "sign", "power"),
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   written_number(text, "sign", "negative").
 
 // The operand an Nx call takes the logarithm of ("positive"): a
@@ -8567,7 +8573,7 @@ nx_members("argument", "nonnegative", " Nx.sqrt/1:0 Nx.rsqrt/1:0 ").
 fractional_power(site) :-
   operation_site(site, operation, 2),
   nx_class(operation, "sign", "power"),
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   written_number(text, "fraction", "nonzero").
 
 // A call whose derivative is infinite where its result is zero: a square
@@ -8586,7 +8592,7 @@ singular_derivative(site, 0) :- operation_site(site, "Nx.standard_deviation", _)
 .decl root_power(site: symbol)
 root_power(site) :-
   fractional_power(site),
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   written_number(text, "fraction", "proper").
 
 // Such a call in a differentiated function, in a context it runs in,
@@ -8611,8 +8617,8 @@ nonnegative_root_needed(context, site) :-
 .decl stopped_gradient(site: symbol)
 stopped_gradient(site) :-
   singular_derivative(site, _),
-  flow_argument(site, function, 0, "result", operand),
-  1 = count : { flow_argument(site, function, 0, _, _) },
+  argument_source(site, function, 0, "result", operand),
+  1 = count : { argument_source(site, function, 0, _, _) },
   operation_site(operand, "Nx.Defn.Kernel.stop_grad", 1).
 
 // A function defined on only part of the line, by its domain: asin and
@@ -8662,27 +8668,27 @@ never_negative_operand(context, site, position) :-
 .decl normalizes_exponentials(site: symbol, exponential: symbol)
 normalizes_exponentials(site, exponential) :-
   divides_by(site, 1),
-  flow_argument(site, function, 0, "result", dividend),
+  argument_source(site, function, 0, "result", dividend),
   exponential_of(dividend, function, kind, source),
-  flow_argument(site, function, 1, "result", total),
+  argument_source(site, function, 1, "result", total),
   sum_of_exponentials(total, function, exponential),
   exponential_of(exponential, function, kind, source).
 normalizes_exponentials(site, exponential) :-
   takes_logarithm(site, 0),
-  flow_argument(site, function, 0, "result", total),
+  argument_source(site, function, 0, "result", total),
   sum_of_exponentials(total, function, exponential).
 
 // An exponential, and what it is of.
 .decl exponential_of(exponential: symbol, function: symbol, kind: symbol, source: symbol)
 exponential_of(exponential, function, kind, source) :-
   operation_site(exponential, "Nx.exp", 1),
-  flow_argument(exponential, function, 0, kind, source).
+  argument_source(exponential, function, 0, kind, source).
 
 // A sum of an exponential.
 .decl sum_of_exponentials(total: symbol, function: symbol, exponential: symbol)
 sum_of_exponentials(total, function, exponential) :-
   operation_site(total, "Nx.sum", _),
-  flow_argument(total, function, 0, "result", exponential),
+  argument_source(total, function, 0, "result", exponential),
   operation_site(exponential, "Nx.exp", 1).
 
 // An exponential of values shifted down by their maximum, or by anything
@@ -8691,8 +8697,8 @@ sum_of_exponentials(total, function, exponential) :-
 shifted_by_maximum(exponential) :-
   exponential_of(exponential, function, "result", shift),
   sign_rule(shift, "subtract"),
-  flow_argument(shift, function, 0, kind, source),
-  flow_argument(shift, function, 1, "result", maximum),
+  argument_source(shift, function, 0, kind, source),
+  argument_source(shift, function, 1, "result", maximum),
   at_least_maximum(maximum, function, kind, source).
 
 // The call's result is at least every element of the value: its
@@ -8701,14 +8707,14 @@ shifted_by_maximum(exponential) :-
 .decl at_least_maximum(site: symbol, function: symbol, kind: symbol, source: symbol)
 at_least_maximum(site, function, kind, source) :-
   operation_site(site, "Nx.reduce_max", _),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 at_least_maximum(site, function, kind, source) :-
   at_least_maximum(maximum, function, kind, source),
-  flow_argument(site, function, 0, "result", maximum),
+  argument_source(site, function, 0, "result", maximum),
   sign_rule(site, "preserve").
 at_least_maximum(site, function, kind, source) :-
   at_least_maximum(maximum, function, kind, source),
-  flow_argument(site, function, _, "result", maximum),
+  argument_source(site, function, _, "result", maximum),
   sign_rule(site, "maximum").
 
 // An argument of a call in a context can have the sign: some value
@@ -8766,7 +8772,7 @@ sign_site(context, site) :- sign_demand(context, _, "result", site), sign_rule(s
 .decl signed_argument(context: Context, site: symbol, position: number, function: symbol, kind: symbol, source: symbol)
 signed_argument(context, site, position, function, kind, source) :-
   sign_site(context, site),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 
 // A value the rules hold: a written number by its sign, a size, which is
 // positive, and a value not known, which can be anything.
@@ -8898,11 +8904,11 @@ arrives_from($Canonical(function, arguments), function, "param", to_string(posit
   invocation(caller, site, function, $Canonical(function, arguments)),
   program_call(site, caller_function, function),
   !entered_from_outside(function),
-  flow_argument(site, caller_function, position, kind, source).
+  argument_source(site, caller_function, position, kind, source).
 arrives_from($Called(site, caller), callee, "param", to_string(position), caller, caller_function, kind, source) :-
   invocation(caller, site, callee, $Called(site, caller)),
   program_call(site, caller_function, callee),
-  flow_argument(site, caller_function, position, kind, source).
+  argument_source(site, caller_function, position, kind, source).
 
 // A function the program is entered at from outside, whose parameters in
 // its canonical context are not known: one no call of the program runs, a
@@ -9126,10 +9132,10 @@ may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause
 .decl squares(site: symbol)
 squares(site) :-
   sign_rule(site, "multiply"),
-  flow_argument(site, function, 0, kind, source),
-  flow_argument(site, function, 1, kind, source),
-  1 = count : { flow_argument(site, function, 0, _, _) },
-  1 = count : { flow_argument(site, function, 1, _, _) }.
+  argument_source(site, function, 0, kind, source),
+  argument_source(site, function, 1, kind, source),
+  1 = count : { argument_source(site, function, 0, _, _) },
+  1 = count : { argument_source(site, function, 1, _, _) }.
 
 // `divide`: signs as a product's, zero where the dividend is.
 sign_image("divide", 1, "positive", 2, "positive", "positive", "").
@@ -9219,7 +9225,7 @@ may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause
 .decl power_of(site: symbol, exponent: number)
 power_of(site, exponent) :-
   sign_rule(site, "power"),
-  flow_argument(site, _, 1, "literal", text),
+  argument_source(site, _, 1, "literal", text),
   term_integer(text, 0, exponent).
 .decl even_power(site: symbol)
 even_power(site) :- power_of(site, exponent), exponent > 0, exponent % 2 = 0.
@@ -9298,8 +9304,8 @@ sign_blocked(site, position, "zero", "zero") :- select_checks(site, position, _)
 select_checks(site, position, need) :-
   select_demand(site, function, predicate),
   compares_with_zero(predicate, function, kind, source, relation),
-  flow_argument(site, function, position, kind, source),
-  1 = count : { flow_argument(site, function, position, _, _) },
+  argument_source(site, function, position, kind, source),
+  1 = count : { argument_source(site, function, position, _, _) },
   branch_ensures(relation, position, need).
 
 // A select whose sign is asked of, and the one call its predicate comes
@@ -9308,8 +9314,8 @@ select_checks(site, position, need) :-
 select_demand(site, function, predicate) :-
   signed_call(_, site, function, "select"),
   operation_site(site, "Nx.select", 3),
-  flow_argument(site, function, 0, "result", predicate),
-  1 = count : { flow_argument(site, function, 0, _, _) }.
+  argument_source(site, function, 0, "result", predicate),
+  1 = count : { argument_source(site, function, 0, _, _) }.
 
 .decl branch_ensures(relation: symbol, position: number, need: symbol)
 branch_ensures("equal", 2, "nonzero"). branch_ensures("not_equal", 1, "nonzero").
@@ -9323,17 +9329,17 @@ compares_with_zero(comparison, function, kind, source, relation) :-
   select_demand(_, function, comparison),
   operation_site(comparison, operation, 2),
   nx_class(operation, "relation", relation),
-  flow_argument(comparison, function, 0, kind, source),
+  argument_source(comparison, function, 0, kind, source),
   kind != "literal",
-  flow_argument(comparison, function, 1, "literal", zero),
+  argument_source(comparison, function, 1, "literal", zero),
   written_number(zero, "sign", "zero").
 compares_with_zero(comparison, function, kind, source, relation) :-
   select_demand(_, function, comparison),
   operation_site(comparison, operation, 2),
   nx_class(operation, "reversed_relation", relation),
-  flow_argument(comparison, function, 1, kind, source),
+  argument_source(comparison, function, 1, kind, source),
   kind != "literal",
-  flow_argument(comparison, function, 0, "literal", zero),
+  argument_source(comparison, function, 0, "literal", zero),
   written_number(zero, "sign", "zero").
 
 // A comparison's relation of its first operand to its second
@@ -9582,10 +9588,10 @@ clip_bounds(site, 0, 4) :-
 .decl written_clip(site: symbol, low: number, high: number)
 written_clip(site, low, high) :-
   clip_demand(site, function),
-  flow_argument(site, function, 1, "literal", low_text),
-  flow_argument(site, function, 2, "literal", high_text),
-  1 = count : { flow_argument(site, function, 1, _, _) },
-  1 = count : { flow_argument(site, function, 2, _, _) },
+  argument_source(site, function, 1, "literal", low_text),
+  argument_source(site, function, 2, "literal", high_text),
+  1 = count : { argument_source(site, function, 1, _, _) },
+  1 = count : { argument_source(site, function, 2, _, _) },
   written_number(low_text, "region", low_region),
   region_order(low_region, low),
   written_number(high_text, "region", high_region),
@@ -9675,9 +9681,9 @@ unit_ratio(site) :- normalized(site).
 unit_ratio(site) :-
   ratio_demand(site),
   divides_by(site, 1),
-  flow_argument(site, function, 0, "result", product),
+  argument_source(site, function, 0, "result", product),
   inner_product(product, function, left_kind, left, right_kind, right),
-  flow_argument(site, function, 1, "result", divisor),
+  argument_source(site, function, 1, "result", divisor),
   at_least_norms(divisor, function, left_kind, left, right_kind, right).
 unit_ratio(site) :-
   ratio_demand(site),
@@ -9690,15 +9696,15 @@ unit_ratio(site) :-
 normalized(site) :-
   ratio_demand(site),
   divides_by(site, 1),
-  flow_argument(site, function, 0, kind, source),
-  flow_argument(site, function, 1, "result", divisor),
+  argument_source(site, function, 0, kind, source),
+  argument_source(site, function, 1, "result", divisor),
   at_least_norm(divisor, function, kind, source).
 
 // A vector over its norm, as it is or moved.
 .decl unit_vector(site: symbol, function: symbol)
 unit_vector(site, function) :- normalized(site), site_function(site, function).
 unit_vector(site, function) :-
-  flow_argument(site, function, 0, "result", vector),
+  argument_source(site, function, 0, "result", vector),
   unit_rule(site, "move"),
   unit_vector(vector, function).
 
@@ -9713,15 +9719,15 @@ inner_product(site, function, left_kind, left, right_kind, right) :-
   operation_site(site, "Nx.dot", arity),
   nx_argument("Nx.dot", arity, left_position, "first_operand"),
   nx_argument("Nx.dot", arity, right_position, "second_operand"),
-  flow_argument(site, function, left_position, left_kind, left),
-  flow_argument(site, function, right_position, right_kind, right).
+  argument_source(site, function, left_position, left_kind, left),
+  argument_source(site, function, right_position, right_kind, right).
 inner_product(site, function, left_kind, left, right_kind, right) :-
   inner_demand(site),
   operation_site(site, "Nx.sum", _),
-  flow_argument(site, function, 0, "result", product),
+  argument_source(site, function, 0, "result", product),
   unit_rule(product, "multiply"),
-  flow_argument(product, function, 0, left_kind, left),
-  flow_argument(product, function, 1, right_kind, right).
+  argument_source(product, function, 0, left_kind, left),
+  argument_source(product, function, 1, right_kind, right).
 
 // The calls asked whether they are inner products: a unit ratio's
 // dividend, the ratio itself, and what a square root is of.
@@ -9730,11 +9736,11 @@ inner_demand(site) :- ratio_demand(site).
 inner_demand(product) :-
   ratio_demand(site),
   divides_by(site, 1),
-  flow_argument(site, _, 0, "result", product).
+  argument_source(site, _, 0, "result", product).
 inner_demand(product) :-
   norm_demand(site, function),
   operation_site(site, "Nx.sqrt", 1),
-  flow_argument(site, function, 0, "result", product).
+  argument_source(site, function, 0, "result", product).
 
 // The norm of a value: `Nx.LinAlg.norm`, or the square root of its inner
 // product with itself.
@@ -9742,11 +9748,11 @@ inner_demand(product) :-
 norm_of(site, function, kind, source) :-
   norm_demand(site, function),
   operation_site(site, "Nx.LinAlg.norm", _),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 norm_of(site, function, kind, source) :-
   norm_demand(site, function),
   operation_site(site, "Nx.sqrt", 1),
-  flow_argument(site, function, 0, "result", product),
+  argument_source(site, function, 0, "result", product),
   inner_product(product, function, kind, source, kind, source).
 
 // At least the norm of a value: its norm, as it is or moved, the larger of
@@ -9756,7 +9762,7 @@ at_least_norm(site, function, kind, source) :- norm_of(site, function, kind, sou
 at_least_norm(site, function, kind, source) :-
   norm_demand(site, function),
   norm_widening(site, function, position),
-  flow_argument(site, function, position, "result", norm),
+  argument_source(site, function, position, "result", norm),
   at_least_norm(norm, function, kind, source).
 
 // At least the product of two values' norms, likewise.
@@ -9764,21 +9770,21 @@ at_least_norm(site, function, kind, source) :-
 at_least_norms(site, function, left_kind, left, right_kind, right) :-
   norm_demand(site, function),
   unit_rule(site, "multiply"),
-  flow_argument(site, function, 0, "result", first),
-  flow_argument(site, function, 1, "result", second),
+  argument_source(site, function, 0, "result", first),
+  argument_source(site, function, 1, "result", second),
   at_least_norm(first, function, left_kind, left),
   at_least_norm(second, function, right_kind, right).
 at_least_norms(site, function, left_kind, left, right_kind, right) :-
   norm_demand(site, function),
   unit_rule(site, "multiply"),
-  flow_argument(site, function, 0, "result", first),
-  flow_argument(site, function, 1, "result", second),
+  argument_source(site, function, 0, "result", first),
+  argument_source(site, function, 1, "result", second),
   at_least_norm(first, function, right_kind, right),
   at_least_norm(second, function, left_kind, left).
 at_least_norms(site, function, left_kind, left, right_kind, right) :-
   norm_demand(site, function),
   norm_widening(site, function, position),
-  flow_argument(site, function, position, "result", norms),
+  argument_source(site, function, position, "result", norms),
   at_least_norms(norms, function, left_kind, left, right_kind, right).
 
 // The operand a call keeps a lower bound of: a move's, either of a
@@ -9789,16 +9795,16 @@ norm_widening(site, function, 0) :- norm_demand(site, function), unit_rule(site,
 norm_widening(site, function, position) :-
   norm_demand(site, function),
   unit_rule(site, "maximum"),
-  flow_argument(site, function, position, _, _).
+  argument_source(site, function, position, _, _).
 norm_widening(site, function, 0) :-
   norm_demand(site, function),
   sign_rule(site, "add"),
-  flow_argument(site, function, 1, "literal", text),
+  argument_source(site, function, 1, "literal", text),
   written_number(text, "sign", "positive").
 norm_widening(site, function, 1) :-
   norm_demand(site, function),
   sign_rule(site, "add"),
-  flow_argument(site, function, 0, "literal", text),
+  argument_source(site, function, 0, "literal", text),
   written_number(text, "sign", "positive").
 
 // The calls asked whether they are at least a norm: a unit ratio's
@@ -9807,16 +9813,16 @@ norm_widening(site, function, 1) :-
 norm_demand(divisor, function) :-
   ratio_demand(site),
   divides_by(site, 1),
-  flow_argument(site, function, 1, "result", divisor).
+  argument_source(site, function, 1, "result", divisor).
 norm_demand(operand, function) :-
   norm_demand(site, function),
   unit_rule(site, class),
   ( class = "move" ; class = "maximum" ; class = "multiply" ),
-  flow_argument(site, function, _, "result", operand).
+  argument_source(site, function, _, "result", operand).
 norm_demand(operand, function) :-
   norm_demand(site, function),
   sign_rule(site, "add"),
-  flow_argument(site, function, _, "result", operand).
+  argument_source(site, function, _, "result", operand).
 
 // Each Nx function's region class. A function with none can return
 // anything.
@@ -10012,7 +10018,7 @@ nx_members("default", "float", " Nx.Random.uniform Nx.Random.normal ").
 // its type argument, known or not.
 .decl type_given(site: symbol)
 type_given(site) :- option_given(site, "type"), takes_type_option(site).
-type_given(site) :- type_position(site, position), flow_argument(site, _, position, _, _).
+type_given(site) :- type_position(site, position), argument_source(site, _, position, _, _).
 
 // The calls whose `:type` option is a tensor type: the options of others,
 // such as the compiler's a jit is handed, name no type of a tensor.
@@ -10043,7 +10049,7 @@ given_type(context, site, name, class) :-
 given_type(context, site, name, class) :-
   type_asked(context, site),
   type_position(site, position),
-  flow_argument(site, function, position, kind, source),
+  argument_source(site, function, position, kind, source),
   value_of(context, function, kind, source, $Term(text, start)),
   term_spelling(text, start, spelled),
   type_spelling(spelled, name, class).
@@ -10294,7 +10300,7 @@ operand_source(context, site, position, context, function, kind, source, 0) :-
   finding_at(context, site),
   operation_site(site, operation, arity),
   operand_position(operation, arity, position),
-  flow_argument(site, function, position, kind, source).
+  argument_source(site, function, position, kind, source).
 operand_source(origin, site, position, base, function, "param", parameter, depth) :-
   operand_source(origin, site, position, fork, function, "param", parameter, depth),
   fork_of(fork, base, _).
@@ -10303,7 +10309,7 @@ operand_source(origin, site, position, caller, caller_function, kind, source, de
   depth < 4,
   invocation(caller, call, function, context),
   calls_directly(caller, call, function),
-  flow_argument(call, caller_function, to_number(parameter), kind, source).
+  argument_source(call, caller_function, to_number(parameter), kind, source).
 operand_source(origin, site, position, caller, caller_function, kind, source, depth + 1) :-
   operand_source(origin, site, position, context, function, "param", parameter, depth),
   depth < 4,
