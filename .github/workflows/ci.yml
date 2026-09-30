@@ -71,17 +71,38 @@ jobs:
       - name: Restore dependencies cache
         uses: actions/cache@v4
         with:
-          path: |
-            deps
-            _build
+          path: deps
           key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-
 
       - name: Install dependencies
         run: mix deps.get
 
+      # The build of this matrix entry's last run: the compiled
+      # dependencies, and the suite's solve caches (_build/test/suite),
+      # whose entries are keyed on the facts, the rules, Argus and the
+      # solver, so a restored cache serves only rows this commit would
+      # solve the same, and a rule edit solves again. A new cache per run
+      # and attempt, the newest restored, saved whatever the tests did.
+      # It is restored before the compile, which on a restored build
+      # still fails on an unchanged file's warnings: Mix reports them
+      # again.
+      - name: Restore the test build
+        uses: actions/cache/restore@v4
+        with:
+          path: _build/test
+          key: ${{ runner.os }}-test-build-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-test-build-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}-
+
       - name: Compile
         run: mix compile --warnings-as-errors
 
       - name: Run tests
         run: mix test
+
+      - name: Save the test build
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: _build/test
+          key: ${{ runner.os }}-test-build-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
