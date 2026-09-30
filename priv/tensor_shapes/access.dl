@@ -646,9 +646,8 @@ makes_tuple(site) :- operation_site(site, operation, _), nx_trait(operation, "ma
 makes_tuple(site) :- remote_call(site, _, "Nx.Defn", name, _), nx_trait(cat("Nx.Defn.", name), "makes_tuple").
 
 // The functions that return a tuple of tensors: those of the class
-// "tuple", `top_k`, and `value_and_grad`.
+// "tuple".
 nx_trait(operation, "makes_tuple") :- nx_class(operation, "tuple", _).
-nx_members("trait", "makes_tuple", " Nx.top_k Nx.Defn.value_and_grad Nx.Defn.Kernel.value_and_grad ").
 
 // The operands of Nx calls that take them as tensors: all but those of the
 // calls that walk containers of tensors, and of `Nx.rank/1`, which reads a

@@ -245,12 +245,12 @@ returns_tensor(site) :-
 
 // The calls whose result is no tensor: those that answer about a tensor's
 // shape or struct, give its data on the host or a term of another kind,
-// and return a tuple; and `Nx.default_backend`, `Nx.backend_deallocate`,
-// `Nx.top_k` and `Nx.LinAlg.schur`.
+// and return a tuple; and `Nx.default_backend` and
+// `Nx.backend_deallocate`.
 nx_trait(operation, "gives_no_tensor") :- nx_class(operation, "gives", gives), in_set("gives_no_tensor", gives).
 nx_trait(operation, "gives_no_tensor") :- nx_class(operation, "tuple", _).
 nx_members("set", "gives_no_tensor", " shape struct host term ").
-nx_members("trait", "gives_no_tensor", " Nx.default_backend Nx.backend_deallocate Nx.top_k Nx.LinAlg.schur ").
+nx_members("trait", "gives_no_tensor", " Nx.default_backend Nx.backend_deallocate ").
 
 // ══ Data read in traced code ════════════════════════════════════════
 

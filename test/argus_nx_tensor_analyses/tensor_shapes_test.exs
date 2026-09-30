@@ -1875,6 +1875,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "tuple_as_tensor", :any}, :raises},
      "Nx.add(Nx.top_k(Nx.iota({4}), k: 2), 1)"},
     {{:finds, {"tensor_call_error", "tuple_as_tensor", :any}, :raises},
+     "Nx.sum(Nx.Defn.value_and_grad(Nx.iota({4}, type: :f32), &Nx.sum/1))"},
+    {{:finds, {"tensor_call_error", "tuple_as_tensor", :any}, :raises},
      "Nx.reshape({Nx.iota({3}), Nx.iota({3})}, {6})"},
     {{:finds, {"tensor_call_error", "tuple_as_tensor", :any}, :raises},
      "Nx.multiply(2, Nx.Random.uniform(Nx.Random.key(1), shape: {2}))"},

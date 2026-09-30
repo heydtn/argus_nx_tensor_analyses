@@ -20,12 +20,15 @@
 .decl tuple_element(context: Context, site: symbol, selector: symbol, tensor: Tensor)
 
 // The Nx functions that return a tuple, by their class "tuple": a sample
-// and the key to use next ("sample"), or the parts of what they compute
-// ("parts").
+// and the key to use next ("sample"), the parts of what they compute
+// ("parts"), or tuples whose tensors these rules give no shape
+// ("unmodeled": `top_k`'s values and indices, `value_and_grad`'s value
+// and gradient).
 nx_members("tuple", "sample", cat(
   " Nx.Random.uniform Nx.Random.normal Nx.Random.randint Nx.Random.gumbel Nx.Random.shuffle",
   " Nx.Random.choice Nx.Random.multivariate_normal ")).
 nx_members("tuple", "parts", " Nx.LinAlg.qr Nx.LinAlg.eigh Nx.LinAlg.svd Nx.LinAlg.lu Nx.split ").
+nx_members("tuple", "unmodeled", " Nx.top_k Nx.Defn.value_and_grad ").
 
 result_value(context, site, $Object(context, site, nil)) :- tuple_element(context, site, "{0}", _).
 
@@ -33,7 +36,8 @@ result_value(context, site, $Object(context, site, nil)) :- tuple_element(contex
 // else: a position a rule gives no tensor has no value.
 object_holds(site, selector) :-
   operation_site(site, operation, _),
-  nx_class(operation, "tuple", _),
+  nx_class(operation, "tuple", kind),
+  kind != "unmodeled",
   selector_position(selector, _).
 object_field(context, site, selector, $Tensor(tensor)) :-
   object_field_demand(context, site, selector),
