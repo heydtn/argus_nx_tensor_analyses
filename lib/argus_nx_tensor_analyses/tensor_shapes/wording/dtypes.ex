@@ -110,18 +110,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     }
   end
 
-  def call_error("cast_wraparound", type, _operation) do
-    %{
-      title: "makes a negative or out-of-range number #{type}",
-      detail:
-        "A value that can be negative, or a written number outside #{type}'s range, is " <>
-          "made #{type}: it wraps around rather than saturating (-1 becomes 255 in u8, and " <>
-          "300 becomes 44).",
-      label: "made #{type}, where #{out_of_range(type)}",
-      help: "clip into the type's range first, as in Nx.clip(x, 0, 255), or use a signed type",
-      frame: "",
-      severity: :warning
-    }
+  # A written number outside the integer type it is made (`u8 -1`), or a
+  # value the code's math can make negative made unsigned (`u8`).
+  def call_error("cast_wraparound", detail, _operation) do
+    case String.split(detail, " ") do
+      [type, number] -> number_wraparound(type, String.to_integer(number))
+      [type] -> negative_wraparound(type)
+    end
   end
 
   def call_error("unchecked_cast_wraparound", type, _operation) do
@@ -226,6 +221,37 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
 
   def call_error(_kind, _detail, _operation), do: nil
 
+  defp negative_wraparound(type) do
+    %{
+      title: "makes a value that can be negative #{type}",
+      detail:
+        "The code's math can make the value negative, and it is made #{type}, an unsigned " <>
+          "type: it wraps around rather than saturating (-1 becomes " <>
+          "#{wrapped_integer(-1, type)} in #{type}).",
+      label: "made #{type}, where -1 becomes #{wrapped_integer(-1, type)}",
+      help: "clip into the type's range first, as in Nx.clip(x, 0, 255), or use a signed type",
+      frame: "",
+      severity: :warning
+    }
+  end
+
+  defp number_wraparound(type, number) do
+    {low, high} = integer_range(type)
+    wrapped = wrapped_integer(number, type)
+
+    %{
+      title: "makes #{number} #{article(type)} #{type}, which holds #{low} to #{high}",
+      detail:
+        "Nx writes the number into #{type} by its low bits, wrapping it around rather than " <>
+          "saturating: the tensor holds #{wrapped} where the code writes #{number}.",
+      label: "#{number} becomes #{wrapped} in #{type}",
+      help:
+        "write a number from #{low} to #{high}, or make the tensor a type that holds #{number}",
+      frame: "",
+      severity: :warning
+    }
+  end
+
   # A number the tensor's own type rounds to zero.
   defp underflow_in_type(number, type) do
     %{
@@ -259,36 +285,49 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     }
   end
 
-  @impl true
-  def hazard("literal_overflow", type, _operation) when type in @wider_than_f32 do
+  # A number past the largest finite value of the tensor's own type.
+  defp overflow_in_type(number, type) do
     %{
-      title: "makes a number infinite in f32 before it meets #{type}",
+      title: "makes #{number} infinite in #{type}",
       detail:
-        "Outside traced code Nx makes a float number an f32 tensor before it meets another " <>
-          "tensor, whatever that tensor's type: a number the code writes here is past f32's " <>
-          "largest finite value, so it is infinite before it meets the #{type} tensor, which " <>
-          "would have held it.",
-      label: "a number past 3.4028235e38 is infinite in f32, before it meets #{type}",
-      help:
-        "make the number a tensor of the other's type first, as in Nx.tensor(1.0e39, type: :#{type}), or compute it in a defn, where it keeps the merged type",
-      frame: "",
-      severity: :warning
-    }
-  end
-
-  def hazard("literal_overflow", type, _operation) do
-    %{
-      title: "makes a number infinite in #{type}",
-      detail:
-        "A number the code writes here is past #{type}'s largest finite value" <>
-          "#{largest(type)}, and the tensor's type is #{type}, which it keeps: the number " <>
-          "becomes infinite there, so a -1.0e9 mask gives -Inf, and a softmax over it NaN.",
-      label: "a number #{past_largest(type)} is infinite in #{type}",
+        "The number #{number} is past #{type}'s largest finite value#{largest(type)}, and " <>
+          "the tensor it meets is #{type}, which keeps its type: the number becomes infinite " <>
+          "there, so a -1.0e9 mask gives -Inf, and a softmax over it NaN.",
+      label: "#{number} becomes an infinity in #{type}#{largest(type, "largest ")}",
       help:
         "use a number the type holds, such as Nx.Constants.min_finite(Nx.type(x)), or compute in f32",
       frame: "",
       severity: :warning
     }
+  end
+
+  # A number Nx makes an f32, which makes it infinite, before it meets a
+  # tensor of a type that would have held it.
+  defp overflow_before_meeting(number, type) do
+    %{
+      title: "makes #{number} infinite in f32 before it meets #{type}",
+      detail:
+        "Outside traced code Nx makes a float number an f32 tensor before it meets another " <>
+          "tensor, whatever that tensor's type: #{number} is past f32's largest finite value " <>
+          "(3.4028235e38), so it is infinite before it meets the #{type} tensor, which would " <>
+          "have held it.",
+      label: "#{number} is infinite in f32, before it meets #{type}",
+      help:
+        "make the number a tensor of the other's type first, as in Nx.tensor(#{number}, type: :#{type}), or compute it in a defn, where it keeps the merged type",
+      frame: "",
+      severity: :warning
+    }
+  end
+
+  @impl true
+  # A written number past the float type it is made (`f16 -1.0e9`), or
+  # past f32, which Nx makes it before it meets a wider type (`f64 1.0e39`).
+  def hazard("literal_overflow", cause, _operation) do
+    [type, number] = String.split(cause, " ")
+
+    if type in @wider_than_f32,
+      do: overflow_before_meeting(number, type),
+      else: overflow_in_type(number, type)
   end
 
   def hazard("cast_overflow", type, _operation) do
@@ -380,14 +419,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   defp zero_minus_one(type), do: "0 - 1 is #{wrapped_integer(-1, type)}"
-
-  # What an integer type makes of the first integer past its range.
-  defp out_of_range(type) do
-    case integer_range(type) do
-      {0, _high} -> "-1 becomes #{wrapped_integer(-1, type)}"
-      {low, high} -> "#{high + 1} becomes #{low}"
-    end
-  end
 
   # The first sum past a narrow integer type's largest value, as the type
   # holds it.
@@ -567,9 +598,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     end
   end
 
-  defp largest(type) do
+  # A low-range float type's largest finite value, in parentheses after
+  # `prefix`, and nothing for another type.
+  defp largest(type, prefix \\ "") do
     case Map.fetch(@largest, type) do
-      {:ok, value} -> " (#{value})"
+      {:ok, value} -> " (#{prefix}#{value})"
       :error -> ""
     end
   end

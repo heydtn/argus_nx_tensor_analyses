@@ -2849,10 +2849,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     # negative only where an input is: info
     {{:finds, {"tensor_call_error", "unchecked_cast_wraparound", "u8"}, :accepted},
      "Nx.as_type(Nx.round(Nx.multiply(t, 255)), :u8)"},
-    {{:finds, {"tensor_call_error", "cast_wraparound", "u8"}, :accepted},
+    {{:finds, {"tensor_call_error", "cast_wraparound", "u8 -1"}, :accepted},
      "Nx.fill(Nx.u8([1]), -1, type: :u8)"},
     {{:finds_none, :accepted}, "Nx.fill(Nx.u8([1]), 0, type: :u8)"},
-    {{:finds, {"tensor_call_error", "cast_wraparound", "u8"}, :accepted},
+    {{:finds, {"tensor_call_error", "cast_wraparound", "u8 -2"}, :accepted},
      "Nx.linspace(-2, 2, n: 3, type: :u8)"},
     {{:finds, {"tensor_call_error", "complex_to_real", "c64 f32"}, :accepted},
      "Nx.as_type(Nx.c64([1]), :f32)"},
@@ -2866,15 +2866,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "Nx.as_type(Nx.Constants.min_finite(:f32), :f16)"},
     {{:finds_none, :finite}, "Nx.Constants.min_finite(:f16)"},
     # written numbers a float type makes infinite or zero
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16 -1.0e9"}, :nonfinite},
      "Nx.add(Nx.f16([1, 2]), -1.0e9)"},
     {{:finds_none, :finite}, "Nx.add(Nx.f16([1, 2]), -6.0e4)"},
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16 7.0e4"}, :nonfinite},
      "Nx.add(Nx.f16([0.0]), 70000.0)"},
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16 -1.0e9"}, :nonfinite},
      "Nx.fill(Nx.f16([1]), -1.0e9)"},
     {{:finds_none, :finite}, "Nx.fill(Nx.f16([1]), Nx.Constants.min_finite(:f16))"},
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16 70000"}, :nonfinite},
      "Nx.linspace(0, 70000, n: 3, type: :f16)"},
     {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-12 f16"}, :nonfinite},
      "Nx.rsqrt(Nx.add(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-12))"},
@@ -2890,7 +2890,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     # f8 keeps an f16's top byte, so a number overflows and flushes in it
     # where it does written as f8 data
     {{:finds_none, :finite}, "Nx.add(Nx.tensor([1.0], type: :f8), 61440.0)"},
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f8"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f8 65520.0"}, :nonfinite},
      "Nx.add(Nx.tensor([1.0], type: :f8), 65520.0)"},
     {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-5 f8"}, :finite},
      "Nx.add(Nx.tensor([0.0], type: :f8), 1.0e-5)"},
@@ -2901,7 +2901,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "Nx.sum(Nx.broadcast(Nx.tensor(1.0, type: :f8), {66000}))"},
     # a number meeting a bf16, f32 or f16 tensor overflows and flushes where
     # it does written as data of that type
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "bf16"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "bf16 1.0e39"}, :nonfinite},
      "Nx.add(Nx.bf16([1.0]), 1.0e39)"},
     {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-46 f32"}, :finite},
      "Nx.add(Nx.f32([0.0]), 1.0e-46)"},
@@ -2910,7 +2910,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :finite}, "Nx.add(Nx.f16([0.0]), 3.0e-8)"},
     # outside traced code Nx makes a float an f32 before it meets an f64 or
     # c128 tensor, so past or below f32's range it is infinite or zero there
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64 1.0e39"}, :nonfinite},
      "Nx.add(Nx.f64([1.0]), 1.0e39)"},
     {{:finds_none, :finite}, "Nx.add(Nx.f64([1.0]), Nx.f64(1.0e39))"},
     {{:finds_none, :finite}, "Nx.Defn.jit(&Nx.add(&1, 1.0e39)).(Nx.f64([1.0]))"},
@@ -2918,11 +2918,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "Nx.multiply(Nx.f64([1.0]), 1.0e-50)"},
     {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-46 f64"}, :finite},
      "Nx.add(Nx.f64([0.0]), 1.0e-46)"},
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "c128"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "c128 1.0e39"}, :nonfinite},
      "Nx.add(Nx.c128([0.0]), 1.0e39)"},
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64 1.0e39"}, :nonfinite},
      "Nx.fill(Nx.f64([0.0]), 1.0e39)"},
-    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64"}, :nonfinite},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64 1.0e39"}, :nonfinite},
      "Nx.fill(Nx.s32([0]), 1.0e39, type: :f64)"},
     # lower-precision floats made f32 by a fixed f32
     {{:finds, {"tensor_type_error", "upcast", "bf16 f32"}, :accepted},
@@ -4943,7 +4943,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {:byte_argmax, [43], {"tensor_call_error", "index_wraparound", "u8 300"}},
     {:signed_byte_argmax, [-57], {"tensor_call_error", "index_wraparound", "s8 200"}},
     {:cast_to_bytes, [44, 255, 2, 254], {"tensor_call_error", "cast_wraparound", "u8"}},
-    {:filled_bytes, [255], {"tensor_call_error", "cast_wraparound", "u8"}},
+    {:filled_bytes, [255], {"tensor_call_error", "cast_wraparound", "u8 -1"}},
     {:padded_with_half, [1_056_964_608, 1],
      {"tensor_call_error", "pad_type_mismatch", "s32 f32"}},
     {:padded_with_minus_one, [255, 255], {"tensor_call_error", "pad_type_mismatch", "u8 s16"}},
@@ -5012,7 +5012,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   } do
     findings = &dtypes_findings(float_rows, @dtypes_configured, &1)
 
-    assert_finding(findings.(:masked), {"tensor_nonfinite_result", "literal_overflow", "f16"})
+    assert_finding(
+      findings.(:masked),
+      {"tensor_nonfinite_result", "literal_overflow", "f16 -1.0e9"}
+    )
+
     assert_finding(findings.(:scaled), {"tensor_type_error", "upcast", "bf16 f32"})
     assert_finding(findings.(:scaled), {"tensor_type_error", "upcast", "f16 f32"})
     assert findings.(:same_type) == []

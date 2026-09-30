@@ -65,7 +65,10 @@ call_error(site, "sequence_precision", cat(types, " ", counted), origin) :-
   types_joined(site, "sequence_precision", counted, origin, last, types),
   !next_breaking(site, "sequence_precision", counted, origin, last, _, _).
 call_error(site, "cast_wraparound", type, "") :-
-  cast_wraparound(_, site, type).
+  cast_wraparound(_, site, type, "").
+call_error(site, "cast_wraparound", cat(type, " ", number), "") :-
+  cast_wraparound(_, site, type, number),
+  number != "".
 call_error(site, "unchecked_cast_wraparound", type, "") :-
   unchecked_cast_wraparound(_, site, type).
 call_error(site, "complex_to_real", cat(from, " ", types), origin) :-
@@ -83,7 +86,8 @@ call_error(site, "integer_determinant", type, origin) :-
 call_error(site, "f32_precision", "f64", "") :-
   f32_precision(_, site).
 
-nonfinite(site, "literal_overflow", type, "") :- literal_overflow(_, site, type).
+nonfinite(site, "literal_overflow", cat(type, " ", number), "") :-
+  literal_overflow(_, site, type, number).
 nonfinite(site, "cast_overflow", type, origin) :- cast_overflow(_, site, type, origin).
 nonfinite(site, "float_sum_overflow", cat(type, " ", counted), "") :-
   float_sum_overflow(_, site, type, counted).
@@ -234,16 +238,16 @@ sequence_precision(context, site, concrete, counted, origin) :-
   sequence_outgrows(size, concrete),
   size_spelled(size, counted).
 
-// A value the code's math or a written number makes negative, made
-// unsigned: it wraps around (-1.0 is 255 in u8). So does a written number
-// outside the integer type it is made.
-.decl cast_wraparound(context: Context, site: symbol, type: symbol)
-cast_wraparound(context, site, type) :-
+// A value the code's math makes negative, made unsigned: it wraps around
+// (-1.0 is 255 in u8). So does a written number outside the integer type
+// it is made, which `number` names; it is "" for a value the math makes.
+.decl cast_wraparound(context: Context, site: symbol, type: symbol, number: symbol)
+cast_wraparound(context, site, type, "") :-
   dtype_call(site, "cast"),
   call_type(context, site, type, _),
   type_trait(type, "unsigned"),
   cast_operand_goes_negative(context, site).
-cast_wraparound(context, site, type) :-
+cast_wraparound(context, site, type, number) :-
   casts_written_number(context, site, type, number),
   number_value(number, value),
   outside_integer_type(value, type).
@@ -350,13 +354,13 @@ integer_determinant(context, site, type, origin) :-
 // A written number beyond the largest finite value of the float type it
 // is made (a `-1.0e9` mask added to an f16 tensor): it is infinite there,
 // and a softmax over it NaN.
-.decl literal_overflow(context: Context, site: symbol, type: symbol)
-literal_overflow(context, site, concrete) :-
+.decl literal_overflow(context: Context, site: symbol, type: symbol, number: symbol)
+literal_overflow(context, site, concrete, number) :-
   casts_written_number(context, site, type, number),
   type_instance(type, concrete),
   number_misfit(number, concrete, "overflows").
 // ... or past f32's, made an f32 before it meets a wider tensor.
-literal_overflow(context, site, type) :-
+literal_overflow(context, site, type, number) :-
   made_f32_first(context, site, type, number),
   number_misfit(number, "f32", "overflows").
 
