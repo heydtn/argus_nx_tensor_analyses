@@ -10568,16 +10568,48 @@ called_name(site, cat("EXLA.", name), arity) :- remote_call(site, _, "EXLA", nam
 // gets its shape, and the calls that bring them into the function.
 
 // An operand's shape as a reader writes it: `{4, 8}`, or `{2, 3} named
-// [:batch, nil]` where an axis has a name, shown where the operand holds
-// one shape in the context.
+// [:batch, nil]` where an axis has a name, then its vectorized axes where
+// it has any (`{3} vectorized [x: 4]`), shown where the operand holds one
+// shape in the context.
 .decl operand_shown(context: Context, site: symbol, position: number, shown: symbol)
 operand_shown(context, site, position, shown) :-
   finding_at(context, site),
   operation_site(site, operation, arity),
   operand_slot(operation, arity, slot, position),
-  slot_value(context, site, slot, _, axes),
+  slot_value(context, site, slot, nil, axes),
   1 = count : { slot_value(context, site, slot, _, _) },
   shape_shown(axes, shown).
+operand_shown(context, site, position, cat(shown, " vectorized [", vectorized_shown, "]")) :-
+  finding_at(context, site),
+  operation_site(site, operation, arity),
+  operand_slot(operation, arity, slot, position),
+  slot_value(context, site, slot, [name, size, rest], axes),
+  1 = count : { slot_value(context, site, slot, _, _) },
+  shape_shown(axes, shown),
+  vectorized_shown([name, size, rest], vectorized_shown).
+
+// Vectorized axes as a keyword list writes them, in order: `x: 4,
+// heads: config.heads`, or `?` for axes not known.
+.decl vectorized_shown(vectorized: VectorizedAxes, shown: symbol)
+vectorized_shown(["?", size, nil], "?") :- vectorized_shown_demand(["?", size, nil]).
+vectorized_shown([name, size, nil], cat(substr(name, 1, strlen(name) - 1), ": ", spelled)) :-
+  vectorized_shown_demand([name, size, nil]),
+  match(":.+", name),
+  size_spelled(size, spelled).
+vectorized_shown([name, size, [next, next_size, rest]], cat(substr(name, 1, strlen(name) - 1), ": ", spelled, ", ", tail)) :-
+  vectorized_shown([next, next_size, rest], tail),
+  vectorized_shown_demand([name, size, [next, next_size, rest]]),
+  match(":.+", name),
+  size_spelled(size, spelled).
+
+// The vectorized axes of an operation's operands, and each list's tail,
+// as `spelling_demand` holds their axes. Not seeded by the findings: the
+// spellings feed the findings' details, and a demand that read them would
+// make one recursive whole of the rules and what they report.
+.decl vectorized_shown_demand(vectorized: VectorizedAxes)
+vectorized_shown_demand([name, size, rest]) :- slot_value(_, _, _, [name, size, rest], _).
+vectorized_shown_demand(rest) :- vectorized_shown_demand([_, _, rest]), rest != nil.
+size_demand(size) :- vectorized_shown_demand([_, size, _]).
 
 .decl shape_shown(axes: Axes, shown: symbol)
 shape_shown(axes, sizes) :-
