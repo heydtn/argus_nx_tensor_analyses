@@ -34,7 +34,8 @@
 // it. Where the analysis is told the float types the code may run at
 // (`float_type`), a type the code reads from configuration (a `type:` or
 // type argument whose value it does not write) is "configured": one type,
-// each of those in turn, which a merge keeps where it wins.
+// each of those in turn, which a merge keeps where it wins. A check reads
+// it as each of those types, and a finding names the ones that break it.
 //
 // Not followed: a type passed along as a value other than `Nx.type/1`'s
 // result; `Nx.Random`'s samplers; a list of tensors the joining function
@@ -72,8 +73,8 @@ call_error(site, "unchecked_cast_wraparound", type, "") :-
   unchecked_cast_wraparound(_, site, type).
 call_error(site, "complex_to_real", cat(from, " ", types), origin) :-
   types_joined(site, "complex_to_real", -1, from, origin, _, types).
-call_error(site, "float_truncation", cat(from, " ", to), origin) :-
-  truncates_float(_, site, from, to, origin).
+call_error(site, "float_truncation", cat(types, " ", to), origin) :-
+  types_joined(site, "float_truncation", -1, to, origin, _, types).
 call_error(site, "literal_underflow", cat(number, " ", types), origin) :-
   types_joined(site, "literal_underflow", -1, number, origin, _, types).
 call_error(site, "pad_type_mismatch", cat(from, " ", to), "") :-
@@ -94,13 +95,17 @@ nonfinite(site, "unsigned_logsumexp", type, origin) :-
 
 type_error(site, "upcast", cat(types, " ", to), position, 0, origin) :-
   types_joined(site, "upcast", position, to, origin, _, types).
+type_error(site, "upcast", cat(from, " ", types), position, 0, origin) :-
+  types_joined(site, "widening_clip", position, from, origin, _, types).
 type_error(site, "narrowing_merge", cat(types, " ", to), position, 0, origin) :-
   types_joined(site, "narrowing_merge", position, to, origin, _, types).
 
 // A check a call breaks in a type, at the argument at `position` (-1 for
 // none) and by the rest of what its finding says (`rest`): a row for each
 // float type a type read from configuration can be, which its finding
-// names together.
+// names together. The check is the finding's kind, but for an integer a
+// clip's bounds widen ("widening_clip"), whose upcast names the types it
+// is widened to.
 .decl breaks_in(site: symbol, kind: symbol, position: number, rest: symbol, origin: symbol, type: symbol)
 breaks_in(site, "sequence_precision", -1, counted, origin, type) :-
   sequence_precision(_, site, type, counted, origin).
@@ -109,7 +114,13 @@ breaks_in(site, "literal_underflow", -1, number, "", type) :- literal_underflow(
 breaks_in(site, "literal_overflow", -1, number, "", type) :- literal_overflow(_, site, type, number).
 breaks_in(site, "cast_overflow", -1, "", origin, type) :- cast_overflow(_, site, type, origin).
 breaks_in(site, "float_sum_overflow", -1, counted, "", type) :- float_sum_overflow(_, site, type, counted).
-breaks_in(site, "upcast", position, to, origin, from) :- upcast(_, site, position, from, to, origin).
+breaks_in(site, "float_truncation", -1, to, origin, from) :- truncates_float(_, site, from, to, origin).
+breaks_in(site, "upcast", position, to, origin, from) :-
+  upcast(_, site, position, from, to, origin),
+  type_trait(from, "lower_precision").
+breaks_in(site, "widening_clip", position, from, origin, to) :-
+  upcast(_, site, position, from, to, origin),
+  type_trait(from, "integer").
 breaks_in(site, "narrowing_merge", position, to, origin, from) :-
   narrowing_merge(_, site, position, from, to, origin).
 
@@ -277,12 +288,13 @@ drops_imaginary_part(context, site, from, to, origin) :-
   type_instance(target, to),
   !type_trait(to, "complex").
 
-// A float made an integer: the fraction is cut off. Often meant, so info;
-// an operand the code rounds first is not one.
+// A float made an integer, as each type it can be: the fraction is cut
+// off. Often meant, so info; an operand the code rounds first is not one.
 .decl truncates_float(context: Context, site: symbol, from: symbol, to: symbol, origin: symbol)
 truncates_float(context, site, from, to, origin) :-
   dtype_call(site, "cast"),
-  argument_dtype(context, site, 0, from, origin),
+  argument_dtype(context, site, 0, own, origin),
+  type_instance(own, from),
   type_trait(from, "floating"),
   call_type(context, site, to, _),
   type_trait(to, "integer"),
@@ -291,8 +303,8 @@ truncates_float(context, site, from, to, origin) :-
 // A lower-precision float made f32 where it meets a tensor fixed at f32
 // (a constant, a number Nx makes a tensor, a `type: :f32`), or by a call
 // that divides by an f32 of its own: the result is f32, not the type the
-// code runs at. A clip whose written bounds widen an integer tensor
-// likewise.
+// code runs at. A clip whose bounds widen an integer tensor likewise, as
+// each type the bounds can be.
 .decl upcast(context: Context, site: symbol, position: number, from: symbol, to: symbol, origin: symbol)
 upcast(context, site, position, from, "f32", origin) :-
   meets(context, site, position, own, _, "f32", origin, leads),
@@ -305,9 +317,9 @@ upcast(context, site, 0, from, "f32", "") :-
   type_trait(from, "lower_precision").
 upcast(context, site, 0, own, merged, origin) :-
   dtype_call(site, "clip"),
-  meets(context, site, 0, own, _, bounds, origin, _),
+  meets(context, site, 0, own, _, bounds, origin, leads),
   type_trait(own, "integer"),
-  type_merged(own, bounds, merged),
+  meeting_instance(own, bounds, leads, own, merged),
   merged != own.
 
 // An f64 tensor through a call that divides by an f32 logarithm of its

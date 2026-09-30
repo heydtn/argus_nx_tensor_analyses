@@ -154,7 +154,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def call_error("float_truncation", detail, _operation) do
-    [from, to] = String.split(detail, " ")
+    [types, to] = String.split(detail, " ")
+    from = types |> String.split("/") |> join("or")
 
     %{
       title: "cuts the fraction off a float",
@@ -394,9 +395,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   def hazard(_kind, _cause, _operation), do: nil
 
   @impl true
+  # A lower-precision float made f32 (`f16/bf16 f32`), or an integer a
+  # clip's bounds widen (`u8 f16/bf16`).
   def type_error("upcast", subject, operation, _position, _certain) do
-    [types, to] = String.split(subject, " ")
-    from = types |> String.split("/") |> join("or")
+    [from_types, to_types] = String.split(subject, " ")
+    from = from_types |> String.split("/") |> join("or")
+    to = to_types |> String.split("/") |> join("or")
 
     %{
       title: "turns #{article(from)} #{from} operand into #{to}",

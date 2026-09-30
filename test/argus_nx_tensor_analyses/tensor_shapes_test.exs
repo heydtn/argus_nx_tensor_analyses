@@ -3062,6 +3062,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     def tiny_epsilon(x, type), do: Nx.add(Nx.as_type(x, type), 1.0e-46)
     def huge_mask(x, type), do: Nx.add(Nx.as_type(x, type), -1.0e39)
     def held_mask(x, type), do: Nx.add(Nx.as_type(x, type), -6.0e4)
+    def truncated(x, type), do: Nx.as_type(Nx.as_type(x, type), :s32)
+    def rounded(x, type), do: Nx.as_type(Nx.round(Nx.as_type(x, type)), :s32)
+    def clipped_bytes(type),
+      do: Nx.clip(Nx.u8([1, 200]), Nx.tensor(0, type: type), Nx.tensor(100, type: type))
   end
   """
 
@@ -5058,6 +5062,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
     assert findings.(:held_mask) == []
 
+    assert findings.(:truncated) == [
+             {"tensor_call_error", "float_truncation", "f16/bf16/f32 s32"}
+           ]
+
+    assert findings.(:rounded) == []
+    assert findings.(:clipped_bytes) == [{"tensor_type_error", "upcast", "u8 f16/bf16/f32"}]
+
     assert findings.(:positions) == [
              {"tensor_call_error", "sequence_precision", "f16/bf16 arg0"}
            ]
@@ -5072,9 +5083,20 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     titles = Enum.map(found, & &1.title)
     assert "Nx.multiply/2 counts past what f16 or bf16 holds exactly" in titles
     assert "Nx.multiply/2 turns an f16 or bf16 operand into f32" in titles
+    assert "Nx.clip/3 turns a u8 operand into f16, bf16 or f32" in titles
 
     huge = Enum.find(found, &(&1.title == "Nx.add/2 makes -1.0e39 infinite in f16, bf16 or f32"))
     assert huge.at_label == "-1.0e39 becomes an infinity in f16 (largest 65504), bf16 or f32"
+
+    truncation = Enum.find(found, &(&1.title == "Nx.as_type/2 cuts the fraction off a float"))
+    assert truncation.at_label == "f16, bf16 or f32 becomes s32, truncated toward zero"
+
+    # the configured type is each float type, never a type a finding names
+    for finding <- found,
+        text <- [finding.title, finding.detail, finding.at_label | finding.help],
+        do: refute(text =~ "configured", inspect(finding))
+
+    for finding <- found, related <- finding.related, do: refute(related.label =~ "configured")
 
     assert_finding(findings.(:against_f16), {"tensor_type_error", "narrowing_merge", "bf16 f16"})
 
@@ -5086,7 +5108,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert findings.(:written_bf16) == []
 
     # without them, a type read from configuration is not known
-    for function <- [:masked, :scaled, :positions, :against_f16, :normalized, :huge_mask],
+    unknown =
+      ~w(masked scaled positions against_f16 normalized huge_mask truncated clipped_bytes)a
+
+    for function <- unknown,
         do: assert(dtypes_findings(rows, @dtypes_configured, function) == [])
   end
 
