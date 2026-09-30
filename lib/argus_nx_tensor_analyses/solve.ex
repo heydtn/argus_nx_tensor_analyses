@@ -159,7 +159,7 @@ defmodule ArgusNxTensorAnalyses.Solve do
   # Every relation's facts but the lines, which no rule reads and which a
   # comment moves; the program and every file it includes, without their
   # comments, as Argus keys a program; the Argus whose declarations they
-  # build on; and the solver.
+  # build on, by its version and its rules; and the solver.
   defp digest(directory, program) do
     directory
     |> File.ls!()
@@ -172,9 +172,28 @@ defmodule ArgusNxTensorAnalyses.Solve do
     end)
     |> hash_program(program)
     |> :crypto.hash_update(to_string(Application.spec(:argus_beam, :vsn)))
+    |> hash_argus_rules()
     |> hash_solver(Argus.Souffle.executable())
     |> :crypto.hash_final()
     |> Base.encode16(case: :lower)
+  end
+
+  # Every file of Argus's rules, without its comments: those a program is
+  # solved after, and those `Argus.Analysis.derive_stage0` derives the
+  # call graph with. Their text can change under one version of Argus, in
+  # a dependency edited in place or taken from a path.
+  defp hash_argus_rules(state) do
+    rules = Application.app_dir(:argus_beam, "priv/dl")
+
+    rules
+    |> Path.join("**/*.dl")
+    |> Path.wildcard()
+    |> Enum.sort()
+    |> Enum.reduce(state, fn path, hash ->
+      hash
+      |> :crypto.hash_update(Path.relative_to(path, rules) <> "\n")
+      |> :crypto.hash_update(path |> File.read!() |> Argus.Souffle.Program.uncommented())
+    end)
   end
 
   # The solver by its version, as Argus names it in its own keys, and by
