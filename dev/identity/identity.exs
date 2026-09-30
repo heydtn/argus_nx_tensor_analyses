@@ -12,9 +12,10 @@
 # (ARGUS_NX_IDENTITY_DIR overrides it). The README next to this script
 # says how to fill it.
 #
-# A change that renames or merges one of the internal relations keeps it
-# comparable with a view in the checkout's `_build/probe/identity_views.dl`,
-# included after the rules when it exists.
+# A change that renames, merges or reshapes one of the internal relations
+# keeps it comparable with a view in the checkout's
+# `_build/probe/identity_views.dl`, included after the rules when it
+# exists; every relation it declares is kept in the snapshot.
 [name] = System.argv()
 checkout = File.cwd!()
 
@@ -32,11 +33,24 @@ root =
     common |> String.trim() |> Path.dirname() |> Path.join("_build/identity")
 
 internal = ~w(result_value return_value can_be_negative can_be_positive can_be_zero in_region
-  value_class value_dtype can_go_negative sign_demand dtype_demand negative_asked call_error
-  nonfinite violation misalignment holds carries_gradient comes_from)
+  value_class value_dtype can_go_negative sign_demand dtype_demand negative_asked violation
+  misalignment holds carries_gradient comes_from)
 emlx_internal = ~w(placed_on made_on_default carries_mix default_demand)
 
 views = Path.join(checkout, "_build/probe/identity_views.dl")
+
+# Every relation the views declare is kept too, so a relation that
+# changes shape is compared through a view of the columns that should not
+# change.
+internal =
+  if File.exists?(views) do
+    declared =
+      ~r/^\.decl ([A-Za-z_0-9]+)\(/m |> Regex.scan(File.read!(views), capture: :all_but_first)
+
+    Enum.uniq(internal ++ List.flatten(declared))
+  else
+    internal
+  end
 
 program = fn rules, relations ->
   file =
