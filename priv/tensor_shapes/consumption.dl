@@ -86,7 +86,7 @@ renames_value(site, function, cat("[", index, "]")) :-
 renames_value(site, function, "") :-
   value_name_demand(function, "result", site),
   remote_call(site, function, "Nx", name, _),
-  match("rename|vectorize|devectorize|donatable", name).
+  nx_class(cat("Nx.", name), "gives", "renamed").
 
 // A value's name in its function, the same wherever the code reads the
 // value: a parameter, a call's result or a term the function builds by
@@ -312,18 +312,16 @@ frees_tensor(site, function, kind, source, freed) :-
 // other than those that answer about a tensor's struct or change only
 // that, or a JIT call (`Nx.Defn.jit_apply`, a `defn` of the program).
 .decl reads_tensor_data(site: symbol) inline
-reads_tensor_data(site) :- operation_site(site, operation, _), !keeps_to_struct(operation).
+reads_tensor_data(site) :- operation_site(site, operation, _), !nx_trait(operation, "struct_only").
 reads_tensor_data(site) :- remote_call(site, _, "Nx.Defn", "jit_apply", _).
 reads_tensor_data(site) :- remote_call(site, _, "EXLA", "jit_apply", _).
 reads_tensor_data(site) :- program_call(site, _, callee), defn_wrapper(callee, _).
 
-// Nx functions that read and change only a tensor's struct.
-.decl keeps_to_struct(operation: symbol)
-keeps_to_struct(operation) :- shape_query(operation).
-keeps_to_struct("Nx.type"). keeps_to_struct("Nx.byte_size"). keeps_to_struct("Nx.bit_size").
-keeps_to_struct("Nx.axes"). keeps_to_struct("Nx.to_template"). keeps_to_struct("Nx.compatible?").
-keeps_to_struct("Nx.donatable?"). keeps_to_struct("Nx.donatable"). keeps_to_struct("Nx.rename").
-keeps_to_struct("Nx.vectorize"). keeps_to_struct("Nx.devectorize").
+// Nx functions that read and change only a tensor's struct: those that
+// answer about its shape or struct or rename it, and `Nx.to_template`.
+nx_trait(operation, "struct_only") :- nx_class(operation, "gives", gives), in_set("struct_only", gives).
+nx_members("set", "struct_only", " shape struct renamed ").
+nx_members("trait", "struct_only", " Nx.to_template ").
 
 // A call handed a tensor marked with `Nx.donatable/1`, as itself or in a
 // term, that reads its data or calls a fun on it (as a JIT-compiled

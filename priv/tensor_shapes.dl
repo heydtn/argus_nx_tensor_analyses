@@ -466,11 +466,14 @@ trace_reach.reaches(how, callee) :-
   trace_reach.reaches(how, caller),
   implementation_call(_, caller, callee).
 trace_reach.cut(caller, callback) :-
-  remote_call(site, caller, module, name, _),
-  match("Nx|Nx\\.Defn\\.Kernel", module),
-  match("io_call|print_value|runtime_call", name),
+  operation_site(site, operation, _),
+  nx_trait(operation, "calls_back"),
   fun_handed(site, caller, callback, position),
   position > 0.
+
+nx_members("trait", "calls_back", cat(
+  " Nx.io_call Nx.print_value Nx.runtime_call Nx.Defn.Kernel.io_call Nx.Defn.Kernel.print_value",
+  " Nx.Defn.Kernel.runtime_call ")).
 
 // A function Nx runs while it traces, however it traces it.
 .decl runs_in_trace(function: symbol)
@@ -2532,9 +2535,28 @@ shape_tuple(tuple, axes) :- shape_tuple_from(tuple, 0, axes).
 
 // Operations that answer about a tensor's shape rather than compute a
 // tensor.
-.decl shape_query(operation: symbol)
-shape_query("Nx.shape"). shape_query("Nx.axis_size"). shape_query("Nx.size").
-shape_query("Nx.rank"). shape_query("Nx.names"). shape_query("Nx.axis_index").
+nx_members("trait", "shape_query", " Nx.shape Nx.axis_size Nx.size Nx.rank Nx.names Nx.axis_index ").
+
+// What the calls give that compute no tensor from their operand's data,
+// their class "gives": an answer about its shape ("shape", the shape
+// queries), or its struct ("struct"), the tensor renamed or marked
+// ("renamed"), a template ("template"), its data on the host ("host"),
+// the tensor on another backend ("moved"), an answer about or a change of
+// the backend ("backend"), or a term of another kind ("term").
+nx_class(operation, "gives", "shape") :- nx_trait(operation, "shape_query").
+nx_members("gives", "struct", " Nx.type Nx.byte_size Nx.bit_size Nx.axes Nx.compatible? Nx.donatable? ").
+nx_members("gives", "renamed", " Nx.rename Nx.vectorize Nx.devectorize Nx.donatable ").
+nx_members("gives", "template", " Nx.template Nx.to_template ").
+nx_members("gives", "host", cat(
+  " Nx.to_number Nx.to_list Nx.to_flat_list Nx.to_binary Nx.to_batched Nx.to_heatmap",
+  " Nx.to_pointer Nx.serialize ")).
+nx_members("gives", "moved", " Nx.backend_copy Nx.backend_transfer ").
+nx_members("gives", "backend", cat(
+  " Nx.backend_deallocate Nx.default_backend Nx.global_default_backend",
+  " Nx.with_default_backend ")).
+nx_members("gives", "term", cat(
+  " Nx.load_numpy_archive! Nx.Defn.Kernel.keyword! Nx.Defn.Kernel.assert_keys",
+  " Nx.Defn.Kernel.elem Nx.Defn.Kernel.then Nx.Defn.Kernel.tap ")).
 
 // A result whose shape is not known: an operand's shape carried through,
 // its path with it, or a tensor from an operand of a shape not known.
@@ -2553,7 +2575,7 @@ opaque_result(context, site, "") :-
   argument_unshaped(context, site, position, _),
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
-  !shape_query(operation),
+  !nx_trait(operation, "shape_query"),
   !nx_trait(operation, "reshapes_unknown").
 opaque_result(context, site, kept) :-
   shape_path(context, site, path),
@@ -2578,7 +2600,7 @@ path_candidate(path) :- shape_path(_, _, path).
 opaque_result(context, site, "") :-
   argument_unshaped(context, site, 0, ""),
   operation_site(site, operation, _),
-  shape_query(operation).
+  nx_trait(operation, "shape_query").
 
 // Operations whose result takes its shape from their arguments, whatever
 // the operand's shape: the vectorized axes stay unknown.
@@ -7282,6 +7304,10 @@ violation(context, site, "diagonal", cat("expected diagonal tensor of length: ",
 // A creation's shape, before its `:names` option: literal tensor data, or
 // a shape its arguments and options give.
 .decl creation(site: symbol, axes: Axes)
+
+// The calls that make a tensor of no tensor: from data, a shape or a
+// seed.
+nx_members("trait", "creates", " Nx.tensor Nx.iota Nx.eye Nx.tri Nx.from_binary Nx.Random.key ").
 
 // Operations that take no options: their calls have none to resolve.
 nx_members("trait", "takes_no_options", " Nx.Random.key Nx.Random.fold_in ").

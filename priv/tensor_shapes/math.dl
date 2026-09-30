@@ -228,11 +228,13 @@ may_have_sign(context, function, "load", load, sign, origin, cause) :-
 may_have_sign(context, function, "load", load, "negative", "", "") :-
   sign_demand(context, function, "load", load),
   sample_element(function, load, site),
-  either_sign_sampler(site).
+  operation_site(site, operation, _),
+  nx_trait(operation, "either_sign_sampler").
 may_have_sign(context, function, "load", load, "positive", "", "") :-
   sign_demand(context, function, "load", load),
   sample_element(function, load, site),
-  either_sign_sampler(site).
+  operation_site(site, operation, _),
+  nx_trait(operation, "either_sign_sampler").
 
 // A sample's signs are its sampler's: asked of the call where the sample
 // is asked of.
@@ -291,9 +293,6 @@ nx_members("trait", "tuple_sampler", " Nx.Random.uniform Nx.Random.randint ").
 
 // The samplers of either sign, and those that draw a tensor's elements
 // (its second argument), which return `{sample, key}` too.
-.decl either_sign_sampler(site: symbol)
-either_sign_sampler(site) :- operation_site(site, operation, _), nx_trait(operation, "either_sign_sampler").
-
 nx_members("trait", "either_sign_sampler", " Nx.Random.normal Nx.Random.gumbel Nx.Random.multivariate_normal ").
 nx_members("trait", "tensor_sampler", " Nx.Random.shuffle Nx.Random.choice ").
 

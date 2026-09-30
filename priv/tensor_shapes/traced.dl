@@ -141,7 +141,9 @@ holds(function, "param", to_string(position), "expression", "") :-
   traced_parameter(function, position).
 
 // A tensor traced code makes of no tensor, with the default backend,
-// which is expressions' while Nx traces.
+// which is expressions' while Nx traces: `Nx.tensor/1,2` and its
+// shorthands, and the calls that make one of a shape or a seed but
+// `Nx.from_binary`.
 holds(function, "result", site, "expression", "") :-
   held_asked(function, "result", site, "expression"),
   operation_site(site, operation, arity),
@@ -149,7 +151,9 @@ holds(function, "result", site, "expression", "") :-
 holds(function, "result", site, "expression", "") :-
   held_asked(function, "result", site, "expression"),
   operation_site(site, operation, _),
-  match("Nx\\.(iota|eye|tri)|Nx\\.Random\\.key", operation).
+  nx_trait(operation, "creates"),
+  operation != "Nx.tensor",
+  operation != "Nx.from_binary".
 
 // An Nx call's result where an operand is an expression, a leaf of a
 // container of them, or a written number, which Nx makes an expression.
@@ -205,7 +209,7 @@ held_asked(function, kind, source, "jitted") :-
 holds(function, "result", site, "template", site) :-
   held_asked(function, "result", site, "template"),
   operation_site(site, operation, _),
-  match("Nx\\.(template|to_template)", operation).
+  nx_class(operation, "gives", "template").
 held_asked(function, kind, source, "template") :-
   operation_site(_, "Nx.template", _),
   computes_on(_, function, _, kind, source).
@@ -237,7 +241,21 @@ resolves_conflict(site) :-
 .decl returns_tensor(site: symbol)
 returns_tensor(site) :-
   operation_site(site, operation, _),
-  !match("Nx\\.(to_number|to_list|to_flat_list|to_binary|to_batched|to_heatmap|to_pointer|shape|rank|size|axis_size|axis_index|names|type|byte_size|compatible\\?|default_backend|backend_deallocate|serialize|top_k|split|load_numpy_archive!)|Nx\\.LinAlg\\.(qr|svd|eigh|lu|schur)|Nx\\.Random\\.(uniform|normal|randint|gumbel|choice|shuffle)|Nx\\.Defn\\.Kernel\\.(keyword!|assert_keys|elem|then|tap)", operation).
+  !nx_trait(operation, "gives_no_tensor").
+
+// The calls whose result is no tensor: those that answer about a tensor's
+// shape, give its data on the host or a term of another kind, and return
+// a tuple, but `Nx.Random.multivariate_normal`; and `Nx.type`,
+// `Nx.byte_size`, `Nx.compatible?`, `Nx.default_backend`,
+// `Nx.backend_deallocate`, `Nx.top_k` and `Nx.LinAlg.schur`.
+nx_trait(operation, "gives_no_tensor") :- nx_class(operation, "gives", gives), in_set("gives_no_tensor", gives).
+nx_trait(operation, "gives_no_tensor") :-
+  nx_class(operation, "tuple", _),
+  operation != "Nx.Random.multivariate_normal".
+nx_members("set", "gives_no_tensor", " shape host term ").
+nx_members("trait", "gives_no_tensor", cat(
+  " Nx.type Nx.byte_size Nx.compatible? Nx.default_backend Nx.backend_deallocate Nx.top_k",
+  " Nx.LinAlg.schur ")).
 
 // ══ Data read in traced code ════════════════════════════════════════
 
@@ -256,7 +274,17 @@ data_read_in_trace(site, function) :-
 .decl reads_data(site: symbol, function: symbol)
 reads_data(site, function) :-
   remote_call(site, function, "Nx", name, _),
-  match("to_number|to_list|to_flat_list|to_binary|to_batched|to_heatmap|to_pointer|backend_(copy|transfer|deallocate)", name).
+  nx_trait(cat("Nx.", name), "reads_data").
+
+// The calls that read a tensor's data: those that give it on the host,
+// but `Nx.serialize`, or move it to another backend, and
+// `Nx.backend_deallocate`.
+nx_trait(operation, "reads_data") :-
+  nx_class(operation, "gives", gives),
+  in_set("reads_data", gives),
+  operation != "Nx.serialize".
+nx_members("set", "reads_data", " host moved ").
+nx_members("trait", "reads_data", " Nx.backend_deallocate ").
 
 // What the call reads is an expression, from its one source.
 .decl reads_expression(site: symbol, function: symbol)
@@ -310,11 +338,14 @@ batch_size(context, site, batch) :-
   argument_value(context, site, 1, $Integer([batch, nil])),
   1 = count : { argument_value(context, site, 1, _) }.
 
+// The conversions whose operand's shape Nx checks.
+nx_members("trait", "checked_conversion", " Nx.to_number Nx.to_list Nx.to_heatmap Nx.to_batched ").
+
 // The one tensor a conversion's operand is in a context.
 .decl converts_operand(context: Context, site: symbol, operation: symbol, tensor: Tensor)
 converts_operand(context, site, operation, tensor) :-
   operation_site(site, operation, _),
-  match("Nx\\.(to_number|to_list|to_heatmap|to_batched)", operation),
+  nx_trait(operation, "checked_conversion"),
   argument_tensor(context, site, 0, tensor),
   1 = count : { argument_value(context, site, 0, _) }.
 
@@ -421,9 +452,15 @@ tests_truth(site, function, origin) :-
 // comparison, a logical operation, `all`, `any`, `all_close`, a test for
 // NaN or infinity.
 .decl predicate_call(site: symbol)
-predicate_call(site) :-
-  operation_site(site, operation, _),
-  match("Nx\\.(all|any|all_close|equal|not_equal|greater|greater_equal|less|less_equal|logical_(and|or|xor|not)|is_nan|is_infinity)", operation).
+predicate_call(site) :- operation_site(site, operation, _), nx_trait(operation, "predicate").
+
+// The comparisons and logical operations of `Nx` (the Kernel's are
+// `defn`'s, whose truth tests compile to conditionals), and `all`, `any`
+// and `all_close`.
+nx_trait(operation, "predicate") :-
+  nx_class(operation, "sign", "compare"),
+  match("Nx\\.[a-z_]+", operation).
+nx_members("trait", "predicate", " Nx.all Nx.any Nx.all_close ").
 
 // The sources the rules ask are tensors of: what operators apply to, what
 // `and` and `or` test, and what a closure handed to a trace captures.
@@ -590,7 +627,7 @@ computes(site) :- remote_call(site, _, "Nx.Defn", "jit_apply", _).
 computes_on(site, function, position, kind, source) :-
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
-  !match("Nx\\.(shape|rank|size|axis_size|axis_index|names|type|byte_size|to_template|template|compatible\\?|rename|vectorize|devectorize|tensor|transpose|flatten|fill|iota|eye)", operation),
+  !nx_trait(operation, "takes_template"),
   flow_argument(site, function, position, kind, source).
 computes_on(site, function, 0, kind, source) :-
   reads_data(site, function),
@@ -602,6 +639,16 @@ computes_on(site, function, position, kind, source) :-
   remote_call(site, function, "Nx.Defn", "jit_apply", _),
   compiled_argument_cell(site, function, position, cell),
   flow_field(function, cell, "head", kind, source).
+
+// The calls a template can be handed: those that answer about a tensor's
+// shape or give a template; `Nx.type`, `Nx.byte_size` and
+// `Nx.compatible?`; those that rename a tensor but `Nx.donatable`; and
+// those that make a tensor of one or reshape it.
+nx_trait(operation, "takes_template") :- nx_class(operation, "gives", gives), in_set("takes_template", gives).
+nx_members("set", "takes_template", " shape template ").
+nx_members("trait", "takes_template", cat(
+  " Nx.type Nx.byte_size Nx.compatible? Nx.rename Nx.vectorize Nx.devectorize Nx.tensor",
+  " Nx.transpose Nx.flatten Nx.fill Nx.iota Nx.eye ")).
 
 // The cells of the written list a compile takes its templates in, or
 // `jit_apply` its arguments, by index.

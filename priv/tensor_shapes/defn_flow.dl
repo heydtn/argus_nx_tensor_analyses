@@ -388,7 +388,7 @@ captured_use(site, function, kind, source) :-
   captured_parameter(closure, selector, callee, position),
   flow_argument(use, callee, _, "param", to_string(position)),
   operation_site(use, operation, _),
-  !shape_query(operation),
+  !nx_trait(operation, "shape_query"),
   !modeled_call(use).
 captured_use(site, function, kind, source) :-
   scoped_closure(site, function, closure),
@@ -475,7 +475,7 @@ traced_source(body, "result", site) :-
   traced_source(body, kind, source),
   flow_argument(site, body, _, kind, source),
   operation_site(site, operation, _),
-  !shape_query(operation),
+  !nx_trait(operation, "shape_query"),
   !modeled_call(site).
 
 // An element of a tuple a public `defn` builds that holds such a tensor,

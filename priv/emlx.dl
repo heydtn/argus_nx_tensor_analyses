@@ -349,14 +349,14 @@ places_on(call, backend, site) :-
   flow_callee(call, _, "fun", "result", site).
 
 // The calls that make a tensor from data, a shape or a seed, on the
-// default backend or the one their `backend:` option names.
+// default backend or the one their `backend:` option names: those that
+// make one of no tensor but `Nx.tri`, and Nx's constants.
 .decl creates_tensor(site: symbol)
-creates_tensor(site) :- operation_site(site, operation, _), makes_tensor(operation).
+creates_tensor(site) :-
+  operation_site(site, operation, _),
+  nx_trait(operation, "creates"),
+  operation != "Nx.tri".
 creates_tensor(site) :- remote_call(site, _, "Nx.Constants", _, _).
-
-.decl makes_tensor(operation: symbol)
-makes_tensor("Nx.tensor"). makes_tensor("Nx.iota"). makes_tensor("Nx.eye"). makes_tensor("Nx.from_binary").
-makes_tensor("Nx.Random.key").
 
 // A transfer or copy of a tensor to the backend its second argument
 // names.
@@ -642,19 +642,15 @@ list_asked(list) :- operation_site(site, _, _), flow_argument(site, _, _, "objec
 .decl keeps_backend(site: symbol)
 keeps_backend(site) :-
   operation_site(site, operation, _),
-  !leaves_backend(operation).
+  !nx_trait(operation, "leaves_backend").
 
-.decl leaves_backend(operation: symbol)
-leaves_backend("Nx.backend_transfer"). leaves_backend("Nx.backend_copy").
-leaves_backend("Nx.backend_deallocate"). leaves_backend("Nx.with_default_backend").
-leaves_backend("Nx.default_backend"). leaves_backend("Nx.global_default_backend").
-leaves_backend("Nx.to_number"). leaves_backend("Nx.to_list"). leaves_backend("Nx.to_flat_list").
-leaves_backend("Nx.to_binary"). leaves_backend("Nx.to_batched"). leaves_backend("Nx.to_template").
-leaves_backend("Nx.to_pointer"). leaves_backend("Nx.to_heatmap"). leaves_backend("Nx.serialize").
-leaves_backend("Nx.template"). leaves_backend("Nx.shape"). leaves_backend("Nx.rank").
-leaves_backend("Nx.type"). leaves_backend("Nx.size"). leaves_backend("Nx.byte_size").
-leaves_backend("Nx.names"). leaves_backend("Nx.axes"). leaves_backend("Nx.axis_size").
-leaves_backend("Nx.axis_index").
+// The calls whose result is no tensor on their operands' backend: those
+// that answer about a tensor's shape, give a template or the data on the
+// host, move a tensor to another backend, or answer about or change the
+// backend, and `Nx.type`, `Nx.byte_size` and `Nx.axes`.
+nx_trait(operation, "leaves_backend") :- nx_class(operation, "gives", gives), in_set("leaves_backend", gives).
+nx_members("set", "leaves_backend", " shape template host moved backend ").
+nx_members("trait", "leaves_backend", " Nx.type Nx.byte_size Nx.axes ").
 
 // ══ Findings ════════════════════════════════════════════════════════
 

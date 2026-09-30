@@ -250,7 +250,7 @@ nx_members("trait", "blocks_gradient", " Nx.Defn.Kernel.stop_grad Nx.eye Nx.sign
 nx_trait(operation, "blocks_gradient") :-
   nx_class(operation, "sign", class),
   in_set("blocks_gradient_from_sign", class).
-nx_trait(operation, "blocks_gradient") :- nx_named(operation, _), shape_query(operation).
+nx_trait(operation, "blocks_gradient") :- nx_trait(operation, "shape_query").
 nx_trait(operation, "blocks_gradient") :-
   nx_trait(operation, "integer_binary"),
   operation != "Nx.quotient",

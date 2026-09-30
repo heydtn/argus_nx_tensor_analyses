@@ -642,10 +642,13 @@ sign_site(context, site) :-
 
 // A call to an Nx function that returns a tuple of tensors.
 .decl makes_tuple(site: symbol)
-makes_tuple(site) :-
-  remote_call(site, _, module, name, _),
-  match("Nx(\\..*)?", module),
-  match("Nx\\.(split|top_k)|Nx\\.LinAlg\\.(qr|svd|eigh|lu)|Nx\\.Random\\.(uniform|normal|randint|shuffle|choice|gumbel|multivariate_normal)|Nx\\.Defn(\\.Kernel)?\\.value_and_grad", cat(module, ".", name)).
+makes_tuple(site) :- operation_site(site, operation, _), nx_trait(operation, "makes_tuple").
+makes_tuple(site) :- remote_call(site, _, "Nx.Defn", name, _), nx_trait(cat("Nx.Defn.", name), "makes_tuple").
+
+// The functions that return a tuple of tensors: those of the class
+// "tuple", `top_k`, and `value_and_grad`.
+nx_trait(operation, "makes_tuple") :- nx_class(operation, "tuple", _).
+nx_members("trait", "makes_tuple", " Nx.top_k Nx.Defn.value_and_grad Nx.Defn.Kernel.value_and_grad ").
 
 // The operands of Nx calls that take them as tensors: all but those of the
 // calls that walk containers of tensors, and of `Nx.rank/1`, which reads a
@@ -654,7 +657,14 @@ makes_tuple(site) :-
 takes_tensor(site, position) :-
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
-  !match("Nx\\.(rank|vectorize|devectorize|revectorize|backend_copy|backend_transfer|backend_deallocate|donatable|io_call|runtime_call)|Nx\\.Defn\\.Kernel\\.(stop_grad|print_value|print_expr|hook|custom_grad|__unary_plus__)", operation).
+  !nx_trait(operation, "takes_container").
+
+// The calls that walk containers of tensors, and `Nx.rank/1`.
+nx_members("trait", "takes_container", cat(
+  " Nx.rank Nx.vectorize Nx.devectorize Nx.revectorize Nx.backend_copy Nx.backend_transfer",
+  " Nx.backend_deallocate Nx.donatable Nx.io_call Nx.runtime_call Nx.Defn.Kernel.stop_grad",
+  " Nx.Defn.Kernel.print_value Nx.Defn.Kernel.print_expr Nx.Defn.Kernel.hook",
+  " Nx.Defn.Kernel.custom_grad Nx.Defn.Kernel.__unary_plus__ ")).
 
 // The elements of a tuple the code builds, handed where a tensor is
 // taken.
