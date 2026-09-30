@@ -232,7 +232,7 @@ call_error(site, "negative_index", cause, origin) :- negative_index(_, site, ori
 // first full step.
 .decl negative_slice_start(context: Context, site: symbol, origin: symbol, cause: symbol)
 negative_slice_start(context, site, origin, cause) :-
-  slice_start(context, site, function, kind, source),
+  slice_start(context, site, _, function, kind, source),
   can_go_negative(context, function, kind, source, origin, cause).
 negative_slice_start(context, site, "", "written") :-
   handed_literal(site, 1, _, _, text),
@@ -297,18 +297,19 @@ nx_members("argument", "starts", cat(
   " Nx.slice/3:1 Nx.slice/4:1 Nx.slice_along_axis/3:1 Nx.slice_along_axis/4:1",
   " Nx.put_slice/3:1 ")).
 
-// A start, as the code writes it: `slice_along_axis`'s argument, and each
-// element of a list of them the call's function builds.
-.decl slice_start(context: Context, site: symbol, function: symbol, kind: symbol, source: symbol)
-slice_start(context, site, function, kind, source) :-
+// A start, as the code writes it, by its index among the call's starts:
+// `slice_along_axis`'s argument, its one, and each element of a list of
+// them the call's function builds.
+.decl slice_start(context: Context, site: symbol, index: number, function: symbol, kind: symbol, source: symbol)
+slice_start(context, site, 0, function, kind, source) :-
   slices_from(site, "Nx.slice_along_axis"),
   site_active(context, site),
   argument_source(site, function, 1, kind, source).
-slice_start(context, site, function, kind, source) :-
-  handed_element(site, 1, function, _, kind, source),
+slice_start(context, site, index, function, kind, source) :-
+  handed_element(site, 1, function, index, kind, source),
   site_active(context, site).
 
-negative_asked(context, function, kind, source) :- slice_start(context, _, function, kind, source).
+negative_asked(context, function, kind, source) :- slice_start(context, _, _, function, kind, source).
 
 // A list of starts, one per axis: the start at an axis is the list's
 // element at its index (`handed_element`, `handed_literal`).
@@ -332,38 +333,40 @@ call_error(site, "negative_slice_start", cause, origin) :-
 call_error(site, "slice_past_end", detail, "") :- slice_past_end(_, site, detail).
 
 // A start Nx rejects for its type: slices start at integers, and Nx raises
-// for a float or complex one.
-.decl non_integer_start(context: Context, site: symbol, function: symbol, kind: symbol, source: symbol, class: symbol, origin: symbol)
-non_integer_start(context, site, function, kind, source, class, origin) :-
-  start_value(context, site, function, kind, source),
-  value_class(context, function, kind, source, class, origin),
-  class != "integer".
+// for a float or complex one. `certain` is 1 where some start is never an
+// integer in some context (`only_wrong_class`), which Nx rejects on every
+// path there.
+type_error(site, "non_integer_start", class, 1, min(certain, 1), origin) :-
+  reaches(_, site, _, "integer_start", class, origin, "class"),
+  certain = count : { only_wrong_class(_, site, _, "integer_start") }.
 
-// Where a start's type is read: a start (`slice_start`), a list of them
-// written or passed whole, and a constant tail the compiler folds.
-.decl start_value(context: Context, site: symbol, function: symbol, kind: symbol, source: symbol)
-start_value(context, site, function, kind, source) :- slice_start(context, site, function, kind, source).
-start_value(context, site, function, kind, source) :-
+// The classes a start can be of in a context, each with the call that
+// makes it so: its values', each start an operand of its own
+// ("integer_start") at its index among the call's starts, which a list of
+// them written or passed whole, or a constant tail the compiler folds,
+// stands for from its first.
+operand_class(context, site, index, "integer_start", class, origin) :-
+  start_value(context, site, index, function, kind, source),
+  value_class(context, function, kind, source, class, origin).
+ruled_out("integer_start", "float"). ruled_out("integer_start", "complex").
+
+// Where a start's type is read, by its index among the call's starts: a
+// start (`slice_start`), a list of them written or passed whole, and a
+// constant tail the compiler folds.
+.decl start_value(context: Context, site: symbol, index: number, function: symbol, kind: symbol, source: symbol)
+start_value(context, site, index, function, kind, source) :- slice_start(context, site, index, function, kind, source).
+start_value(context, site, 0, function, kind, source) :-
   slices_from(site, operation),
   operation != "Nx.slice_along_axis",
   site_active(context, site),
   argument_source(site, function, 1, kind, source),
   kind != "object".
-start_value(context, site, function, "literal", text) :-
+start_value(context, site, offset, function, "literal", text) :-
   handed_literal(site, 1, function, offset, text),
   offset > 0,
   site_active(context, site).
 
-sign_demand(context, function, kind, source) :- start_value(context, _, function, kind, source).
-
-// `certain` is 1 where a start is never an integer in some context, which
-// Nx rejects on every path there.
-type_error(site, "non_integer_start", class, 1, min(certain, 1), origin) :-
-  non_integer_start(_, site, _, _, _, class, origin),
-  certain = count : {
-    non_integer_start(context, site, start_function, kind, source, _, _),
-    !value_class(context, start_function, kind, source, "integer", _)
-  }.
+sign_demand(context, function, kind, source) :- start_value(context, _, _, function, kind, source).
 
 // ══ ddof ════════════════════════════════════════════════════════════
 //

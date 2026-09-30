@@ -1597,6 +1597,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:type_error, "non_integer_start", "float"},
      "Nx.slice(Nx.iota({2, 6}), [0, Nx.divide(Nx.sum(t), 2)], [2, 2])"},
     {:quiet, "Nx.slice(Nx.iota({2, 6}), [0, Nx.sum(t)], [2, 2])"},
+    {{:finds, {"tensor_type_error", "non_integer_start", "float"}, :accepted},
+     "Nx.slice_along_axis(Nx.iota({6}), if(config.a > 1, do: 1.5, else: 1), 2)"},
+    {{:finds, {"tensor_type_error", "non_integer_start", "float"}, :accepted},
+     "Nx.slice(Nx.iota({2, 6}), [0, if(config.a > 1, do: 1.5, else: 1)], [2, 2])"},
+    {{:type_error, "non_integer_start", "float"},
+     "Nx.slice(Nx.iota({2, 6}), [1.5, if(config.a > 1, do: 1.5, else: 1)], [2, 2])"},
     # a ddof at or past the count a spread divides by
     {{:finds, {"tensor_nonfinite_result", "ddof_not_below_count", "equal"}, :nonfinite},
      "Nx.variance(Nx.iota({1, 2}, type: :f32), axes: [0], ddof: 1)"},
