@@ -243,15 +243,9 @@ jitted_struct_result(context, call, caller, struct) :-
 call_error(read, "dropped_field_read", detail, "") :-
   dropped_field_read(_, read, struct, field),
   dropped_field_spelled(struct, field, detail).
-// The call that returns the struct is the finding's origin where it is a
-// remote call, which a finding can name.
+// The call that returns the struct is the finding's origin.
 call_error(read, "dropped_field_returned", detail, call) :-
   dropped_field_returned(_, read, struct, field, call),
-  remote_call(call, _, _, _, _),
-  dropped_field_spelled(struct, field, detail).
-call_error(read, "dropped_field_returned", detail, "") :-
-  dropped_field_returned(_, read, struct, field, call),
-  !remote_call(call, _, _, _, _),
   dropped_field_spelled(struct, field, detail).
 
 // A dropped field as a finding says it: the struct, the field and the

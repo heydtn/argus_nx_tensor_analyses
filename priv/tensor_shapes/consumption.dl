@@ -271,12 +271,6 @@ spent_field(function, base, selector) :-
   flow_load(function, load, selector, kind, source),
   value_named(function, kind, source, base).
 
-// The call a finding on a draw points back to: the draw, where it is a
-// remote call, and none for a local one.
-.decl draw_origin(site: symbol, origin: symbol)
-draw_origin(site, site) :- consumes_key(site, function, _, _, _), remote_call(site, function, _, _, _).
-draw_origin(site, "") :- consumes_key(site, function, _, _, _), local_call(site, function, _, _).
-
 // ══ Tensors after their memory is freed ══════════════════════════════
 //
 // `Nx.backend_transfer` copies a tensor to another backend and frees it
@@ -407,19 +401,17 @@ freed_tensor_used(use, freed, origin, function, kind, how) :-
 
 // ══ Findings ═════════════════════════════════════════════════════════
 
-call_error(second, "reused_key", cat(shown, " after ", first_shown), origin) :-
+call_error(second, "reused_key", cat(shown, " after ", first_shown), first) :-
   reused_key(first, second, function),
   consumes_key(second, function, _, _, shown),
-  consumes_key(first, function, _, _, first_shown),
-  draw_origin(first, origin).
+  consumes_key(first, function, _, _, first_shown).
 call_error(draw, "captured_loop_key", shown, loop) :-
   key_captured_by_loop(draw, loop, body),
   consumes_key(draw, body, _, _, shown).
 call_error(draw, "passed_back_key", shown, loop) :-
   key_passed_back(draw, loop, body),
   consumes_key(draw, body, _, _, shown).
-call_error(return, "spent_key_returned", shown, origin) :-
+call_error(return, "spent_key_returned", shown, draw) :-
   spent_key_returned(return, draw, function),
-  consumes_key(draw, function, _, _, shown),
-  draw_origin(draw, origin).
+  consumes_key(draw, function, _, _, shown).
 call_error(use, kind, how, origin) :- freed_tensor_used(use, _, origin, _, kind, how).
