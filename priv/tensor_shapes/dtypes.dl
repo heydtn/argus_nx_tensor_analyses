@@ -77,8 +77,8 @@ call_error(site, "float_truncation", cat(types, " ", to), origin) :-
   types_joined(site, "float_truncation", -1, to, origin, _, types).
 call_error(site, "literal_underflow", cat(number, " ", types), origin) :-
   types_joined(site, "literal_underflow", -1, number, origin, _, types).
-call_error(site, "pad_type_mismatch", cat(from, " ", to), "") :-
-  pad_type_mismatch(_, site, from, to).
+call_error(site, "pad_type_mismatch", cat(types, " ", to), "") :-
+  types_joined(site, "pad_type_mismatch", -1, to, "", _, types).
 call_error(site, "integer_determinant", type, origin) :-
   integer_determinant(_, site, type, origin).
 call_error(site, "f32_precision", "f64", "") :-
@@ -115,6 +115,7 @@ breaks_in(site, "literal_overflow", -1, number, "", type) :- literal_overflow(_,
 breaks_in(site, "cast_overflow", -1, "", origin, type) :- cast_overflow(_, site, type, origin).
 breaks_in(site, "float_sum_overflow", -1, counted, "", type) :- float_sum_overflow(_, site, type, counted).
 breaks_in(site, "float_truncation", -1, to, origin, from) :- truncates_float(_, site, from, to, origin).
+breaks_in(site, "pad_type_mismatch", -1, to, "", from) :- pad_type_mismatch(_, site, from, to).
 breaks_in(site, "upcast", position, to, origin, from) :-
   upcast(_, site, position, from, to, origin),
   type_trait(from, "lower_precision").

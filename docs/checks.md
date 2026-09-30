@@ -186,7 +186,8 @@ A type the code does not show is not known and gives no finding; list the
 float types in `float_types` to check types the code reads from
 configuration. A call that breaks a check in several of them is one
 finding, which names each (`f16/bf16`); an `upcast` or `narrowing_merge`
-is one for each operand, and a `pad_type_mismatch` one for each type.
+is one for each operand, and a `pad_type_mismatch` whose pad value is of
+such a type one for each type.
 Literals are read by their spelling, so integers of any size compare
 exactly, and a value known only at run time is not checked.
 

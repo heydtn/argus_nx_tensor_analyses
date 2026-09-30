@@ -49,7 +49,7 @@ values through the program to where they meet. The EMLX analysis,
   from configuration is checked as each float type the project lists
   (`float_types:`), and a call that breaks a check in several of them is
   reported once, naming each: once for each operand, for a type error, and
-  once for each type, for a pad value of another type. A tensor whose type
+  once for each type, for a pad value of such a type. A tensor whose type
   the code does not show has none, and nothing is reported of it.
 - **Traced code is known.** The rules follow which code Nx traces rather
   than runs: `defn` bodies and what they reach, and funs handed to

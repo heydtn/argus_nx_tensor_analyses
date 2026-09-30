@@ -3066,6 +3066,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     def rounded(x, type), do: Nx.as_type(Nx.round(Nx.as_type(x, type)), :s32)
     def clipped_bytes(type),
       do: Nx.clip(Nx.u8([1, 200]), Nx.tensor(0, type: type), Nx.tensor(100, type: type))
+
+    def padded_half(x, type), do: Nx.pad(Nx.as_type(x, type), Nx.tensor(0.5), [{1, 0, 0}])
+
+    def padded_in_type(x, type),
+      do: Nx.pad(Nx.as_type(x, type), Nx.tensor(0.5, type: type), [{1, 0, 0}])
+
+    def padded_bytes(type), do: Nx.pad(Nx.u8([1]), Nx.tensor(2, type: type), [{1, 0, 0}])
   end
   """
 
@@ -5069,6 +5076,21 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert findings.(:rounded) == []
     assert findings.(:clipped_bytes) == [{"tensor_type_error", "upcast", "u8 f16/bf16/f32"}]
 
+    assert findings.(:padded_half) == [
+             {"tensor_call_error", "pad_type_mismatch", "f16/bf16 f32"},
+             {"tensor_type_error", "upcast", "f16/bf16 f32"}
+           ]
+
+    assert findings.(:padded_in_type) == []
+
+    # a pad value of each float type makes the result another type: a
+    # finding for each
+    assert Enum.sort(findings.(:padded_bytes)) == [
+             {"tensor_call_error", "pad_type_mismatch", "u8 bf16"},
+             {"tensor_call_error", "pad_type_mismatch", "u8 f16"},
+             {"tensor_call_error", "pad_type_mismatch", "u8 f32"}
+           ]
+
     assert findings.(:positions) == [
              {"tensor_call_error", "sequence_precision", "f16/bf16 arg0"}
            ]
@@ -5091,6 +5113,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     truncation = Enum.find(found, &(&1.title == "Nx.as_type/2 cuts the fraction off a float"))
     assert truncation.at_label == "f16, bf16 or f32 becomes s32, truncated toward zero"
 
+    assert Enum.any?(
+             found,
+             &(&1.at_label == "pads an f16 or bf16 tensor with a value that makes it f32")
+           )
+
     # the configured type is each float type, never a type a finding names
     for finding <- found,
         text <- [finding.title, finding.detail, finding.at_label | finding.help],
@@ -5109,7 +5136,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
     # without them, a type read from configuration is not known
     unknown =
-      ~w(masked scaled positions against_f16 normalized huge_mask truncated clipped_bytes)a
+      ~w(masked scaled positions against_f16 normalized huge_mask truncated clipped_bytes)a ++
+        ~w(padded_half padded_bytes)a
 
     for function <- unknown,
         do: assert(dtypes_findings(rows, @dtypes_configured, function) == [])

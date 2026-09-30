@@ -180,7 +180,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def call_error("pad_type_mismatch", detail, _operation) do
-    [from, to] = String.split(detail, " ")
+    [types, to] = String.split(detail, " ")
+    from = types |> String.split("/") |> join("or")
 
     %{
       title: "pads with a value of another type",
