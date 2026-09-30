@@ -24,20 +24,20 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
     end
   end
 
-  # Compiles the fixtures' source into a directory of its own, removed once
-  # the module's tests end, and keeps its beams as `name` where
+  # Compiles the fixtures' source into a directory of its own under the
+  # build path, emptied first so that no beam of an earlier run is left
+  # in it, and keeps its beams as `name` where
   # `ArgusNxTensorAnalyses.FixtureBeams` keeps them: `%{directory, source,
   # beams}`. Call it from `setup_all`.
+  #
+  # The directory is the checkout's, the same on every run: the path the
+  # fixtures are compiled from can reach their facts, which a solve's
+  # cache is keyed on.
   @spec compile_fixtures(String.t(), String.t()) :: %{atom() => term()}
   def compile_fixtures(name, source) do
-    directory =
-      Path.join(
-        System.tmp_dir!(),
-        "#{name}_test_#{Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)}"
-      )
-
+    directory = suite_path(["fixtures", name])
+    File.rm_rf!(directory)
     File.mkdir_p!(directory)
-    ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(directory) end)
     path = Path.join(directory, "fixtures.ex")
     File.write!(path, source)
 
@@ -62,6 +62,9 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
     )
     |> Map.new(fn {:ok, {name, {:ok, result}}} -> {name, result} end)
   end
+
+  # A path under the build path, which each checkout has its own of.
+  defp suite_path(parts), do: Path.join([Mix.Project.build_path(), "suite" | parts])
 
   # A function as the rules name it, `Module:name/arity`, and a `defn`'s
   # body, which the compiler names `__defn:name__`.
