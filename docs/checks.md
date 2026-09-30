@@ -348,7 +348,7 @@ tests there pass. A draw inside a `defn` is checked as one outside it is.
 | `serving_output_batch_axis` | warning | An output leaf whose first axis is not the batch, so each caller gets part of something else. | `Nx.Serving.jit(fn x -> Nx.transpose(x) end)`, run on a batch of vectors |
 | `serving_mixes_batch` | warning | A reduction, sort, cumulative operation or contraction along the batch axis, which mixes requests and padding. | `Nx.Serving.jit(fn x -> Nx.subtract(x, Nx.mean(x, axes: [0])) end)` |
 | `serving_template_batch_size` | error; warning for a serving process, whose batches are smaller when they time out | A computation compiled ahead of time for a batch size its batches do not have. | `Nx.Defn.compile(fun, [Nx.template({4, 3}, :s32)], options)`, run on a batch of 1 |
-| `serving_template_type` | error | A compiled template of another type than the batch's entries (float against integer). | a `:f32` template run on a batch of s32 entries |
+| `serving_template_type` | error | A compiled template of another type than the batch's entries, exactly where both are known (s64 against s32), else of another class (float against integer). | an `:s64` template run on a batch of s32 entries |
 | `batch_incompatible_entries` | error | `Nx.Batch` entries of different shapes, ranks or axis names. | `Nx.Batch.stack([Nx.tensor([1, 2]), Nx.tensor([1, 2, 3])])` |
 | `batch_scalar_entry` | error | A scalar in `Nx.Batch.concatenate/2`. | `Nx.Batch.concatenate([Nx.tensor(1)])` |
 | `batch_empty` | error | A serving run on an empty batch. | `Nx.Serving.run(serving, Nx.Batch.new())` |

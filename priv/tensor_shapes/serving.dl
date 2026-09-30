@@ -121,13 +121,22 @@ call_error(compile, "serving_template_batch_size", cat("it is compiled for batch
   started(serving),
   !padded(serving).
 
-// The computation is compiled for a type of number its batch's entries
-// are not.
-call_error(compile, "serving_template_type", cat("it is compiled for ", name, " and its batch's entries are ", class, "s"), "") :-
+// The computation is compiled for a type its batch's entries are not
+// (`detail`, the template's type, then the entries').
+call_error(compile, "serving_template_type", cat(name, " ", type), "") :-
+  serving_compiled_template(_, compile, serving, template, _),
+  template_type(template, name, _),
+  entry_type(serving, type),
+  type != name.
+
+// ... or, where the entries' exact type is not known, of another class of
+// number.
+call_error(compile, "serving_template_type", cat(name, " ", class), "") :-
   serving_compiled_template(_, compile, serving, template, _),
   template_type(template, name, template_class),
   entry_class(serving, class),
-  class != template_class.
+  class != template_class,
+  !entry_type(serving, _).
 
 // A batch's entries do not share one template.
 call_error(site, "batch_incompatible_entries", cat("it gets entries of shapes ", first_shown, " and ", entry_shown), "") :-
@@ -499,9 +508,18 @@ entry_class(serving, class) :-
   entry_asked(serving, context, function, kind, source),
   value_class(context, function, kind, source, class, _).
 
+// An exact type the first entry of a batch can be, as a source of the
+// function that makes the batch, where the serving that runs over it is
+// compiled for a template of a written type.
+.decl entry_type(serving: symbol, type: symbol)
+entry_type(serving, type) :-
+  entry_asked(serving, context, function, kind, source),
+  value_dtype(context, function, kind, source, type, _),
+  nx_dtype(type, _, _, _).
+
 // The first entry of a batch a serving compiled for such a template runs
 // over, as a source of the function that makes the batch, in a context
-// it makes it in: the values whose class is asked.
+// it makes it in: the values whose class and type are asked.
 .decl entry_asked(serving: symbol, context: Context, function: symbol, kind: symbol, source: symbol)
 entry_asked(serving, context, function, kind, source) :-
   serving_compiled_template(_, _, serving, template, _),
@@ -513,6 +531,7 @@ entry_asked(serving, context, function, kind, source) :-
   flow_field(function, cell, "head", kind, source),
   site_active(context, batch).
 sign_demand(context, function, kind, source) :- entry_asked(_, context, function, kind, source).
+dtype_demand(context, function, kind, source) :- entry_asked(_, context, function, kind, source).
 
 // The tensors of a list of entries from one on, and the first's axes;
 // `from` is the first axis the entries must agree from: 0 stacked, 1

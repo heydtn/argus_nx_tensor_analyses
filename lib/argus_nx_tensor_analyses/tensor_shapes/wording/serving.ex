@@ -74,12 +74,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
   end
 
   def call_error("serving_template_type", detail, _operation) do
+    [template, entries] = String.split(detail, " ")
+    entries = if entries in ~w(integer float complex), do: "#{entries}s", else: entries
+
     %{
       title: "compiles a serving computation for another type than its batch's",
       detail:
         "An ahead-of-time compiled computation takes only batches of its template's type, and " <>
-          "#{detail}. #{@template}",
-      label: "compiles for a fixed type",
+          "it is compiled for #{template} and its batch's entries are #{entries}. #{@template}",
+      label: "compiles for #{template}, and the entries are #{entries}",
       help:
         "make the template's type the entries' (Nx.template(shape, Nx.type(entry))), or convert " <>
           "the entries with Nx.as_type in the client preprocessing",
