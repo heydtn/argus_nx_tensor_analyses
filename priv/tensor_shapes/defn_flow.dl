@@ -29,19 +29,21 @@
 
 // A `cond`, `if` or `while` decides on a tensor that is not a scalar, as
 // `if x > 0` of a vector does, and Nx raises.
-call_error(place, "predicate_shape", spelled, "") :-
+call_error(place, "predicate_shape", spelled, origin) :-
   decides_on(_, place, $Tensor([_, axes])),
   axes != nil,
-  sizes_spelled(axes, spelled).
+  sizes_spelled(axes, spelled),
+  predicate_origin(place, origin).
 spelling_demand(axes) :- decides_on(_, _, $Tensor([_, axes])), axes != nil.
 
 // A `cond` or `if` decides on nil, an atom or a list, which is no tensor:
 // `if opts[:training]` where the options lack the key. Nx raises.
-call_error(place, "predicate_value", spelled, "") :-
+call_error(place, "predicate_value", spelled, origin) :-
   decides_on(_, place, $Term(text, start)),
   ( term_atom(text, start, _), !term_scalar(text, start) ; term_list(text, start) ),
-  term_spelling(text, start, spelled).
-call_error(pair, "predicate_value", "nil", "") :-
+  term_spelling(text, start, spelled),
+  predicate_origin(place, origin).
+call_error(pair, "predicate_value", "nil", source) :-
   clause_predicate(_, function, pair, _, kind, source),
   misses_key(_, function, kind, source).
 
@@ -57,6 +59,25 @@ decides_on(context, pair, predicate) :-
 decides_on(context, site, predicate) :-
   loop_run(site, call, ":condition"),
   result_value(context, call, predicate).
+
+// The call a finding about a predicate points back to: the one whose
+// result a clause decides on, where it is a remote call, and none ("")
+// for another clause's or a `while`'s, whose condition its closure
+// computes.
+.decl predicate_origin(place: symbol, origin: symbol)
+predicate_origin(pair, origin) :-
+  clause_predicate(_, function, pair, _, kind, source),
+  source_origin(function, kind, source, origin).
+predicate_origin(site, "") :- loop_run(site, site, ":body").
+
+// The call a finding about a source of a function points back to: the
+// remote call whose result it is, and none ("") for any other source, a
+// parameter, a field, a literal, a local call's or a fun's result, which
+// no call names.
+.decl source_origin(function: symbol, kind: symbol, source: symbol, origin: symbol) inline
+source_origin(function, kind, source, source) :- kind = "result", remote_call(source, function, _, _, _).
+source_origin(function, kind, source, "") :- kind = "result", !remote_call(source, function, _, _, _).
+source_origin(_function, kind, _source, "") :- kind != "result".
 
 // A lookup of a key that the keyword list the code writes lacks, and no
 // `keyword!/2` or `assert_keys/2` names, which gives nil.
@@ -93,17 +114,18 @@ declared_key("*") :-
 // ══ Branches ════════════════════════════════════════════════════════
 
 // Two branches of a `cond` or `if` give tensors whose shapes do not
-// broadcast together, and Nx raises merging them.
-call_error(pair, "branch_shapes", message, "") :-
-  branch_meeting(_, pair, earlier, later),
+// broadcast together, and Nx raises merging them. A finding between two
+// branches is placed at the later clause and points back to the earlier.
+call_error(pair, "branch_shapes", message, earlier_pair) :-
+  branch_meeting(_, pair, earlier, later, earlier_pair),
   broadcast_axis(later, earlier, _, later_size, _, earlier_size, _),
   broadcast_conflict(later_size, earlier_size),
   broadcast_refused(later, earlier, message).
 
 // Two branches give tensors of known shapes that broadcast to one neither
 // has, which Nx gives without a word: `{3}` and `{3, 1}` make `{3, 3}`.
-call_error(pair, "branch_broadcast", cat(earlier_spelled, " and ", later_spelled, " broadcast to ", merged_spelled), "") :-
-  branch_meeting(_, pair, earlier, later),
+call_error(pair, "branch_broadcast", cat(earlier_spelled, " and ", later_spelled, " broadcast to ", merged_spelled), earlier_pair) :-
+  branch_meeting(_, pair, earlier, later, earlier_pair),
   axes_sized(earlier),
   axes_sized(later),
   broadcast(later, earlier, merged),
@@ -112,33 +134,36 @@ call_error(pair, "branch_broadcast", cat(earlier_spelled, " and ", later_spelled
   sizes_spelled(earlier, earlier_spelled),
   sizes_spelled(later, later_spelled),
   sizes_spelled(merged, merged_spelled).
-spelling_demand(merged) :- branch_meeting(_, _, earlier, later), broadcast(later, earlier, merged).
+spelling_demand(merged) :- branch_meeting(_, _, earlier, later, _), broadcast(later, earlier, merged).
 
 // Two branches give values of different structures, a tuple and a
 // tensor or tuples of different sizes, and Nx raises.
-call_error(pair, "branch_structure", cat(earlier, " and ", later), "") :-
+call_error(pair, "branch_structure", cat(earlier, " and ", later), earlier_pair) :-
   branch_form(context, site, one, earlier),
   branch_form(context, site, other, later),
   one < other,
   earlier != later,
-  branch_closure(site, other, pair, _).
+  branch_closure(site, other, pair, _),
+  branch_closure(site, one, earlier_pair, _).
 
 // A `cond`'s last clause decides on a tensor its public `defn` computes
 // from its inputs, so no clause always holds, and Nx raises.
-call_error(pair, "cond_fallthrough", "", "") :-
+call_error(pair, "cond_fallthrough", "", origin) :-
   entry_body(body),
   clause_predicate(_, body, pair, "last", kind, source),
-  traced_source(body, kind, source).
+  traced_source(body, kind, source),
+  source_origin(body, kind, source, origin).
 
 // A branch of an `if` or `cond` raises, and a clause decides on a tensor
 // its public `defn` computes from its inputs: Nx builds every branch of
 // such a `cond`, so the raise runs whatever the data.
-call_error(pair, "traced_raise", "", "") :-
+call_error(pair, "traced_raise", "", origin) :-
   entry_body(body),
   clause_predicate(site, body, _, _, kind, source),
   traced_source(body, kind, source),
   branch_closure(site, _, pair, callee),
-  raises_always(callee).
+  raises_always(callee),
+  source_origin(body, kind, source, origin).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -211,14 +236,16 @@ value_axes(value, nil) :- value = $Integer(_size).
 value_axes(value, nil) :- value = $Term(text, start), term_scalar(text, start).
 
 // What two branches give in one place, the earlier clause's first, and
-// the later clause, where a finding between them is placed.
-.decl branch_meeting(context: Context, pair: symbol, earlier: Axes, later: Axes)
-branch_meeting(context, pair, earlier, later) :-
+// the later clause, where a finding between them is placed, then the
+// earlier.
+.decl branch_meeting(context: Context, pair: symbol, earlier: Axes, later: Axes, earlier_pair: symbol)
+branch_meeting(context, pair, earlier, later, earlier_pair) :-
   branch_axes(context, site, one, element, earlier),
   branch_axes(context, site, other, element, later),
   one < other,
-  branch_closure(site, other, pair, _).
-broadcast_demand(later, earlier) :- branch_meeting(_, _, earlier, later).
+  branch_closure(site, other, pair, _),
+  branch_closure(site, one, earlier_pair, _).
+broadcast_demand(later, earlier) :- branch_meeting(_, _, earlier, later, _).
 
 // A branch's value as a structure: "a tensor", or "a tuple of 2".
 .decl branch_form(context: Context, site: symbol, index: number, form: symbol)
@@ -370,10 +397,11 @@ sign_demand(body_context, function, kind, source) :- loop_body_leaf(_, _, _, bod
 // tensor its public `defn` computes from its inputs, and computes with
 // it: Nx builds the closure in a scope of its own, and raises on a tensor
 // from outside it.
-call_error(site, "closure_captures_tensor", "", "") :-
+call_error(site, "closure_captures_tensor", "", origin) :-
   entry_body(body),
   captured_use(site, body, kind, source),
-  traced_source(body, kind, source).
+  traced_source(body, kind, source),
+  source_origin(body, kind, source, origin).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -418,7 +446,7 @@ call_error(site, "atom_operand", spelled, "") :-
   argument_value(_, site, position, $Term(text, start)),
   term_atom(text, start, spelled),
   !term_scalar(text, start).
-call_error(site, "atom_operand", "nil", "") :-
+call_error(site, "atom_operand", "nil", source) :-
   operator_operand(site, position),
   argument_source(site, function, position, kind, source),
   misses_key(context, function, kind, source),
@@ -441,10 +469,11 @@ operator_operand(site, 0) :- operation_site(site, "Nx.Defn.Kernel.__unary_minus_
 // A public `defn` hands a tensor it computes from its inputs to an Nx
 // call where Nx needs an integer while it builds the expression: a size of
 // a shape, an axis, a slice's length, a range's bound.
-call_error(site, "tensor_as_integer", slot, "") :-
+call_error(site, "tensor_as_integer", slot, origin) :-
   entry_body(body),
   integer_part(site, body, kind, source, slot),
-  traced_source(body, kind, source).
+  traced_source(body, kind, source),
+  source_origin(body, kind, source, origin).
 
 // ── Words ──────────────────────────────────────────────────────────
 
