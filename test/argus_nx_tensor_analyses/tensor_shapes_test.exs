@@ -2898,6 +2898,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     def against_f16(x, type), do: Nx.add(Nx.as_type(x, type), Nx.f16([1]))
     def normalized(x, type), do: Nx.rsqrt(Nx.add(Nx.as_type(Nx.multiply(x, x), type), 1.0e-12))
     def written_bf16(x), do: Nx.add(Nx.as_type(x, :bf16), -1.0e9)
+    def real_part(x, type), do: Nx.as_type(Nx.as_type(x, :c64), type)
+    def tiny_epsilon(x, type), do: Nx.add(Nx.as_type(x, type), 1.0e-46)
   end
   """
 
@@ -4719,10 +4721,19 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert_finding(findings.(:scaled), {"tensor_type_error", "upcast", "f16 f32"})
     assert findings.(:same_type) == []
 
-    assert_finding(
-      findings.(:positions),
-      {"tensor_call_error", "sequence_precision", "bf16 arg0"}
-    )
+    # one finding for a call, naming each float type that breaks it
+    assert findings.(:positions) == [
+             {"tensor_call_error", "sequence_precision", "f16/bf16 arg0"}
+           ]
+
+    assert findings.(:real_part) == [{"tensor_call_error", "complex_to_real", "c64 f16/bf16/f32"}]
+
+    assert findings.(:tiny_epsilon) == [
+             {"tensor_call_error", "literal_underflow", "1.0e-46 f16/bf16/f32"}
+           ]
+
+    titles = Enum.map(Argus.Findings.build(TensorShapes, float_rows), & &1.title)
+    assert "Nx.multiply/2 counts past what f16 or bf16 holds exactly" in titles
 
     assert_finding(findings.(:against_f16), {"tensor_type_error", "narrowing_merge", "bf16 f16"})
 

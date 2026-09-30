@@ -88,14 +88,16 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def call_error("sequence_precision", detail, _operation) do
-    [type, length] = String.split(detail, " ", parts: 2)
+    [types, length] = String.split(detail, " ", parts: 2)
+    names = String.split(types, "/")
+    shown = join(names, "or")
 
     %{
-      title: "counts past what #{type} holds exactly",
+      title: "counts past what #{shown} holds exactly",
       detail:
         "A run of #{run(length)} whole numbers (an iota, a linspace's points) is made in, " <>
-          "or brought into, #{type}, #{sequence_effect(type)}",
-      label: "in #{type} here",
+          "or brought into, #{shown}, #{sequence_effect(names)}",
+      label: "in #{shown} here",
       help:
         "count in s32, or f32, and keep positions in it until they meet the values they scale",
       frame: "the count is made here:",
@@ -131,7 +133,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def call_error("complex_to_real", detail, _operation) do
-    [from, to] = String.split(detail, " ")
+    [from, types] = String.split(detail, " ")
+    to = types |> String.split("/") |> join("or")
 
     %{
       title: "drops the imaginary part of a complex tensor",
@@ -161,7 +164,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def call_error("literal_underflow", detail, _operation) do
-    [number, type] = String.split(detail, " ")
+    [number, types] = String.split(detail, " ")
+    type = types |> String.split("/") |> join("or")
 
     %{
       title: "adds a number #{type} rounds to zero",
@@ -389,17 +393,23 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     do:
       "give the other operand the tensor's type (Nx.as_type(c, Nx.type(x))), or pass a plain number, which keeps it"
 
-  # What a run of whole numbers past a type's limit becomes in it.
-  defp sequence_effect(type) do
+  # What a run of whole numbers past the types' limits becomes in them.
+  defp sequence_effect([type | _rest] = names) do
     if String.starts_with?(type, ["u", "s"]),
       do:
-        "whose largest value is #{limit(type)}: past it they wrap around (a u8 iota of 300 " <>
+        "whose largest value is #{limits(names)}: past it they wrap around (a u8 iota of 300 " <>
           "goes back to 0 at 256).",
       else:
-        "which holds every whole number only up to #{limit(type)}: past it neighbors round " <>
+        "which holds every whole number only up to #{limits(names)}: past it neighbors round " <>
           "to one value (a bf16 iota gives 256, 256, 258, 258, ...), and positions or " <>
           "timesteps built on them repeat."
   end
+
+  # The types' limits, each named where there are several.
+  defp limits([type]), do: limit(type)
+
+  defp limits(names),
+    do: names |> Enum.map(&"#{limit(&1)} in #{&1}") |> join("and")
 
   # A count as a sentence writes it: written, read from the code, or not
   # shown.
