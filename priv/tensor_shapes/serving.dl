@@ -118,7 +118,7 @@ call_error(compile, "serving_template_batch_size", cat("it is compiled for batch
 call_error(compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), ", and a serving process runs smaller ones when its batch times out"), "") :-
   serving_compiled_template(_, compile, serving, _, size),
   size > 1,
-  started(serving),
+  started(_, serving),
   !padded(serving).
 
 // The computation is compiled for a type its batch's entries are not
@@ -159,7 +159,7 @@ call_error(run, "batch_empty", "it is handed a batch with no entries", empty) :-
 // A serving process's preprocessing makes its batch of the request as it
 // comes, under the one batch key.
 call_error(setting, "serving_entry_shape_varies", "its batch's entry is the request, whose shape the caller decides, so requests of other shapes meet in one batch", batch) :-
-  started(serving),
+  started(_, serving),
   serving_preprocessing(serving, setting, function),
   returns_first(function, kind, source),
   comes_from(function, kind, source, batch),
@@ -268,14 +268,24 @@ run_argument(run, position, function, kind, source) :-
   remote_call(run, function, "Nx.Serving", "run", 2),
   argument_source(run, function, position, kind, source).
 
-// A serving that is started as a process: the value of a `{:serving,
-// serving}` pair, as the options of `Nx.Serving.start_link/1` and a child
-// specification hold it.
-.decl started(serving: symbol)
-started(serving) :-
-  flow_field(function, pair, "{0}", "literal", ":serving"),
-  flow_field(function, pair, "{1}", kind, source),
+// A serving that is started as a process, by the `serving:` option of
+// the options it is started with at `start`.
+.decl started(start: symbol, serving: symbol)
+started(start, serving) :-
+  option_pair(start, "serving", function, kind, source),
   on_its_way(function, kind, source, "serving", serving).
+
+// The options a serving process is started with: those of the child
+// specification `{Nx.Serving, options}`, which Nx documents, and those
+// `Nx.Serving.start_link/1` is handed. The specification, or the call,
+// is where the options are read, as a call's are.
+options_source(start, function, kind, source) :-
+  flow_object(function, start, "tuple", 2),
+  flow_field(function, start, "{0}", "literal", "Nx.Serving"),
+  flow_field(function, start, "{1}", kind, source).
+options_source(start, function, kind, source) :-
+  remote_call(start, function, "Nx.Serving", "start_link", 1),
+  flow_argument(start, function, 0, kind, source).
 
 // A call a builder handed to `Nx.Serving.new/1,2` returns the result of.
 .decl builder_returns(serving: symbol, made: symbol)
