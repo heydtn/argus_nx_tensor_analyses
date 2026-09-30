@@ -32,7 +32,6 @@ defmodule ArgusNxTensorAnalyses.MixProject do
   defp deps do
     [
       {:argus_beam, "~> 0.20.1"},
-      {:jason, "~> 1.4"},
       {:nx, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
