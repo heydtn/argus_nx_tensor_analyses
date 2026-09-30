@@ -3787,7 +3787,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       ])
 
     assert handed.title == "M.sums/2 hands Nx.sum :axis, an option it does not take"
-    assert handed.at_label == "hands Nx.sum :axis here"
+    assert handed.at_label == "hands Nx.sum :axis, not :axes or :keep_axes"
     assert handed.detail =~ "Nx.sum checks every key of its options"
     assert handed.detail =~ "(:axes and :keep_axes)"
     assert handed.severity == :error

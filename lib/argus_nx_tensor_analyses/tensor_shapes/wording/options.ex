@@ -121,7 +121,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
       detail:
         "#{name} checks every key of its options against the ones it takes " <>
           "(#{spell_keys(keys)}), and raises for any other: unknown key :#{key}.",
-      label: "gets :#{key} here",
+      label: "gets :#{key}, #{keys_instead(keys)}",
       help: key_help(key, keys, name),
       frame: "the options come from here"
     }
@@ -136,7 +136,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
       detail:
         "#{name} takes its options as a keyword list of #{spell_keys(keys)}, and raises " <>
           "for #{list}: expected a keyword list.",
-      label: "gets #{list} as its options",
+      label: "gets #{list}, not a keyword list of #{spell_keys(keys)}",
       help: positional_help(list, keys, name),
       frame: "the options come from here"
     }
@@ -164,7 +164,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
       detail:
         "#{name} takes :axes as a list of axes (or nil for all of them), and raises for " <>
           "anything else, here axes: #{value} (in Nx.Shape.normalize_axes/4).",
-      label: "gets axes: #{value} here",
+      label: "gets axes: #{value}, not a list such as axes: #{as_list(value)}",
       help: "wrap the axis in a list: axes: #{as_list(value)}",
       frame: "the value comes from here"
     }
@@ -176,7 +176,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
       detail:
         "#{name} takes :#{key} as one axis, an index or a name, and raises for a list or " <>
           "tuple of them (given axis ... invalid), here #{key}: #{value}.",
-      label: "gets #{key}: #{value} here",
+      label: "gets #{key}: #{value}, not one axis",
       help:
         "give one axis, such as #{key}: 0; for several axes, call it once per axis or use a " <>
           "function that takes :axes",
@@ -188,7 +188,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
     %{
       title: "gets #{atom} for :#{key}, which it requires",
       detail: "#{name} requires :#{key}, and raises for nil or false: missing option :#{key}.",
-      label: "gets #{key}: #{atom} here",
+      label: "gets #{key}: #{atom}, not a number",
       help: "give :#{key} a number, or leave it out for the default",
       frame: "the value comes from here"
     }
@@ -196,15 +196,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
 
   defp value_wording(name, key, atoms, atom) do
     shown = if key == "padding type", do: "as its #{key}", else: "for :#{key}"
-    label = if key == "padding type", do: "gets #{atom} here", else: "gets #{key}: #{atom} here"
     taken = Enum.concat(atoms, Map.get(@other_values, key, []))
+    given = if key == "padding type", do: atom, else: "#{key}: #{atom}"
 
     %{
       title: "gets #{atom} #{shown}, which it does not take",
       detail:
         "#{name} takes #{spell_atoms(taken)} #{shown}, and raises for any other atom, " <>
           "here #{atom}.",
-      label: label,
+      label: "gets #{given}, not #{spell_atoms(taken)}",
       help: atom_help(key, atoms, atom),
       frame: "the value comes from here"
     }
@@ -291,6 +291,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
       [value] -> {"", value}
     end
   end
+
+  # The keys a function takes, as a label names them instead of another.
+  defp keys_instead([]), do: "and takes no options"
+  defp keys_instead(keys), do: "not " <> (keys |> Enum.map(&":#{&1}") |> join("or"))
 
   defp spell_keys([]), do: "no options"
   defp spell_keys(keys), do: keys |> Enum.map(&":#{&1}") |> join("and")
