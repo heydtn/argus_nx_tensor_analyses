@@ -4408,26 +4408,30 @@ nx_members("argument", "first_operand", cat(
 nx_members("argument", "second_operand", cat(
   " Nx.reduce/3:1 Nx.reduce/4:1 Nx.weighted_mean/2:1 Nx.weighted_mean/3:1 ")).
 
+// The axes a reduction's `:axes` index: its operand's (the files included
+// below add others).
+.decl reduced_axes(site: symbol, axes: Axes)
+reduced_axes(site, first) :-
+  site_instance(site, operation, _, [first, _, _]),
+  nx_trait(operation, "reduction").
+
 .decl reduction_axes(site: symbol, axes: Axes, mask: number, keep: number)
-term_axes_demand(site, first, text, start) :-
-  site_instance(site, operation, _, [first, _, _]),
-  nx_trait(operation, "reduction"),
+term_axes_demand(site, axes, text, start) :-
+  reduced_axes(site, axes),
   option(site, "axes", text, start).
-reduction_axes(site, first, mask, keep) :-
-  site_instance(site, operation, _, [first, _, _]),
-  nx_trait(operation, "reduction"),
+reduction_axes(site, axes, mask, keep) :-
+  reduced_axes(site, axes),
   option(site, "axes", text, start),
-  term_axes_mask(first, text, start, mask),
+  term_axes_mask(axes, text, start, mask),
   option_flag(site, "keep_axes", keep).
-.plan 1:(4,3,1,5,2)
-reduction_axes(site, first, mask, keep) :-
-  site_instance(site, operation, _, [first, _, _]),
-  nx_trait(operation, "reduction"),
+.plan 1:(3,2,1,4)
+reduction_axes(site, axes, mask, keep) :-
+  reduced_axes(site, axes),
   option_absent(site, "axes"),
-  axes_rank(first, rank),
+  axes_rank(axes, rank),
   mask = (1 bshl rank) - 1,
   option_flag(site, "keep_axes", keep).
-.plan 1:(4,1,3,5,2)
+.plan 1:(3,1,2,4)
 
 contract_demand(first, mask, keep, 0) :- reduction_axes(_, first, mask, keep).
 
