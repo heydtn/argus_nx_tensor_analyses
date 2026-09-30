@@ -278,7 +278,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Nonfinite do
   # the title names, its derivative, and how to keep it finite.
   defp differentiated("Nx.LinAlg.norm") do
     {"a NaN", "of a norm there is 0/0, NaN",
-     "keep the norm's operand away from zero where it is differentiated, or take a vector's norm with an epsilon inside the root: Nx.sqrt(Nx.add(Nx.sum(Nx.multiply(x, x)), 1.0e-12))"}
+     "keep the norm's operand away from zero where it is differentiated, or take a vector's norm with an epsilon inside the root: Nx.sqrt(Nx.add(Nx.sum(Nx.multiply(x, x)), 1.0e-6))"}
   end
 
   defp differentiated("Nx.standard_deviation") do
@@ -288,7 +288,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Nonfinite do
 
   defp differentiated(_root) do
     {"an infinite", "of a root there is infinite",
-     "keep the operand away from zero where it is differentiated, such as Nx.sqrt(Nx.add(x, 1.0e-12))"}
+     "keep the operand away from zero where it is differentiated, such as Nx.sqrt(Nx.add(x, 1.0e-6))"}
   end
 
   # What could have kept the operand from zero on the way to the call.

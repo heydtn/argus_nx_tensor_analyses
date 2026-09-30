@@ -120,13 +120,18 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def call_error("unchecked_cast_wraparound", type, _operation) do
+    {low, high} = integer_range(type)
+    wrapped = wrapped_integer(-1, type)
+
     %{
       title: "makes a value nothing keeps non-negative #{type}",
       detail:
         "The value can be negative only where an input is, which it may never be; where it " <>
-          "is, making it #{type} wraps it around rather than saturating (-1 becomes 255 in u8).",
-      label: "made #{type} here",
-      help: "clip into the type's range first, as in Nx.clip(x, 0, 255), or check the input",
+          "is, making it #{type} wraps it around rather than saturating (-1 becomes #{wrapped} " <>
+          "in #{type}).",
+      label: "made #{type}, where an input's -1 would become #{wrapped}",
+      help:
+        "clip into #{type}'s range first, as in Nx.clip(x, #{low}, #{high}), or check the input",
       frame: "",
       severity: :info
     }
