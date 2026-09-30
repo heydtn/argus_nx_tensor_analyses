@@ -62,8 +62,7 @@ call_error(site, "narrow_wraparound", type, origin) :-
 call_error(site, "index_wraparound", cat(type, " ", counted), "") :-
   index_wraparound(_, site, type, counted).
 call_error(site, "sequence_precision", cat(types, " ", counted), origin) :-
-  types_joined(site, "sequence_precision", counted, origin, last, types),
-  !next_breaking(site, "sequence_precision", counted, origin, last, _, _).
+  types_joined(site, "sequence_precision", -1, counted, origin, _, types).
 call_error(site, "cast_wraparound", type, "") :-
   cast_wraparound(_, site, type, "").
 call_error(site, "cast_wraparound", cat(type, " ", number), "") :-
@@ -72,13 +71,11 @@ call_error(site, "cast_wraparound", cat(type, " ", number), "") :-
 call_error(site, "unchecked_cast_wraparound", type, "") :-
   unchecked_cast_wraparound(_, site, type).
 call_error(site, "complex_to_real", cat(from, " ", types), origin) :-
-  types_joined(site, "complex_to_real", from, origin, last, types),
-  !next_breaking(site, "complex_to_real", from, origin, last, _, _).
+  types_joined(site, "complex_to_real", -1, from, origin, _, types).
 call_error(site, "float_truncation", cat(from, " ", to), origin) :-
   truncates_float(_, site, from, to, origin).
 call_error(site, "literal_underflow", cat(number, " ", types), origin) :-
-  types_joined(site, "literal_underflow", number, origin, last, types),
-  !next_breaking(site, "literal_underflow", number, origin, last, _, _).
+  types_joined(site, "literal_underflow", -1, number, origin, _, types).
 call_error(site, "pad_type_mismatch", cat(from, " ", to), "") :-
   pad_type_mismatch(_, site, from, to).
 call_error(site, "integer_determinant", type, origin) :-
@@ -97,35 +94,40 @@ nonfinite(site, "unsigned_logsumexp", type, origin) :-
 type_error(site, kind, cat(from, " ", to), position, 0, origin) :-
   type_meeting(site, kind, position, from, to, origin).
 
-// A check a call breaks in a type, by the rest of what its finding says
-// (`rest`): a row for each float type a type read from configuration can
-// be, which its finding names together.
-.decl breaks_in(site: symbol, kind: symbol, rest: symbol, origin: symbol, type: symbol)
-breaks_in(site, "sequence_precision", counted, origin, type) :-
+// A check a call breaks in a type, at the argument at `position` (-1 for
+// none) and by the rest of what its finding says (`rest`): a row for each
+// float type a type read from configuration can be, which its finding
+// names together.
+.decl breaks_in(site: symbol, kind: symbol, position: number, rest: symbol, origin: symbol, type: symbol)
+breaks_in(site, "sequence_precision", -1, counted, origin, type) :-
   sequence_precision(_, site, type, counted, origin).
-breaks_in(site, "complex_to_real", from, origin, to) :- drops_imaginary_part(_, site, from, to, origin).
-breaks_in(site, "literal_underflow", number, "", type) :- literal_underflow(_, site, number, type).
+breaks_in(site, "complex_to_real", -1, from, origin, to) :- drops_imaginary_part(_, site, from, to, origin).
+breaks_in(site, "literal_underflow", -1, number, "", type) :- literal_underflow(_, site, number, type).
 
-// The types a check breaks at a call, joined by "/" in the order Nx's
-// types are listed in (`type_order`) up to the one of rank `last`: all of
-// them where no other comes after it (`next_breaking`).
-.decl types_joined(site: symbol, kind: symbol, rest: symbol, origin: symbol, last: number, types: symbol)
-types_joined(site, kind, rest, origin, first, type) :-
-  breaks_in(site, kind, rest, origin, type),
+// Every type a check breaks at a call, joined by "/" in the order Nx's
+// types are listed in (`type_order`), the last of rank `last`. They are
+// joined a type at a time (`next_breaking`), and each join gives way to
+// the one that goes on from it, so what is left names them all.
+.decl types_joined(site: symbol, kind: symbol, position: number, rest: symbol, origin: symbol, last: number, types: symbol)
+types_joined(site, kind, position, rest, origin, first, type) :-
+  breaks_in(site, kind, position, rest, origin, type),
   type_order(type, first),
-  first = min rank : { breaks_in(site, kind, rest, origin, other), type_order(other, rank) }.
-types_joined(site, kind, rest, origin, next, cat(types, "/", type)) :-
-  types_joined(site, kind, rest, origin, last, types),
-  next_breaking(site, kind, rest, origin, last, next, type).
+  first = min rank : { breaks_in(site, kind, position, rest, origin, other), type_order(other, rank) }.
+types_joined(site, kind, position, rest, origin, next, cat(types, "/", type)) :-
+  types_joined(site, kind, position, rest, origin, last, types),
+  next_breaking(site, kind, position, rest, origin, last, next, type).
+types_joined(site, kind, position, rest, origin, earlier, part) <=
+  types_joined(site, kind, position, rest, origin, later, whole) :-
+  earlier < later.
 
 // The type a check breaks at a call next after the one of rank `rank`.
-.decl next_breaking(site: symbol, kind: symbol, rest: symbol, origin: symbol, rank: number, next: number, type: symbol)
-next_breaking(site, kind, rest, origin, rank, next, type) :-
-  breaks_in(site, kind, rest, origin, earlier),
+.decl next_breaking(site: symbol, kind: symbol, position: number, rest: symbol, origin: symbol, rank: number, next: number, type: symbol)
+next_breaking(site, kind, position, rest, origin, rank, next, type) :-
+  breaks_in(site, kind, position, rest, origin, earlier),
   type_order(earlier, rank),
-  next = min later : { breaks_in(site, kind, rest, origin, other), type_order(other, later), later > rank },
+  next = min later : { breaks_in(site, kind, position, rest, origin, other), type_order(other, later), later > rank },
   type_order(type, next),
-  breaks_in(site, kind, rest, origin, type).
+  breaks_in(site, kind, position, rest, origin, type).
 
 // Nx's types in the order a finding lists them: by size, and of one size
 // the floats by range, then the unsigned integer, then the signed.
