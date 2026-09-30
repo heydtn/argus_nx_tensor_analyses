@@ -116,8 +116,9 @@ swaps_sizes(tensor, result, earlier, later) :-
   sole_variable(result, later_to, later),
   later_to < earlier_to.
 
-// "the tensor has seq on axis 1 before heads on axis 2, and the result
-// has heads on axis 1 before seq on axis 2".
+// "the tensor has seq on axis 1 before heads on axis 2, and the result,
+// {batch, heads, seq, head_dim}, has heads on axis 1 before seq on axis
+// 2".
 .decl swap_spelled(tensor: Axes, result: Axes, earlier: symbol, later: symbol, detail: symbol)
 swap_spelled(tensor, result, earlier, later, detail) :-
   swaps_sizes(tensor, result, earlier, later),
@@ -127,4 +128,6 @@ swap_spelled(tensor, result, earlier, later, detail) :-
   sole_variable(result, later_to, later),
   factor_shown(earlier, earlier_shown),
   factor_shown(later, later_shown),
-  detail = cat("the tensor has ", earlier_shown, " on axis ", to_string(earlier_from), " before ", later_shown, " on axis ", to_string(later_from), ", and the result has ", later_shown, " on axis ", to_string(later_to), " before ", earlier_shown, " on axis ", to_string(earlier_to)).
+  sizes_spelled(result, result_spelled),
+  detail = cat("the tensor has ", earlier_shown, " on axis ", to_string(earlier_from), " before ", later_shown, " on axis ", to_string(later_from), ", and the result, ", result_spelled, ", has ", later_shown, " on axis ", to_string(later_to), " before ", earlier_shown, " on axis ", to_string(earlier_to)).
+spelling_demand(result) :- swaps_sizes(_, result, _, _).

@@ -4910,7 +4910,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
              "Nx.reshape/2 moves a size past another axis, which scrambles the data"
 
     assert finding.detail =~
-             "the tensor has seq on axis 1 before heads on axis 2, and the result has heads on axis 1 before seq on axis 2"
+             "the tensor has seq on axis 1 before heads on axis 2, and the result, {batch, heads, seq, head_dim}, has heads on axis 1 before seq on axis 2"
   end
 
   defp reshape_order_functions(rows) do
