@@ -1880,6 +1880,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     defp wide_mask, do: 0xFFFFFFFFFF
     def masks_through_helper(t), do: Nx.bitwise_and(t, wide_mask())
     defn offset_past_s32(t), do: t + 3_000_000_000
+    defn picks_past_s32(t), do: t[4_294_967_296 - 4_294_967_295]
     defp valid_config?(config), do: Nx.Type.float?(config.type)
 
     def validates_config(t),
@@ -2065,6 +2066,31 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
     defn last_position(hidden), do: hidden[[.., -1]]
     defn first_position(hidden), do: hidden[[.., 0, ..]]
+
+    defn head_before(x) do
+      k = 0
+      x[0..(k - 1)]
+    end
+
+    defn head_through(x) do
+      k = 2
+      x[0..(k - 1)]
+    end
+
+    defn span_before(x) do
+      k = 2
+      x[k..(k - 1)//1]
+    end
+
+    defn span_through(x) do
+      k = 1
+      x[(k - 1)..k//1]
+    end
+
+    def heads_before, do: head_before(Nx.iota({4}))
+    def heads_through, do: head_through(Nx.iota({4}))
+    def spans_before, do: span_before(Nx.iota({4}))
+    def spans_through, do: span_through(Nx.iota({4}))
 
   #{@access_shapes |> Enum.with_index(1) |> Enum.map_join("\n", fn {{body, _expected}, index} -> "  def shape_#{index} do\n#{body}\n  end\n" end)}
   #{@access_findings |> Enum.with_index(1) |> Enum.map_join("\n", fn {{body, _kind, _detail, _outcome}, index} -> "  def finding_#{index} do\n#{body}\n  end\n" end)}
@@ -4444,6 +4470,19 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
             "3000000000 as s32"} in found
   end
 
+  # A Kernel operator on two numbers computes a number, as Kernel's own
+  # does, and Nx makes no tensor of them: the index is 1.
+  test "a wide integer a defn computes with a number is no tensor", %{rows: rows} do
+    function = function_id(@literal_fixtures, "__defn:picks_past_s32__", 1)
+
+    assert findings_for(rows, "tensor_type_error", function, :kind) == []
+
+    assert {:returns, value} =
+             outcome_on_binary_backend(@literal_fixtures, :picks_past_s32, [Nx.iota({4})])
+
+    assert Nx.to_number(value) == 1
+  end
+
   # What Nx makes of each literal these findings name, on the binary
   # backend, is what their wording says it becomes.
   test "a literal a type cannot hold becomes the value its finding names" do
@@ -4559,6 +4598,41 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
         outcome_on_binary_backend(@access_fixtures, :"finding_#{index}", [])
       )
     end
+  end
+
+  # In a `defn`, `k - 1` of a number `k` is a number, so `0..(k - 1)` of a
+  # `k` of 0 steps down and `k..(k - 1)//1` of a `k` of 2 holds nothing,
+  # while their neighbors give ranges Nx takes.
+  test "a range a defn computes of numbers is checked", %{rows: rows} do
+    found =
+      &findings_for(
+        rows,
+        "tensor_call_error",
+        function_id(@access_fixtures, "__defn:#{&1}__", 1),
+        [
+          :kind,
+          :detail
+        ]
+      )
+
+    assert found.(:head_before) == [
+             {"access_negative_step", "range step must be positive, got range: 0..-1//-1"}
+           ]
+
+    assert found.(:span_before) == [
+             {"access_empty_range", "slicing a tensor requires a non-empty range, got: 2..1//1"}
+           ]
+
+    assert found.(:head_through) == []
+    assert found.(:span_through) == []
+
+    assert {:raises, %ArgumentError{}} =
+             outcome_on_binary_backend(@access_fixtures, :heads_before, [])
+
+    assert {:raises, error} = outcome_on_binary_backend(@access_fixtures, :spans_before, [])
+    assert Exception.message(error) == "slicing a tensor requires a non-empty range, got: 2..1//1"
+    assert {:returns, _value} = outcome_on_binary_backend(@access_fixtures, :heads_through, [])
+    assert {:returns, _value} = outcome_on_binary_backend(@access_fixtures, :spans_through, [])
   end
 
   test "run/2 words and places an access's findings", %{placed: placed, source: source} do

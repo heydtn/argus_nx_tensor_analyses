@@ -234,7 +234,7 @@ not checked.
 |---|---|---|---|
 | `access_scalar` | error | Indexing a scalar. | `Nx.sum(Nx.iota({4}))[0]` |
 | `access_out_of_bounds` | error | A written index or range bound outside its axis. | `Nx.iota({4, 5})[4]` |
-| `access_negative_step` | error | A range that steps backwards, as `1..-1` does. | `Nx.iota({4, 5})[1..-1//-1]` |
+| `access_negative_step` | error | A range that steps backwards, as `1..-1` does, and as `0..(k - 1)` does in a `defn` where `k` is 0: a Kernel operator on two numbers computes a number. | `Nx.iota({4, 5})[1..-1//-1]` |
 | `access_empty_range` | error | A range that holds no index of its axis. | `Nx.iota({4, 5})[3..1//1]` |
 | `access_too_many_indices` | error | More indices than the tensor has axes. | `Nx.iota({4, 5})[[0, 0, 0]]` |
 | `access_unknown_name` | error | A name the tensor has no axis for. | `Nx.iota({4, 5}, names: [:a, :b])[c: 1]` |

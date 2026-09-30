@@ -118,6 +118,8 @@
 //   * `Uniform`, a tuple of tensors of one shape (`Nx.top_k/2`);
 //   * `Shape`, a tuple of sizes (`Nx.shape/1`);
 //   * `Integer`, a size;
+//   * `Number`, an integer a Kernel operator computes that is no size:
+//     zero or below (one above zero is a size);
 //   * `Term`, a literal term the code writes, at a position in its
 //     spelling;
 //   * `Opaque`, a value the analysis does not know, named by the path it
@@ -134,6 +136,7 @@
             | Uniform {tensor: Tensor}
             | Shape {axes: Axes}
             | Integer {size: Size}
+            | Number {value: number}
             | Term {text: symbol, start: number}
             | Opaque {path: symbol}
             | Object {context: Context, object: symbol, mapping: Mapping}
@@ -672,6 +675,7 @@ may_equal(value, literal) :- value = $Integer([known, nil]), known > 0, to_strin
 may_equal(value, literal) :- value = $Integer([coefficient, [_factor, _factors]]), coefficient > 0, match("[0-9]+", literal).
 may_equal(value, literal) :- value = $Integer([0, nil]), match("[0-9]+", literal).
 may_equal(value, literal) :- value = $Module(literal).
+may_equal(value, literal) :- value = $Number(number), to_string(number) = literal.
 may_equal(value, literal) :- value = $Object(_context, _object, _mapping), match("[\\[{%].*", literal).
 
 .decl may_differ(value: Value, literal: symbol) inline
@@ -681,6 +685,7 @@ may_differ(value, literal) :- value = $Integer([known, nil]), known > 0, to_stri
 may_differ(value, literal) :- value = $Integer([coefficient, [_factor, _factors]]), coefficient > 0, strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Integer([0, nil]), strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Module(module), module != literal.
+may_differ(value, literal) :- value = $Number(number), to_string(number) != literal.
 may_differ(value, literal) :- value = $Object(_context, _object, _mapping), strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Tensor(_tensor), strlen(literal) >= 0.
 may_differ(value, literal) :- value = $Uniform(_tensor), strlen(literal) >= 0.
@@ -1236,7 +1241,8 @@ naming_demand(value) :- call_argument(_, _, _, _, value).
 .decl nameless(value: Value)
 nameless(value) :-
   naming_demand(value),
-  ( value = $Opaque("") ; value = $Term(_, _) ; value = $Module(_) ; value = $Function(_, _, _) ).
+  ( value = $Opaque("") ; value = $Term(_, _) ; value = $Module(_) ; value = $Function(_, _, _) ;
+    value = $Number(_) ).
 nameless($Integer([known, nil])) :-
   naming_demand($Integer([known, nil])),
   known >= 0,
@@ -1818,7 +1824,7 @@ renamed_value(nil, value, value) :- rename_demand(nil, value).
 renamed_value(mapping, value, value) :-
   rename_demand(mapping, value),
   mapping != nil,
-  ( value = $Term(_, _) ; value = $Module(_) ; value = $Function(_, _, _) ).
+  ( value = $Term(_, _) ; value = $Module(_) ; value = $Function(_, _, _) ; value = $Number(_) ).
 renamed_value(mapping, $Opaque(path), $Opaque(renamed)) :-
   rename_demand(mapping, $Opaque(path)),
   mapping != nil,
@@ -2399,6 +2405,7 @@ tensor_demand(value) :- list_head(_, value).
 .decl value_tensor(value: Value, tensor: Tensor)
 value_tensor($Tensor(tensor), tensor) :- tensor_demand($Tensor(tensor)).
 value_tensor($Integer(size), [nil, nil]) :- tensor_demand($Integer(size)).
+value_tensor($Number(number), [nil, nil]) :- tensor_demand($Number(number)).
 value_tensor($Term(text, start), [nil, nil]) :-
   tensor_demand($Term(text, start)),
   term_scalar(text, start).
@@ -2407,8 +2414,13 @@ value_tensor($Term(text, start), [nil, nil]) :-
 argument_tensor(context, site, position, tensor) :-
   argument_value(context, site, position, value),
   operation_site(site, _, _),
+  !number_site(site),
   value_tensor(value, tensor).
 .plan 1:(3,1,2)
+argument_tensor(context, site, position, tensor) :-
+  tensor_operation(context, site),
+  argument_value(context, site, position, value),
+  value_tensor(value, tensor).
 
 // An argument that is a tensor of a shape not known: `path` names it when
 // it came from a parameter.
@@ -2726,6 +2738,131 @@ axes_known(axes) :-
   operation_site(site, operation, _),
   ( operation = "Nx.rank" ; operation = "Nx.size" ; operation = "Nx.axis_size" ).
 nx_members("argument", "first_operand", " Nx.axis_size/2:0 Nx.rank/1:0 Nx.size/1:0 ").
+
+// ── Numbers Kernel operators compute ───────────────────────────────
+//
+// In a `defn`, a Kernel operator on two numbers computes a number, as
+// Kernel's own operator does, and runs Nx's function only where an
+// operand may be a tensor: `k - 1` of a number `k` is a number. The rules
+// compute the integer arithmetic's (`+`, `-`, `*`, `div`, `rem`, `max`,
+// `min`) of integers they know, and take any other such number as a
+// scalar, as Nx makes one that meets a tensor.
+
+// The Kernel operators of two operands.
+nx_trait(operation, "number_operator") :-
+  nx_trait(operation, "broadcasts"),
+  match("Nx\\.Defn\\.Kernel\\..*", operation).
+
+// Those that compute an integer of two integers, the arithmetic their
+// sign class names.
+nx_members("trait", "integer_operator", cat(
+  " Nx.Defn.Kernel.+ Nx.Defn.Kernel.- Nx.Defn.Kernel.* Nx.Defn.Kernel.div Nx.Defn.Kernel.rem",
+  " Nx.Defn.Kernel.max Nx.Defn.Kernel.min ")).
+
+// A Kernel operator of two operands that computes a number of two
+// numbers: one outside the functions Nx builds from tensors, whose
+// operands are tensors whatever values the rules hand them. Read from the
+// code alone, so that rules may negate it.
+.decl number_site(site: symbol)
+number_site(site) :-
+  operation_site(site, operation, 2),
+  nx_trait(operation, "number_operator"),
+  site_function(site, function),
+  !built_from_tensors(function).
+
+// A function Nx builds apart from tensors it makes of what it hands it: a
+// closure a call takes as its "scoped_fun" (a loop's body, a reduction's
+// fold). Read from the code alone.
+.decl built_from_tensors(function: symbol)
+built_from_tensors(function) :-
+  fun_argument(site, position, function, _),
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "scoped_fun").
+
+// A Kernel operator an operand of which may be a tensor, in a context: a
+// tensor, or a value the rules do not know. It runs Nx's function there,
+// which makes a tensor of a number beside one.
+.decl meets_tensor(context: Context, site: symbol)
+meets_tensor(context, site) :-
+  argument_value(context, site, _, value),
+  number_site(site),
+  ( value = $Tensor(_) ; value = $Opaque(_) ).
+
+// A Kernel operator whose operands the rules take as tensors in a
+// context: where it meets a tensor, and where they compute no number of
+// its two numbers, for an operator other than integer arithmetic or a
+// number whose integer they do not know (a float, a size not known).
+.decl tensor_operation(context: Context, site: symbol)
+tensor_operation(context, site) :- meets_tensor(context, site).
+tensor_operation(context, site) :-
+  site_active(context, site),
+  number_site(site),
+  operation_site(site, operation, 2),
+  !nx_trait(operation, "integer_operator").
+tensor_operation(context, site) :-
+  argument_value(context, site, _, $Integer([coefficient, factors])),
+  number_site(site),
+  ( coefficient = 0 ; factors != nil ).
+tensor_operation(context, site) :-
+  argument_value(context, site, _, $Term(text, start)),
+  number_site(site),
+  term_scalar(text, start),
+  !term_integer(text, start, _).
+
+// An argument's integer in a context, where the rules know it and the sum
+// or difference of two fits their 32-bit numbers, of a Kernel function a
+// `defn` calls: a size, a written integer, and an integer a Kernel
+// operator computes that is no size.
+.decl argument_integer(context: Context, site: symbol, position: number, integer: number)
+argument_integer(context, site, position, integer) :-
+  argument_value(context, site, position, $Integer([integer, nil])),
+  remote_call(site, _, "Nx.Defn.Kernel", _, _),
+  integer > 0,
+  integer < 1073741824.
+argument_integer(context, site, position, integer) :-
+  argument_value(context, site, position, $Term(text, start)),
+  remote_call(site, _, "Nx.Defn.Kernel", _, _),
+  term_integer(text, start, integer),
+  integer > -1073741824,
+  integer < 1073741824.
+argument_integer(context, site, position, integer) :-
+  argument_value(context, site, position, $Number(integer)),
+  remote_call(site, _, "Nx.Defn.Kernel", _, _),
+  integer > -1073741824.
+
+// A Kernel integer operator's two integers in a context, by its sign
+// class.
+.decl integer_operands(context: Context, site: symbol, class: symbol, left: number, right: number)
+integer_operands(context, site, class, left, right) :-
+  argument_integer(context, site, 0, left),
+  argument_integer(context, site, 1, right),
+  number_site(site),
+  operation_site(site, operation, 2),
+  nx_trait(operation, "integer_operator"),
+  nx_class(operation, "sign", class).
+
+// The integer a Kernel operator computes of two integers in a context,
+// where it fits the rules' 32-bit numbers. Elixir's `div` and `rem`
+// truncate toward zero, as the rules' division does; they are taken of a
+// positive divisor only.
+.decl computed_integer(context: Context, site: symbol, integer: number)
+computed_integer(context, site, left + right) :- integer_operands(context, site, "add", left, right).
+computed_integer(context, site, left - right) :-
+  integer_operands(context, site, "subtract", left, right).
+computed_integer(context, site, left * right) :-
+  integer_operands(context, site, "multiply", left, right),
+  max(left, 0 - left) <= 2147483647 / max(max(right, 0 - right), 1).
+computed_integer(context, site, left / max(right, 1)) :-
+  integer_operands(context, site, "quotient", left, right),
+  right > 0.
+computed_integer(context, site, left % max(right, 1)) :-
+  integer_operands(context, site, "remainder", left, right),
+  right > 0.
+computed_integer(context, site, max(left, right)) :- integer_operands(context, site, "maximum", left, right).
+computed_integer(context, site, min(left, right)) :- integer_operands(context, site, "minimum", left, right).
+
+integer_result(context, site, [integer, nil]) :- computed_integer(context, site, integer), integer > 0.
+result_value(context, site, $Number(integer)) :- computed_integer(context, site, integer), integer <= 0.
 
 
 // ══ Literal terms ═══════════════════════════════════════════════════

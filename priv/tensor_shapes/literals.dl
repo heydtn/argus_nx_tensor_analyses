@@ -94,8 +94,7 @@ misread_kind("written", "not_integer", "float_as_integer").
 // integer that fits s32 they hold as a size instead, and it fits.
 .decl made_as(site: symbol, position: number, text: symbol, start: number, name: symbol, how: symbol)
 made_as(site, position, text, start, "s32", "inferred") :-
-  inferred_operand(site, position),
-  site_active(context, site),
+  inferred_operand(context, site, position),
   argument_value(context, site, position, $Term(text, start)),
   term_spelling(text, start, spelled),
   written_number(spelled, "kind", "integer").
@@ -109,20 +108,29 @@ made_as(site, 0, text, element, name, "written") :-
   typed_data(site, text, data, name),
   data_element(text, data, element).
 
-// An argument Nx makes a tensor of in the type it infers for a number:
-// an operand of an Nx call (`operand_slot`), but a creation's data, which
-// has a rule of its own, and the tensor of `Nx.as_type/2` or
-// `Nx.bitcast/2`, whose number takes or keeps the bits of the type given;
-// and the bounds of `Nx.Random`'s samplers, which a `:type` does not
-// widen either (a normal sampler's mean and deviation are its operands).
-.decl inferred_operand(site: symbol, position: number)
-inferred_operand(site, position) :-
+// An argument Nx makes a tensor of in the type it infers for a number,
+// in a context: an operand of an Nx call (`operand_slot`), but a
+// creation's data, which has a rule of its own, and the tensor of
+// `Nx.as_type/2` or `Nx.bitcast/2`, whose number takes or keeps the bits
+// of the type given; an operand of a Kernel operator only where it meets
+// a tensor, as on two numbers it computes a number (`meets_tensor`); and
+// the bounds of `Nx.Random`'s samplers, which a `:type` does not widen
+// either (a normal sampler's mean and deviation are its operands).
+.decl inferred_operand(context: Context, site: symbol, position: number)
+inferred_operand(context, site, position) :-
+  site_active(context, site),
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
+  !number_site(site),
   !nx_argument(operation, arity, 0, "data"),
   operation != "Nx.as_type",
   operation != "Nx.bitcast".
-inferred_operand(site, position) :-
+inferred_operand(context, site, position) :-
+  meets_tensor(context, site),
+  operation_site(site, operation, 2),
+  operand_slot(operation, 2, _, position).
+inferred_operand(context, site, position) :-
+  site_active(context, site),
   operation_site(site, operation, arity),
   nx_class(operation, "bounds", _),
   arity >= 3,

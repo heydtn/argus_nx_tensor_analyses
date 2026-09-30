@@ -103,3 +103,6 @@ raises.
   number in a context. An amount of a size variable leaves the axis it
   pads a size not known, and one the analysis has no value for, such as a
   difference of two variables (`target - n`), leaves the call no shape.
+- In a `defn`, a Kernel operator on two numbers gives a number. Its value
+  is known for `+`, `-`, `*`, `div`, `rem`, `max` and `min` of integers
+  the analysis knows; any other is taken as a scalar.
