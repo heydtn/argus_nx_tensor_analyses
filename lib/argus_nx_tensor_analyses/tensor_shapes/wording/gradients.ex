@@ -112,13 +112,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
     }
   end
 
-  def hazard("degenerate_gradient", cause, _operation) do
+  def hazard("degenerate_gradient", cause, operation) do
     %{
       title: "has a NaN gradient for a degenerate matrix",
       detail:
-        "A grad differentiates it, and its operand is #{matrix(cause)}. Nx differentiates it " <>
-          "with divisions by the gaps between its singular values or eigenvalues, or by the " <>
-          "singular values, which are zero there, so the gradient is NaN.",
+        "A grad differentiates it, and its operand is #{matrix(cause)}. " <>
+          "#{differentiated(operation)} with divisions by the gaps between its singular " <>
+          "values or eigenvalues, or by the singular values, which are zero there, so the " <>
+          "gradient is NaN.",
       label: "differentiated here",
       help: degenerate_help(cause),
       frame: "the matrix is made here:"
@@ -255,6 +256,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Gradients do
 
   defp matrix(_scaled_identity),
     do: "the identity times a scalar, whose eigenvalues are all the same"
+
+  # How Nx differentiates a decomposition, or a norm it computes from the
+  # singular values.
+  defp differentiated("Nx.LinAlg.norm" <> _arity),
+    do: "Nx computes this norm from the matrix's singular values, and differentiates them"
+
+  defp differentiated(_decomposition), do: "Nx differentiates it"
 
   defp degenerate_help("scaled_identity"),
     do:

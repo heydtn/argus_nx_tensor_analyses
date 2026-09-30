@@ -126,10 +126,10 @@ sigmoid_of_additive_mask(site, addition, cause) :-
 // A decomposition of a matrix built degenerate (`cause`: an outer product,
 // of rank one; a product of matrices over an axis shorter than its sides,
 // short of full rank; the identity times a scalar, every eigenvalue the
-// same), where a grad differentiates it. Its derivative divides by the
-// gaps between eigenvalues or singular values, or by the singular values,
-// or solves with the matrix: the gradient is NaN, or Nx raises
-// (`outcome`).
+// same), or a norm Nx computes from its singular values, where a grad
+// differentiates it. Its derivative divides by the gaps between
+// eigenvalues or singular values, or by the singular values, or solves
+// with the matrix: the gradient is NaN, or Nx raises (`outcome`).
 .decl degenerate_decomposition(site: symbol, origin: symbol, cause: symbol, outcome: symbol)
 degenerate_decomposition(site, origin, cause, outcome) :-
   differentiated_decomposition(site, operation, origin),
@@ -529,11 +529,13 @@ nx_argument(operation, arity, 0, "keeps_far_value") :-
 // ── Degenerate matrices ───────────────────────────────────────────────
 
 // A decomposition a gradient flows back through, and the call its operand
-// is the result of.
+// is the result of: a norm only for an order Nx computes from the
+// singular values.
 .decl differentiated_decomposition(site: symbol, operation: symbol, origin: symbol)
 differentiated_decomposition(site, operation, origin) :-
   operation_site(site, operation, _),
   nx_class(operation, "degenerate_outcome", _),
+  ( operation != "Nx.LinAlg.norm" ; norm_of_singular_values(site) ),
   differentiated_operand(site, 0),
   argument_source(site, _, 0, "result", origin).
 
@@ -566,17 +568,19 @@ degenerate_operand(site, origin, "scaled_identity") :-
 // class "degenerate_outcome"): NaN from the gaps between repeated singular
 // values or eigenvalues, or from zero singular values; a raise from
 // solving with a singular matrix. It does at the degenerate operands of
-// its class "degenerate".
+// its class "degenerate". A norm of singular values is differentiated
+// through them, as an svd is.
 nx_members("degenerate_outcome", "nan", cat(
-  " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.eigh Nx.LinAlg.invert Nx.LinAlg.least_squares ")).
+  " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.eigh Nx.LinAlg.invert Nx.LinAlg.least_squares",
+  " Nx.LinAlg.norm ")).
 nx_members("degenerate_outcome", "raises", " Nx.LinAlg.cholesky Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve ").
 nx_members("degenerate", "rank_one", cat(
   " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.invert Nx.LinAlg.least_squares Nx.LinAlg.cholesky",
-  " Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve ")).
+  " Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve Nx.LinAlg.norm ")).
 nx_members("degenerate", "low_rank", cat(
   " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.invert Nx.LinAlg.least_squares Nx.LinAlg.cholesky",
-  " Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve ")).
-nx_members("degenerate", "scaled_identity", " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.eigh ").
+  " Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve Nx.LinAlg.norm ")).
+nx_members("degenerate", "scaled_identity", " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.eigh Nx.LinAlg.norm ").
 
 // ── Calls with no derivative ──────────────────────────────────────────
 

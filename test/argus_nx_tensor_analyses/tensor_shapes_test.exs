@@ -1397,7 +1397,20 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:nonfinite, "degenerate_gradient", "scaled_identity"},
      "Nx.Defn.grad(Nx.add(Nx.as_type(t, :f32), 2.0), fn v ->\n  {_, singular, _} = Nx.LinAlg.svd(Nx.multiply(Nx.reshape(v, {}), Nx.eye(2)))\n  Nx.sum(singular)\nend)"},
     {{:finds_none, :finite},
-     "Nx.Defn.grad(Nx.iota({2}, type: :f32), fn v -> Nx.sum(Nx.LinAlg.cholesky(Nx.add(Nx.outer(v, v), Nx.eye(2)))) end)"}
+     "Nx.Defn.grad(Nx.iota({2}, type: :f32), fn v -> Nx.sum(Nx.LinAlg.cholesky(Nx.add(Nx.outer(v, v), Nx.eye(2)))) end)"},
+    # norms Nx computes from the singular values of matrices built degenerate
+    {{:nonfinite, "degenerate_gradient", "rank_one"},
+     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v -> Nx.LinAlg.norm(Nx.outer(v, v), ord: :nuclear) end)"},
+    {{:nonfinite, "degenerate_gradient", "low_rank"},
+     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v ->\n  u = Nx.reshape(v, {2, 1})\n  Nx.LinAlg.norm(Nx.dot(u, Nx.transpose(u)), ord: :nuclear)\nend)"},
+    {{:nonfinite, "degenerate_gradient", "scaled_identity"},
+     "Nx.Defn.grad(Nx.add(Nx.as_type(t, :f32), 2.0), fn v -> Nx.LinAlg.norm(Nx.multiply(Nx.reshape(v, {}), Nx.eye(2)), ord: :nuclear) end)"},
+    {{:nonfinite, "degenerate_gradient", "rank_one"},
+     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v -> Nx.LinAlg.norm(Nx.outer(v, v), ord: -2) end)"},
+    {{:finds_none, :finite},
+     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v -> Nx.LinAlg.norm(Nx.add(Nx.abs(Nx.outer(v, v)), 1.0), ord: :nuclear) end)"},
+    {{:finds_none, :finite},
+     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v ->\n  w = Nx.add(Nx.abs(v), 1.0)\n  Nx.LinAlg.norm(Nx.outer(w, w))\nend)"}
   ]
   @fixture_modules_gradients """
   defmodule ArgusNxTensorAnalyses.TensorShapesTest.GradientsFixtures do

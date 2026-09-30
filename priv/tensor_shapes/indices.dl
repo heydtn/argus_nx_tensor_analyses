@@ -574,8 +574,7 @@ operand_requirement(site, position, "real") :-
   nx_argument(operation, arity, position, "real").
 operand_requirement(site, 0, "real") :-
   makes_complex(),
-  operation_site(site, "Nx.LinAlg.norm", _),
-  ( option_atom(site, "ord", ":nuclear") ; option_integer(site, "ord", -2) ).
+  norm_of_singular_values(site).
 operand_requirement(site, 0, "real_spread") :-
   makes_complex(),
   operation_site(site, operation, _),
