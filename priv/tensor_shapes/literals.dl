@@ -34,8 +34,9 @@
 // in, -1 for an option.
 tensor_type_error(site, function, operation, kind, subject, position, 1, "", "") :-
   literal_misread(site, kind, subject, position),
-  call_named(site, operation),
-  site_function(site, function).
+  finding_call(site, function, operation),
+  remote_call(site, _, _, _, _).
+named_call(site) :- literal_misread(site, _, _, _).
 
 // What goes wrong, by kind:
 //
@@ -61,12 +62,6 @@ literal_misread(site, kind, cat(spelled, " as ", name), position) :-
   term_spelling(text, first, spelled).
 literal_misread(site, kind, spelled, position) :- atom_type_handed(site, position, spelled, kind).
 literal_misread(site, "invalid_type", spelled, position) :- invalid_type(site, position, spelled).
-
-// A call as a finding names it: `Nx.add/2`, `Nx.Type.float?/1`.
-.decl call_named(site: symbol, operation: symbol)
-call_named(site, cat(module, ".", name, "/", to_string(arity))) :-
-  literal_misread(site, _, _, _),
-  remote_call(site, _, module, name, arity).
 
 // ══ Literals a type cannot hold ═════════════════════════════════════
 

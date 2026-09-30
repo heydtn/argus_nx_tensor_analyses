@@ -84,29 +84,20 @@ nonfinite(context, site, "float_sum_overflow", cat(type, " ", counted), "") :-
 nonfinite(context, site, "unsigned_logsumexp", type, origin) :-
   unsigned_logsumexp(context, site, type, origin).
 
-// An origin these findings name that is one of Nx's constants.
-origin_shown(origin, cat("Nx.Constants.", name, "/", to_string(arity))) :-
-  nonfinite(_, _, _, _, origin),
-  remote_call(origin, _, "Nx.Constants", name, arity).
-
-tensor_type_error(site, function, cat(operation, "/", to_string(arity)), kind, cat(from, " ", to), position, 0, origin, shown) :-
+tensor_type_error(site, function, operation, kind, cat(from, " ", to), position, 0, origin, origin_operation) :-
   type_meeting(site, kind, position, from, to, origin),
-  operation_site(site, operation, arity),
-  site_function(site, function),
-  dtype_origin_shown(origin, shown).
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  operation_site(site, _, _),
+  nx_origin(origin).
+named_call(site) :- type_meeting(site, _, _, _, _, _).
+named_call(origin) :- type_meeting(_, _, _, _, _, origin).
 
 // The type findings: an upcast, a narrowing merge.
 .decl type_meeting(site: symbol, kind: symbol, position: number, from: symbol, to: symbol, origin: symbol)
 type_meeting(site, "upcast", position, from, to, origin) :- upcast(_, site, position, from, to, origin).
 type_meeting(site, "narrowing_merge", position, from, to, origin) :-
   narrowing_merge(_, site, position, from, to, origin).
-
-// A type finding's origin as a reader writes it, "" for none.
-.decl dtype_origin_shown(origin: symbol, shown: symbol)
-dtype_origin_shown("", "") :- type_meeting(_, _, _, _, _, "").
-dtype_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
-  type_meeting(_, _, _, _, _, origin),
-  called_name(origin, operation, arity).
 
 // ── Wraparound ─────────────────────────────────────────────────────
 

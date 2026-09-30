@@ -10216,16 +10216,20 @@ context_call(origin, call) :- entered_from(origin, context, _), invocation(_, ca
 //     the analysis is told the backend does not support.
 .decl tensor_type_error(id: symbol, func: symbol, operation: symbol, kind: symbol, subject: symbol, position: number, certain: number, origin: symbol, origin_operation: symbol)
 .output tensor_type_error
-tensor_type_error(site, function, cat(operation, "/", to_string(arity)), "non_integer_operand", class, position, certain, origin, shown) :-
+tensor_type_error(site, function, operation, "non_integer_operand", class, position, certain, origin, origin_operation) :-
   non_integer_operand(_, site, position, class, origin),
   type_certainty(site, position, certain),
-  operation_site(site, operation, arity),
-  site_function(site, function),
-  type_origin_shown(origin, shown).
-tensor_type_error(site, function, cat(operation, "/", to_string(arity)), "unsupported_type", name, -1, 1, "", "") :-
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  operation_site(site, _, _),
+  nx_origin(origin).
+tensor_type_error(site, function, operation, "unsupported_type", name, -1, 1, "", "") :-
   makes_unsupported_type(_, site, name),
-  called_name(site, operation, arity),
-  site_function(site, function).
+  finding_call(site, function, operation),
+  nx_origin(site).
+named_call(site) :- non_integer_operand(_, site, _, _, _).
+named_call(origin) :- non_integer_operand(_, _, _, _, origin).
+named_call(site) :- makes_unsupported_type(_, site, _).
 
 .decl type_certainty(site: symbol, position: number, certain: number)
 type_certainty(site, position, 1) :- never_integer(site, position).
@@ -10237,12 +10241,6 @@ type_certainty(site, position, 0) :-
 .decl called_name(site: symbol, operation: symbol, arity: number)
 called_name(site, operation, arity) :- operation_site(site, operation, arity).
 called_name(site, cat("Nx.Constants.", name), arity) :- remote_call(site, _, "Nx.Constants", name, arity).
-
-.decl type_origin_shown(origin: symbol, shown: symbol)
-type_origin_shown("", "") :- non_integer_operand(_, _, _, _, "").
-type_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
-  non_integer_operand(_, _, _, _, origin),
-  called_name(origin, operation, arity).
 
 // ── What a finding shows ───────────────────────────────────────────
 //
@@ -10352,24 +10350,18 @@ operand_origin(context, site, position, source, "returned") :-
 finding_frame(context, site, cat("1", to_string(position)), origin, function, how, subject, position, shown) :-
   operand_origin(context, site, position, origin, how),
   site_function(origin, function),
-  operation_named(site, subject),
+  call_spelled(site, subject),
   operand_shown(context, site, position, shown).
 finding_frame(context, site, cat("1", to_string(position)), origin, function, how, subject, position, "") :-
   operand_origin(context, site, position, origin, how),
   site_function(origin, function),
-  operation_named(site, subject),
+  call_spelled(site, subject),
   !operand_shown(context, site, position, _).
 finding_frame(context, site, "2", call, caller, "call", callee, -1, "") :-
   finding_at(context, site),
   context_call(context, call),
   site_function(call, caller),
   invocation(_, call, callee, _).
-
-// An Nx call's function as a reader writes it: `Nx.dot/2`.
-.decl operation_named(site: symbol, named: symbol)
-operation_named(site, cat(operation, "/", to_string(arity))) :-
-  finding_at(_, site),
-  operation_site(site, operation, arity).
 
 // An Nx call whose operands Nx rejects. `kind` names the rule and
 // `detail` says what Nx raises. `certainty` is "always" when some chain of
@@ -10383,9 +10375,10 @@ tensor_shape_mismatch(site, function, operation, kind, detail, certainty, operan
   violation(context, site, kind, detail),
   certainty(context, site, certainty),
   operands_shown(context, site, operands),
-  operation_named(site, operation),
-  site_function(site, function).
+  finding_call(site, function, operation),
+  operation_site(site, _, _).
 .output tensor_shape_mismatch
+named_call(site) :- finding_at(_, site).
 
 // A frame of a mismatch: where an operand's shape comes from, or a call
 // that brings its shapes into the function it is in.
@@ -10407,8 +10400,8 @@ tensor_axis_misalignment(site, function, operation, kind, detail, certainty, ope
   misalignment(context, site, kind, detail),
   certainty(context, site, certainty),
   operands_shown(context, site, operands),
-  operation_named(site, operation),
-  site_function(site, function).
+  finding_call(site, function, operation),
+  operation_site(site, _, _).
 .output tensor_axis_misalignment
 
 .decl tensor_axis_misalignment_via(id: symbol, kind: symbol, order: symbol, at: symbol, func: symbol, how: symbol, subject: symbol, position: number, shown: symbol)
@@ -10486,29 +10479,24 @@ unchecked(context, site, "unchecked_domain", cause, origin) :-
 // `origin` is the Nx call whose math lets it ("" for a written value),
 // with its function as `origin_operation`.
 .decl tensor_nonfinite_result(id: symbol, func: symbol, operation: symbol, kind: symbol, cause: symbol, origin: symbol, origin_operation: symbol)
-tensor_nonfinite_result(site, function, cat(operation, "/", to_string(arity)), kind, cause, origin, shown) :-
+tensor_nonfinite_result(site, function, operation, kind, cause, origin, origin_operation) :-
   nonfinite(_, site, kind, cause, origin),
-  operation_site(site, operation, arity),
-  site_function(site, function),
-  origin_shown(origin, shown).
-tensor_nonfinite_result(site, function, cat(operation, "/", to_string(arity)), kind, cause, origin, shown) :-
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  operation_site(site, _, _),
+  nx_origin(origin).
+tensor_nonfinite_result(site, function, operation, kind, cause, origin, origin_operation) :-
   unchecked(_, site, kind, cause, origin),
-  operation_site(site, operation, arity),
-  site_function(site, function),
-  origin_shown(origin, shown).
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  operation_site(site, _, _),
+  nx_origin(origin),
+  !remote_call(origin, _, "Nx.Constants", _, _).
 .output tensor_nonfinite_result
-
-// An origin's Nx function as a reader writes it: `Nx.multiply/2`, or ""
-// for a written value.
-.decl origin_shown(origin: symbol, shown: symbol)
-origin_shown("", "") :- nonfinite(_, _, _, _, "").
-origin_shown("", "") :- unchecked(_, _, _, _, "").
-origin_shown(origin, cat(operation, "/", to_string(arity))) :-
-  nonfinite(_, _, _, _, origin),
-  operation_site(origin, operation, arity).
-origin_shown(origin, cat(operation, "/", to_string(arity))) :-
-  unchecked(_, _, _, _, origin),
-  operation_site(origin, operation, arity).
+named_call(site) :- nonfinite(_, site, _, _, _).
+named_call(origin) :- nonfinite(_, _, _, _, origin).
+named_call(site) :- unchecked(_, site, _, _, _).
+named_call(origin) :- unchecked(_, _, _, _, origin).
 
 // A call Nx rejects, or that computes something other than what the code
 // means, for a reason other than its operands' shapes, its math or its
@@ -10518,35 +10506,56 @@ origin_shown(origin, cat(operation, "/", to_string(arity))) :-
 
 .decl tensor_call_error(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, origin: symbol, origin_operation: symbol)
 .output tensor_call_error
-tensor_call_error(site, function, shown, kind, detail, origin, origin_shown) :-
+tensor_call_error(site, function, operation, kind, detail, origin, origin_operation) :-
   call_error(_, site, kind, detail, origin),
-  instruction(site, function, _, _),
-  call_shown(site, shown),
-  call_origin_shown(origin, origin_shown).
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  remote_origin(origin).
+named_call(site) :- call_error(_, site, _, _, _).
+named_call(origin) :- call_error(_, _, _, _, origin).
 
-// A call as a finding names it: the module, function and arity it calls,
-// or "" for an instruction that calls none.
-.decl call_shown(site: symbol, shown: symbol)
-call_shown(site, cat(module, ".", name, "/", to_string(arity))) :-
-  call_error(_, site, _, _, _),
+// ── Naming calls ───────────────────────────────────────────────────
+
+// The calls the findings name: their sites and origins, which the
+// relations above and the files included below add, and "" for none.
+.decl named_call(site: symbol)
+
+// A call as a finding names it: the module, function and arity a remote
+// call or a built-in function calls (`Nx.dot/2`), the function a local
+// call runs, and "" for any other instruction, a fun's call, and none.
+.decl call_spelled(site: symbol, shown: symbol)
+call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
+  named_call(site),
   remote_call(site, _, module, name, arity).
-call_shown(site, cat(module, ".", name, "/", to_string(arity))) :-
-  call_error(_, site, _, _, _),
+call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
+  named_call(site),
   bif_call(site, _, module, name, arity, _).
-call_shown(site, target) :-
-  call_error(_, site, _, _, _),
+call_spelled(site, target) :-
+  named_call(site),
   local_call(site, _, target, _).
-call_shown(site, "") :-
-  call_error(_, site, _, _, _),
+call_spelled(site, "") :-
+  named_call(site),
   !remote_call(site, _, _, _, _),
   !bif_call(site, _, _, _, _, _),
   !local_call(site, _, _, _).
 
-.decl call_origin_shown(origin: symbol, shown: symbol)
-call_origin_shown("", "") :- call_error(_, _, _, _, "").
-call_origin_shown(origin, cat(module, ".", name, "/", to_string(arity))) :-
-  call_error(_, _, _, _, origin),
-  remote_call(origin, _, module, name, arity).
+// A finding's call, the function it is in, and how the finding names it.
+.decl finding_call(site: symbol, function: symbol, shown: symbol)
+finding_call(site, function, shown) :-
+  call_spelled(site, shown),
+  instruction(site, function, _, _).
+
+// An origin the math and type findings name: none, or a call of Nx's or
+// of its constants'.
+.decl nx_origin(origin: symbol) inline
+nx_origin(origin) :- origin = "".
+nx_origin(origin) :- operation_site(origin, _, _).
+nx_origin(origin) :- remote_call(origin, _, "Nx.Constants", _, _).
+
+// An origin the call errors name: none, or a remote call.
+.decl remote_origin(origin: symbol) inline
+remote_origin(origin) :- origin = "".
+remote_origin(origin) :- remote_call(origin, _, _, _, _).
 
 // ══ Further rules ═══════════════════════════════════════════════════
 //

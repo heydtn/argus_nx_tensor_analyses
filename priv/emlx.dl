@@ -670,39 +670,24 @@ divergence_certainty(site, kind, detail, certain) :-
 
 .decl tensor_emlx_divergence(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, certain: number, origin: symbol, origin_operation: symbol)
 .output tensor_emlx_divergence
-tensor_emlx_divergence(site, function, shown, kind, detail, certain, origin, origin_shown) :-
+tensor_emlx_divergence(site, function, operation, kind, detail, certain, origin, origin_operation) :-
   emlx_divergence(_, site, kind, detail, certain, origin),
   divergence_certainty(site, kind, detail, certain),
-  site_function(site, function),
-  emlx_call_shown(site, shown),
-  emlx_call_shown(origin, origin_shown).
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation).
+named_call(site) :- emlx_divergence(_, site, _, _, _, _).
+named_call(origin) :- emlx_divergence(_, _, _, _, _, origin).
 
 // A tensor on another backend than EMLX's (`backend`, put there by
 // `origin`) and a tensor it cannot meet (`other`, put there by
 // `other_origin`), both handed to one Nx call.
 .decl tensor_emlx_mixed_backends(id: symbol, func: symbol, operation: symbol, backend: symbol, origin: symbol, origin_operation: symbol, other: symbol, other_origin: symbol, other_origin_operation: symbol)
 .output tensor_emlx_mixed_backends
-tensor_emlx_mixed_backends(site, function, shown, backend, origin, origin_shown, other, other_origin, other_shown) :-
+tensor_emlx_mixed_backends(site, function, operation, backend, origin, origin_operation, other, other_origin, other_origin_operation) :-
   mixed_backends(_, site, backend, origin, other, other_origin),
-  site_function(site, function),
-  emlx_call_shown(site, shown),
-  emlx_call_shown(origin, origin_shown),
-  emlx_call_shown(other_origin, other_shown).
-
-// A call as a finding names it, `Nx.remainder/2`, for the calls the
-// findings name: "" for none, and for the call of a compiled function.
-.decl emlx_call_shown(site: symbol, shown: symbol)
-emlx_call_shown("", "").
-emlx_call_shown(site, cat(module, ".", name, "/", to_string(arity))) :-
-  emlx_named(site),
-  remote_call(site, _, module, name, arity).
-emlx_call_shown(site, "") :-
-  emlx_named(site),
-  !remote_call(site, _, _, _, _).
-
-.decl emlx_named(site: symbol)
-emlx_named(site) :- emlx_divergence(_, site, _, _, _, _).
-emlx_named(origin) :- emlx_divergence(_, _, _, _, _, origin), origin != "".
-emlx_named(site) :- mixed_backends(_, site, _, _, _, _).
-emlx_named(origin) :- mixed_backends(_, _, _, origin, _, _).
-emlx_named(origin) :- mixed_backends(_, _, _, _, _, origin).
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  call_spelled(other_origin, other_origin_operation).
+named_call(site) :- mixed_backends(_, site, _, _, _, _).
+named_call(origin) :- mixed_backends(_, _, _, origin, _, _).
+named_call(origin) :- mixed_backends(_, _, _, _, _, origin).

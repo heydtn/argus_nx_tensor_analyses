@@ -383,19 +383,18 @@ sign_demand(context, function, kind, source) :- start_value(context, _, function
 
 // `certain` is 1 where a start is never an integer in some context, which
 // Nx rejects on every path there.
-tensor_type_error(site, function, cat(operation, "/", to_string(arity)), "non_integer_start", class, 1, min(certain, 1), origin, shown) :-
+tensor_type_error(site, function, operation, "non_integer_start", class, 1, min(certain, 1), origin, origin_operation) :-
   non_integer_start(_, site, _, _, _, class, origin),
   certain = count : {
     non_integer_start(context, site, start_function, kind, source, _, _),
     !value_class(context, start_function, kind, source, "integer", _)
   },
-  operation_site(site, operation, arity),
-  site_function(site, function),
-  type_origin_shown(origin, shown).
-type_origin_shown("", "") :- non_integer_start(_, _, _, _, _, _, "").
-type_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
-  non_integer_start(_, _, _, _, _, _, origin),
-  called_name(origin, operation, arity).
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  operation_site(site, _, _),
+  nx_origin(origin).
+named_call(site) :- non_integer_start(_, site, _, _, _, _, _).
+named_call(origin) :- non_integer_start(_, _, _, _, _, _, origin).
 
 // ══ ddof ════════════════════════════════════════════════════════════
 //
@@ -680,16 +679,16 @@ value_class(context, function, "result", site, "float", site) :-
 
 // `certain` is 1 where an operand is never anything but complex in some
 // context, which Nx rejects on every path there.
-tensor_type_error(site, function, cat(operation, "/", to_string(arity)), kind, "complex", position, min(certain, 1), origin, shown) :-
+tensor_type_error(site, function, operation, kind, "complex", position, min(certain, 1), origin, origin_operation) :-
   complex_operand(_, site, position, kind, origin),
   certain = count : {
     complex_operand(context, site, position, _, _),
     !operand_class(context, site, position, "integer", _),
     !operand_class(context, site, position, "float", _)
   },
-  operation_site(site, operation, arity),
-  site_function(site, function),
-  type_origin_shown(origin, shown).
-type_origin_shown(origin, cat(operation, "/", to_string(arity))) :-
-  complex_operand(_, _, _, _, origin),
-  called_name(origin, operation, arity).
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation),
+  operation_site(site, _, _),
+  nx_origin(origin).
+named_call(site) :- complex_operand(_, site, _, _, _).
+named_call(origin) :- complex_operand(_, _, _, _, origin).
