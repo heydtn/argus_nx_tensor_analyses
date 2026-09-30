@@ -769,6 +769,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "if Nx.sum(t) > 0, do: t, else: Nx.negate(t)"},
     {{:finds, {"tensor_call_error", "tensor_comparison", "0"}, :accepted}, "Nx.sum(t) == 0"},
     {:quiet, "Nx.to_number(Nx.sum(t)) > 0"},
+    # an answer about a tensor's struct, which is no tensor, and a template,
+    # which is one
+    {{:finds_none, :accepted}, "Nx.bit_size(t) * 8"},
+    {{:finds_none, :accepted}, "Nx.donatable?(t) and Nx.bit_size(t) > 8"},
+    {{:finds_none, :accepted},
+     "Nx.Defn.jit(fn x -> Nx.add(x, Nx.to_number(Nx.bit_size(x))) end).(t)"},
+    {{:finds, {"tensor_call_error", "tensor_arithmetic", "*"}, :raises}, "Nx.to_template(t) * 8"},
     # a jitted function run while Nx traces another, and compiled templates
     {{:finds, {"tensor_call_error", "jit_in_trace", "jit"}, :raises},
      "inner = Nx.Defn.jit(fn y -> Nx.add(y, 1) end)\nNx.Defn.jit(fn x -> inner.(x) end).(t)"},

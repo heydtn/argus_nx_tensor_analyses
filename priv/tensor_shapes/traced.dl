@@ -244,18 +244,16 @@ returns_tensor(site) :-
   !nx_trait(operation, "gives_no_tensor").
 
 // The calls whose result is no tensor: those that answer about a tensor's
-// shape, give its data on the host or a term of another kind, and return
-// a tuple, but `Nx.Random.multivariate_normal`; and `Nx.type`,
-// `Nx.byte_size`, `Nx.compatible?`, `Nx.default_backend`,
-// `Nx.backend_deallocate`, `Nx.top_k` and `Nx.LinAlg.schur`.
+// shape or struct, give its data on the host or a term of another kind,
+// and return a tuple, but `Nx.Random.multivariate_normal`; and
+// `Nx.default_backend`, `Nx.backend_deallocate`, `Nx.top_k` and
+// `Nx.LinAlg.schur`.
 nx_trait(operation, "gives_no_tensor") :- nx_class(operation, "gives", gives), in_set("gives_no_tensor", gives).
 nx_trait(operation, "gives_no_tensor") :-
   nx_class(operation, "tuple", _),
   operation != "Nx.Random.multivariate_normal".
-nx_members("set", "gives_no_tensor", " shape host term ").
-nx_members("trait", "gives_no_tensor", cat(
-  " Nx.type Nx.byte_size Nx.compatible? Nx.default_backend Nx.backend_deallocate Nx.top_k",
-  " Nx.LinAlg.schur ")).
+nx_members("set", "gives_no_tensor", " shape struct host term ").
+nx_members("trait", "gives_no_tensor", " Nx.default_backend Nx.backend_deallocate Nx.top_k Nx.LinAlg.schur ").
 
 // ══ Data read in traced code ════════════════════════════════════════
 
