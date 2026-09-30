@@ -25,10 +25,14 @@ defmodule ArgusNxTensorAnalyses.Graph.Inputs do
   #     its file, or nil without one.
   #   * `options` (`:all`) — the relations the analysis's options fill
   #     (`unsupported_type`, `float_type`), each by its file's text.
+  #   * `analysis` (`:all`) — `%{module: analysis, code: digest}`: the
+  #     `Argus.Analysis` whose findings are built from the rows, and the
+  #     digest of its code, which Argus calls by name.
   #
   # Durability: `program` and `beam` move with the code analyzed and are
-  # `:medium`; the rest move with the toolchain and are `:high`, so an
-  # edit to the code analyzed never walks what only they reach.
+  # `:medium`; the rest move with the toolchain or the analysis's
+  # configuration and are `:high`, so an edit to the code analyzed never
+  # walks what only they reach.
 
   use Roux.Query
 
@@ -39,4 +43,5 @@ defmodule ArgusNxTensorAnalyses.Graph.Inputs do
   definput(:stage0_rules, durability: :high)
   definput(:solver, durability: :high)
   definput(:options, durability: :high)
+  definput(:analysis, durability: :high)
 end

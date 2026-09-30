@@ -1,8 +1,8 @@
 defmodule ArgusNxTensorAnalyses.Graph do
   @moduledoc false
-  # The analyses as a roux query graph: extraction, stage 0 and the solve,
-  # each a memoized query keyed by what it read, so a run computes again
-  # only what an edit reached.
+  # The analyses as a roux query graph: extraction, stage 0, the solve,
+  # the findings and their placement, each a memoized query keyed by what
+  # it read, so a run computes again only what an edit reached.
   #
   #     program(:beams) ─ beam(path) ─ extraction(:all)   [Graph.Inputs]
   #          │
@@ -15,15 +15,19 @@ defmodule ArgusNxTensorAnalyses.Graph do
   #     stage0(:beams) ─ stage0_output({:beams, r})   ── cutoff
   #          │                      stage0_rules(:all), solver(:all)
   #     solve(:beams)               rules(:all), options(:all): one
-  #                                 Souffle solve, kept by its key
+  #          │                      Souffle solve, kept by its key
+  #     findings(:beams)            line-free, analysis(:all)
+  #          │
+  #     located(:beams)             placed: line_info, each beam
   #
   # What a query is keyed by: the inputs it reads, the queries it demands,
   # and the code it runs. Each query module's code version is the digest
   # of the code it reaches (`use Roux.Query, code: true`); the code the
-  # graph reaches only by name, the analysis's extractors, is an input
-  # (`extraction`), versioned the same way (`Roux.Code`). A solve reads
-  # the relations its program loads, and not `line_info`, which moves with
-  # every comment in the code analyzed and which only placement reads.
+  # graph reaches only by name, the analysis's extractors and the analysis
+  # its findings are built by, is an input (`extraction`, `analysis`),
+  # versioned the same way (`Roux.Code`). A solve reads the relations its
+  # program loads, and not `line_info`, which moves with every comment in
+  # the code analyzed and which only placement reads.
 
   alias ArgusNxTensorAnalyses.Graph
   alias Roux.Blob
@@ -31,7 +35,14 @@ defmodule ArgusNxTensorAnalyses.Graph do
   alias Roux.Runtime
   alias Roux.Session
 
-  @modules [Graph.Inputs, Graph.Extraction, Graph.Relations, Graph.Solve]
+  @modules [
+    Graph.Inputs,
+    Graph.Extraction,
+    Graph.Relations,
+    Graph.Solve,
+    Graph.Findings,
+    Graph.Locate
+  ]
 
   # The program's id: a session holds one set of beams.
   @program :beams
@@ -119,13 +130,15 @@ defmodule ArgusNxTensorAnalyses.Graph do
     meta
   end
 
-  # The code extraction runs, by digest: `Argus.Pipeline` and the
-  # extractors, which the pipeline calls by name, and Argus's schema, whose
-  # relations it reads by name. A module compiled in memory has no object
-  # code to read, and is named for this VM alone.
-  defp extraction_code(extractors, store) do
-    roots = [Argus.Pipeline | extractors] ++ schema_modules()
+  # The code extraction runs: `Argus.Pipeline` and the extractors, which
+  # the pipeline calls by name, and Argus's schema, whose relations it
+  # reads by name.
+  defp extraction_code(extractors, store),
+    do: code([Argus.Pipeline | extractors] ++ schema_modules(), store)
 
+  # The digest of the code `roots` reach. A module compiled in memory has
+  # no object code to read, and is named for this VM alone.
+  defp code(roots, store) do
     case Roux.Code.digest(roots, store: store) do
       {:ok, digest} -> digest
       {:error, reason} -> {:unversioned, reason, vm_token()}
@@ -202,27 +215,16 @@ defmodule ArgusNxTensorAnalyses.Graph do
   # The rows of the program's output relations, by name.
   @spec rows(Roux.Database.t()) :: {:ok, map()} | {:error, term()}
   def rows(db) do
-    with {:ok, digest} <- Runtime.query(db, :solve, @program) do
-      case Blob.get_term(db.blob, digest) do
-        {:ok, rows} -> {:ok, rows}
-        :miss -> {:error, {:rows_missing, digest}}
-      end
-    end
+    with {:ok, digest} <- Runtime.query(db, :solve, @program),
+         do: Graph.Findings.rows(db.blob, digest)
   end
 
   @doc false
-  # Each instruction's line and each function's first (`Argus.Lines`), from
-  # the program's `line_info`.
-  @spec lines(Roux.Database.t()) :: {:ok, Argus.Lines.t()} | {:error, term()}
-  def lines(db) do
-    with {:ok, digest} <- Runtime.query(db, :relation, {@program, "line_info"}),
-         {:ok, %{"line_info" => file}} <-
-           Graph.Relations.files(db, @program, [{"line_info", digest}]),
-         {:ok, content} <- Blob.get(db.blob, file) do
-      {:ok, Argus.Lines.from_facts(%{line_info: Argus.Tsv.decode(content)})}
-    else
-      :miss -> {:error, {:relation_missing, "line_info"}}
-      {:error, _reason} = error -> error
-    end
+  # The findings of `analysis`, each placed at its call in its module's
+  # source.
+  @spec located(Roux.Database.t(), module()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
+  def located(db, analysis) do
+    :ok = Input.set(db, :analysis, :all, %{module: analysis, code: code([analysis], db.blob)})
+    Runtime.query(db, :located, @program)
   end
 end

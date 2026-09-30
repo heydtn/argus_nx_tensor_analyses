@@ -1,12 +1,12 @@
 defmodule ArgusNxTensorAnalyses.Solve do
   @moduledoc false
-  # How both analyses extract, solve and place what they find: through a
-  # query graph (`ArgusNxTensorAnalyses.Graph`), an analysis's extractors
+  # How both analyses extract, solve and place what they find, through a
+  # query graph (`ArgusNxTensorAnalyses.Graph`): an analysis's extractors
   # give each module's facts, its program is solved over the relations it
-  # reads after Argus's rules, each kept by what it read, and each finding
-  # is placed at its call's line.
+  # reads after Argus's rules, its findings are built from the rows and
+  # each is placed at its call's line, and each step is kept by what it
+  # read.
 
-  alias Argus.Findings
   alias ArgusNxTensorAnalyses.Graph
 
   # The options that configure the rules, each by the input relation it
@@ -30,20 +30,8 @@ defmodule ArgusNxTensorAnalyses.Solve do
   # findings placed at its call in the module's source.
   @spec run(module(), [module() | Path.t()], keyword()) ::
           {:ok, [Argus.Located.t()]} | {:error, term()}
-  def run(analysis, modules, options) do
-    solved =
-      graph(analysis, modules, analysis.rules_file(), options, fn db ->
-        with {:ok, rows} <- Graph.rows(db),
-             {:ok, lines} <- Graph.lines(db),
-             do: {:ok, rows, lines}
-      end)
-
-    with {:ok, rows, lines} <- solved do
-      beams = beams(modules)
-      findings = Findings.build(analysis, rows)
-      {:ok, Enum.map(findings, &place(&1, beams, lines))}
-    end
-  end
+  def run(analysis, modules, options),
+    do: graph(analysis, modules, analysis.rules_file(), options, &Graph.located(&1, analysis))
 
   # `demand` over the graph, set for the analysis over the modules and for
   # `program` after the Argus files it builds on.
@@ -76,8 +64,12 @@ defmodule ArgusNxTensorAnalyses.Solve do
     Enum.map(~w(base.dl clientlib/reach.dl), &Application.app_dir(:argus_beam, "priv/dl/#{&1}"))
   end
 
+  @doc false
   # Each module's beam and the source file it was compiled from.
-  defp beams(modules) do
+  @spec beams([module() | Path.t()]) :: %{
+          module() => %{path: String.t(), source: String.t() | nil}
+        }
+  def beams(modules) do
     for module <- modules,
         path <- [beam_path(module)],
         {:ok, {name, [compile_info: info]}} <- [:beam_lib.chunks(path, [:compile_info])],
@@ -93,7 +85,11 @@ defmodule ArgusNxTensorAnalyses.Solve do
   defp source_path(nil), do: nil
   defp source_path(source), do: List.to_string(source)
 
-  defp place(finding, beams, lines) do
+  @doc false
+  # A finding placed at its call in its module's source, and each of its
+  # related frames at theirs (`Argus.Located`).
+  @spec place(Argus.Findings.finding(), map(), Argus.Lines.t()) :: Argus.Located.t()
+  def place(finding, beams, lines) do
     %Argus.Located{
       finding: finding,
       file: source_file(beams, finding.module),
