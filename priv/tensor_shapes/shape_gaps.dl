@@ -158,23 +158,26 @@ operand_misfit(site, [first, second, nil], "conv_options", cat("size of kernel o
   filters % max(groups, 1) != 0,
   sizes_spelled(second, kernel).
 
-// Window dimensions given as a list, or with a size below 1.
-// (`Nx.window_reduce/5` fails otherwise on those, in a function clause
-// or in its backend.)
-written_misfit(site, "window_options", cat("invalid window_dimensions. window_dimensions is a n-element tuple with the size of each dimension. Got: ", text)) :-
+// Window dimensions given as a list, or with a size below 1: the window
+// operations validate their window, and `Nx.window_reduce/5` matches it as
+// a tuple in a function clause and hands its sizes to the backend
+// unchecked.
+written_misfit(site, "window_options", detail) :-
   nx_argument(operation, arity, position, "window_dimensions"),
-  operation != "Nx.window_reduce",
   operation_site(site, operation, arity),
   argument_literal(site, position, text),
-  term_list(text, 0).
-written_misfit(site, "window_options", cat("invalid dimension in axis ", to_string(axis), " found in window_dimensions. Each dimension must be a positive integer, got ", to_string(size), " in shape ", text)) :-
+  term_list(text, 0),
+  ( operation != "Nx.window_reduce", detail = cat("invalid window_dimensions. window_dimensions is a n-element tuple with the size of each dimension. Got: ", text)
+  ; operation = "Nx.window_reduce", detail = cat("no function clause matching in Nx.window_reduce/5 (FunctionClauseError), from window dimensions ", text) ).
+written_misfit(site, "window_options", detail) :-
   nx_argument(operation, arity, position, "window_dimensions"),
-  operation != "Nx.window_reduce",
   operation_site(site, operation, arity),
   argument_literal(site, position, text),
   term_tuple(text, 0),
   term_element_integer(text, 0, axis, size),
-  size < 1.
+  size < 1,
+  ( operation != "Nx.window_reduce", detail = cat("invalid dimension in axis ", to_string(axis), " found in window_dimensions. Each dimension must be a positive integer, got ", to_string(size), " in shape ", text)
+  ; operation = "Nx.window_reduce", detail = cat("no match of right hand side value (MatchError), from a window of size ", to_string(size), " at axis ", to_string(axis)) ).
 
 // ── Permuted convolutions ──────────────────────────────────────────
 //
