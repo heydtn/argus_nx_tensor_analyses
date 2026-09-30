@@ -62,13 +62,9 @@ defmodule ArgusNxTensorAnalyses.Graph.Relations do
   @spec empty() :: String.t()
   def empty, do: @empty
 
-  defp merkle(digests) do
-    digests
-    |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
-    |> :crypto.hash_final()
-    |> Base.encode16(case: :lower)
-    |> then(&"modules:#{length(digests)}:#{&1}")
-  end
+  # The chunks' digests have one length, so their concatenation names
+  # them in order.
+  defp merkle(digests), do: "modules:#{length(digests)}:" <> Blob.digest(Enum.join(digests))
 
   @doc false
   # The blob store entries holding the files of `relations` (each with the

@@ -114,7 +114,7 @@ defmodule ArgusNxTensorAnalyses.Graph.Solve do
      Enum.map(inputs, fn {relation, source} -> {relation, identity(source)} end)}
   end
 
-  defp identity({:text, text}), do: {:text, :crypto.hash(:sha256, text)}
+  defp identity({:text, text}), do: {:text, Blob.digest(text)}
   defp identity(source), do: source
 
   # A kept solve whose every blob is still in the store; one that lost an

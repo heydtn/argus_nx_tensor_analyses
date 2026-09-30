@@ -20,9 +20,13 @@ defmodule ArgusNxTensorAnalyses.Graph.Program do
   # on more than it loads, never on less. Where the text does not say
   # plainly — an input declared with parameters or several to a line, one
   # inside a component, a macro that could spell a name — every relation
-  # counts.
+  # counts. Souffle's own answer (`Argus.Souffle.input_relations/2`) is
+  # exact, but it compiles the whole program to say, which is most of what
+  # solving it costs, and a run would pay it before it could tell whether
+  # it needs to solve at all.
 
   alias Argus.Souffle.Program
+  alias Roux.Blob
 
   @type t :: %{
           roots: [Path.t()],
@@ -42,16 +46,16 @@ defmodule ArgusNxTensorAnalyses.Graph.Program do
             do: {spelled, path |> File.read!() |> Program.uncommented()}
       end
 
+    files = for tree <- trees, do: for({spelled, text} <- tree, do: {spelled, Blob.digest(text)})
+
     %{
       roots: roots,
-      files: for(tree <- trees, do: for({spelled, text} <- tree, do: {spelled, sha256(text)})),
+      files: files,
       reads: trees |> Enum.concat() |> Enum.map(&elem(&1, 1)) |> reads()
     }
   rescue
     error in File.Error -> %{roots: roots, files: {:unreadable, error.path}, reads: :all}
   end
-
-  defp sha256(text), do: :crypto.hash(:sha256, text)
 
   # The relations the texts declare an input and name outside the
   # declaration, sorted, or `:all`.

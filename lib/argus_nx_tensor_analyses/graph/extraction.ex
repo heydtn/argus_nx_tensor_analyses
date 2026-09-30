@@ -38,7 +38,7 @@ defmodule ArgusNxTensorAnalyses.Graph.Extraction do
       {:ok,
        %{
          segment: segment,
-         relations: Map.new(chunks, fn {relation, bytes} -> {relation, sha256(bytes)} end),
+         relations: Map.new(chunks, fn {relation, bytes} -> {relation, Blob.digest(bytes)} end),
          lost: status == :lost
        }}
     end
@@ -64,8 +64,6 @@ defmodule ArgusNxTensorAnalyses.Graph.Extraction do
 
   defp put_segment(_store, chunks) when chunks == %{}, do: {:ok, nil}
   defp put_segment(store, chunks), do: Blob.put_term(store, chunks)
-
-  defp sha256(bytes), do: :crypto.hash(:sha256, bytes)
 
   @doc false
   # The chunks of `relations` in the module at `path` whose facts are

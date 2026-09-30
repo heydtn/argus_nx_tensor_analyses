@@ -103,7 +103,7 @@ defmodule ArgusNxTensorAnalyses.Graph do
   defp set_program(db, paths, extractors, sources) do
     %{meta: meta} =
       Roux.Sources.sync(db, :beam, Map.new(paths, &{&1, &1}), sources,
-        hash: &hash/1,
+        hash: &Blob.digest/1,
         value: fn %{hash: hash} -> %{hash: hash} end
       )
 
@@ -118,8 +118,6 @@ defmodule ArgusNxTensorAnalyses.Graph do
 
     meta
   end
-
-  defp hash(bytes), do: :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
 
   # The code extraction runs, by digest: `Argus.Pipeline` and the
   # extractors, which the pipeline calls by name, and Argus's schema, whose
@@ -192,7 +190,7 @@ defmodule ArgusNxTensorAnalyses.Graph do
             %{
               path: path,
               version: Argus.Souffle.version(path),
-              digest: :crypto.hash(:sha256, File.read!(path))
+              digest: path |> File.read!() |> Blob.digest()
             }
           end,
           store: store
