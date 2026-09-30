@@ -7,8 +7,9 @@ Elixir operators it applies and the order of its calls. A Soufflé program,
 `priv/tensor_shapes.dl`, runs over those summaries and Argus's own facts.
 It includes one file per area under `priv/tensor_shapes/`. It applies the
 rules `Nx.Shape` and `Nx.Type` apply, operation by operation, and follows
-values through the program to where they meet. The EMLX analysis,
-`priv/emlx.dl`, builds on the same program.
+values through the program to where they meet. The `emlx` checks'
+program, `priv/emlx.dl`, includes this one and outputs its findings too,
+so a run that reports `emlx` solves that program alone.
 
 - **Sizes are symbolic.** A size is known where the code writes it
   (`Nx.iota({2, 3})`). It is a variable where the code reads it from a
@@ -87,7 +88,7 @@ raises.
   other than Nx gives a value that is not known, apart from the lookups it
   models: `Map.get`, `Map.fetch!`, `Keyword.get`, `Keyword.fetch!` and
   `Access.get`.
-- Configuration is not in the compiled code. The EMLX analysis takes EMLX
+- Configuration is not in the compiled code. The `emlx` checks take EMLX
   as the default backend unless the code calls `Nx.default_backend/1`, and
   which compiler runs a `defn` is not known.
 - Branches that no literal test separates are merged, so a finding on

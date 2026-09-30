@@ -9,7 +9,7 @@ traced code, gradients, random keys, containers and servings.
 [docs/checks.md](docs/checks.md) lists every finding.
 
 ```
-error[argus.tensor_shapes]: Nx.dot/2 contracts axes that do not match
+error[argus.nx_shapes]: Nx.dot/2 contracts axes that do not match
    ╭─[lib/my_app/model.ex:13:5]
    │
 12 │   def project(input, weight) do
@@ -76,8 +76,8 @@ which is what Soufflé's Ubuntu PPA installs: take 2.5's package from its
 ```
 mix argus                       # Argus's configured analyses and the default ones here
 mix argus --all                 # every analysis, Argus's and these
-mix argus tensor_emlx           # the EMLX analysis alone
-mix argus tensor_shapes ets     # the tensor shape analysis and Argus's `ets`
+mix argus emlx                  # the EMLX analysis alone
+mix argus nx_shapes ets         # the Nx shape analysis and Argus's `ets`
 mix argus --list                # what's available
 ```
 
@@ -88,15 +88,29 @@ The task takes `mix argus`'s command line: `--format`, `--fail-above` and
 The analyses read your project's own modules, not its dependencies. Results
 are kept under `_build/<env>/argus_nx_tensor_analyses` and reused until the
 compiled code changes, so an edit to a comment or a doc solves nothing again.
+A run solves one program for all the analyses it runs: the `nx_` analyses
+share one, and a run with `emlx` solves a larger one that finds them too.
 
 ## Choose analyses
 
-The analyses marked ✓ run by default.
+Each analysis is a category of finding, reported under its name
+(`error[argus.nx_shapes]`). The analyses marked ✓ run by default.
 
 | Analysis | Finds | Default |
 |---|---|:---:|
-| `tensor_shapes` | shapes, types, literals and options Nx rejects; misaligned axes; math that can turn infinite or NaN; misuse of traced code, gradients, random keys, containers and servings | ✓ |
-| `tensor_emlx` | calls EMLX computes differently from BinaryBackend and EXLA (f64 kept as f32, remainders of negatives, hanging integer powers, halves rounded to even), and tensors of two backends meeting | |
+| `nx_shapes` | operands that do not broadcast; `dot`, `conv` and window axes that do not fit; reshapes that change the element count; axes a tensor lacks; out-of-range slices and `tensor[key]` access; tuples used as tensors | ✓ |
+| `nx_names` | sizes the code names differently (`config.heads` and `config.kv_heads`); named axes meeting unnamed ones; contracted axes of different names; named axes vectorized under another name; reshapes that scramble axes | ✓ |
+| `nx_math` | division by zero; logarithms of zero or negatives; square roots of negatives; `exp` overflow in an unshifted softmax or a written-out softplus or logistic; asin, acos, atanh and acosh past their domain; NaN comparisons; divisors and logarithms of unchecked inputs | ✓ |
+| `nx_types` | floats where only integers go; unsigned wraparound; literals a type cannot hold; lossy casts; silent upcasts and narrowing merges; types the backend lacks | ✓ |
+| `nx_options` | option keys a function does not take; options in the wrong form or with values Nx rejects | ✓ |
+| `nx_indices` | indices that can go negative; slice starts Nx clamps; `ddof` at or past the count; empty or reversed random ranges | ✓ |
+| `nx_traced` | tensor data read while Nx traces; Elixir operators and `if` on tensors; non-scalar `if`, `cond` and `while` predicates; branches of different shapes; `while` state that changes shape or type; `defn` arguments used as integers | ✓ |
+| `nx_gradients` | NaN or infinite gradients (a root or norm at zero, the standard deviation of equal values, `atan2` at the origin, `select`-masked logarithms, degenerate decompositions); calls with no gradient; `custom_grad` mistakes; grads of tuples and maps | ✓ |
+| `nx_containers` | struct fields a derived `Nx.Container` resets inside `defn`; containers holding nil, atoms or lists; grads capturing the value they differentiate; `traverse` and `reduce` visiting fields in different orders | ✓ |
+| `nx_random` | keys drawn from twice; keys a loop captures or passes back; spent keys returned; two keys of one written seed; one draw repeated across a mean or standard deviation | ✓ |
+| `nx_freed` | tensors read, handed on or returned after `backend_transfer`, `backend_deallocate` or donation | ✓ |
+| `nx_serving` | outputs without the batch axis; operations across the batch; ahead-of-time templates whose size or type do not fit; per-request shapes that crash the serving; incompatible `Nx.Batch` entries; serving API misuse | ✓ |
+| `emlx` | f64 and c128 kept as f32 and c64; remainders of negatives; integer powers of negative exponents, which hang; halves rounded to even; shifts EMLX wraps; tensors of two backends meeting, such as EMLX's and EXLA's | |
 
 Use analysis names or these sets in `analyses:`:
 
@@ -107,14 +121,14 @@ Use analysis names or these sets in `analyses:`:
 def project do
   [
     # ...
-    argus_nx_tensor_analyses: [analyses: [:default, :tensor_emlx]]
+    argus_nx_tensor_analyses: [analyses: [:default, :emlx]]
   ]
 end
 ```
 
 Analyses named on the command line run instead, and `--all` runs them all.
 
-Two more options there change what `tensor_shapes` reports:
+Two more options there change what the `nx_` analyses report:
 
 - `unsupported_types:` the tensor types your backend lacks. A call that
   makes one is reported (`[:f64]` for a backend without f64).

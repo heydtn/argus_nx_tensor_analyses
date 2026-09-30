@@ -19,7 +19,7 @@ a guarded `len - 1` stays quiet.
 
 ## Which backend a project computes on
 
-The EMLX analysis takes EMLX as the default backend unless the code calls
+The `emlx` checks take EMLX as the default backend unless the code calls
 `Nx.default_backend/1`, because `config :nx, default_backend:` is not in
 the compiled code. A project that builds some tensors on EXLA and moves
 them to EMLX through configuration gets false findings, such as f64
