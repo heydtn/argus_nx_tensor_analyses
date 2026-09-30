@@ -9,10 +9,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
     %{
       title: "reads a tensor's data while Nx traces the function",
       detail:
-        "#{traced(how)}: Nx runs it over expressions, tensors that stand for the values the " <>
-          "compiled code computes and hold no data. Reading one's data raises " <>
-          "(\"cannot invoke to_binary/2 on Nx.Defn.Expr\").",
-      label: "reads the data here",
+        "#{traced(how)}: it runs the code over expressions, tensors that stand for the values " <>
+          "the compiled code computes and hold no data. Nx raises reading one's data: cannot " <>
+          "invoke to_binary/2 on Nx.Defn.Expr.",
+      label: "reads an expression's data while #{tracer(how)} traces this code",
       help:
         "compute with Nx functions inside the traced code and read the value once the compiled function returns, or see it at run time with print_value/2",
       frame: "the expression it reads is made by"
@@ -28,10 +28,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
           "runs a jitted function while Nx traces another"
         ),
       detail:
-        "#{traced(how)}. Nx compiles one function at a time, and a jitted or compiled " <>
-          "function run during a compilation raises (\"cannot invoke JITed function when " <>
-          "there is a JIT compilation happening\").",
-      label: "runs it here",
+        "#{traced(how)}. It compiles one function at a time, and raises when a jitted or " <>
+          "compiled function runs during a compilation: cannot invoke JITed function when " <>
+          "there is a JIT compilation happening.",
+      label: "runs a jitted function while #{tracer(how)} traces this code",
       help:
         "call the function the jit wraps directly, which Nx traces into the computation around it, or give the jit `on_conflict: :reuse`",
       frame: "the jitted function is made by"
@@ -44,13 +44,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
         titled(
           operation,
           "Elixir's #{spelled(operator)} gets a tensor",
-          "applies Elixir's #{spelled(operator)} to a tensor"
+          "(Elixir's #{spelled(operator)}) gets a tensor"
         ),
       detail:
-        "Elixir's #{spelled(operator)} takes numbers, and a tensor is a struct: it raises " <>
-          "ArithmeticError. Nx overloads the operators only inside a `defn`, where " <>
-          "`Nx.Defn.Kernel` replaces them.",
-      label: "gets a tensor here",
+        "Elixir's #{spelled(operator)} takes numbers, and a tensor is a struct: Elixir " <>
+          "raises ArithmeticError (bad argument in arithmetic expression). Nx overloads the " <>
+          "operators only inside a `defn`, where `Nx.Defn.Kernel` replaces them.",
+      label: "#{spelled(operator)} gets a tensor, not a number",
       help: "use #{nx_arithmetic(operator)}, or move the computation into a `defn`",
       frame: "the tensor is made by"
     }
@@ -58,12 +58,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
 
   def call_error("tensor_boolean", operator, _operation) do
     %{
-      title: "gets a tensor where Elixir's `#{operator}` takes a boolean",
+      title: boolean_title(operator),
       detail:
-        "Elixir's `#{operator}` takes a boolean, and a tensor is a struct: it raises " <>
-          "(BadBooleanError for `and` and `or`, ArgumentError for `not`). Nx's comparisons " <>
-          "give tensors of 0s and 1s, not booleans.",
-      label: "gets a tensor here",
+        "Elixir's `#{operator}` takes a boolean, and a tensor is a struct: Elixir raises " <>
+          "#{boolean_raise(operator)}. Nx's comparisons give tensors of 0s and 1s, not booleans.",
+      label: "`#{operator}` gets a tensor, not a boolean",
       help:
         "combine tensors with Nx.logical_and/2, Nx.logical_or/2 or Nx.logical_not/1, or read a scalar's truth as Nx.to_number(x) == 1",
       frame: "the tensor is made by"
@@ -82,7 +81,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
         "Elixir compares the tensor with #{other} as terms, not by the numbers it holds: a " <>
           "tensor is a struct, which sorts after every number and equals none, so the answer " <>
           "is the same whatever the tensor holds.",
-      label: "compares it here",
+      label: "compares a tensor with #{other}, as terms",
       help:
         "compare with Nx (Nx.greater/2, Nx.equal/2, ...) and reduce with Nx.all/2 or Nx.any/2, then read the result with Nx.to_number/1 where Elixir needs a boolean",
       frame: "the tensor is made by",
@@ -102,7 +101,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
         "A tensor is a struct, which Elixir takes as true whatever it holds, so this `if`, " <>
           "`unless`, `&&`, `||` or `!` always goes the same way. Nx's comparisons and " <>
           "reductions give tensors of 0s and 1s, not booleans.",
-      label: "tests the tensor here",
+      label: "tests a tensor, which is always true",
       help: "read the value and compare it, as Nx.to_number(Nx.all(x)) == 1",
       frame: "the tensor is made by",
       severity: :warning
@@ -110,6 +109,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
   end
 
   def call_error("compiled_template", detail, operation) do
+    %{position: position, got: got, expected: expected} = misfit(detail)
+
     %{
       title:
         titled(
@@ -120,10 +121,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
       detail:
         "Nx.Defn.compile/3 compiles for the templates it is given, and the function it makes " <>
           "takes only tensors of their shapes, names and types. Nx raises: #{detail}.",
-      label: "calls it here",
+      label: "gets #{got} as its #{ordinal(position)} argument, compiled for #{expected}",
       help:
         "call it with tensors of the template's shape, type and names (Nx.as_type/2, Nx.rename/2), or compile it for the tensors it is called with",
-      frame: "the template is made by"
+      frame: "the template, #{expected}, is made by"
     }
   end
 
@@ -135,7 +136,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
           "traces mix only with tensors on Nx.BinaryBackend: on EMLX, EXLA or any other " <>
           "backend #{captured_raise(how)}. On Nx.BinaryBackend it inlines the tensor into the " <>
           "computation.",
-      label: "captures a tensor here",
+      label: "the closure it traces captures a tensor",
       help:
         "pass the tensor to the traced function as an argument, or run the whole computation in a `defn` or Nx.Defn.jit/2 so the tensor comes in as a parameter",
       frame: "the captured tensor is made by",
@@ -153,10 +154,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
         ),
       detail:
         "Its #{ordinal(position)} argument is a template, which has a shape and a type and no " <>
-          "data: Nx raises computing with it (\"cannot perform operations on a " <>
-          "Nx.TemplateBackend tensor\"). Templates are for Nx.Defn.compile/3, which compiles " <>
-          "for them.",
-      label: "gets a template here",
+          "data. Templates are for Nx.Defn.compile/3, which compiles for them. Nx raises " <>
+          "computing with one: cannot perform operations on a Nx.TemplateBackend tensor.",
+      label: "gets a template, which holds no data, as its #{ordinal(position)} argument",
       help:
         "compute with a tensor that holds data, or hand the template to Nx.Defn.compile/3 and call the function it makes with tensors",
       frame: "the template is made by"
@@ -202,15 +202,42 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
 
   def violation(_kind), do: nil
 
-  # Where the function Nx traces comes from, as the rules name it.
+  # Why Nx traces the code, by how the rules say it is reached.
   defp traced("defn"),
-    do: "This code runs inside a `defn`, which reaches it through a transform or a helper"
+    do:
+      "Nx traces this code as part of a `defn`, which reaches it through a transform or a helper"
 
-  defp traced("grad"), do: "This code runs in a function a grad differentiates, which Nx traces"
+  defp traced("grad"), do: "Nx traces this code to differentiate the function a grad is handed"
 
   defp traced(_jit),
     do:
-      "This code runs in a function handed to Nx.Defn.jit/2 (or jit_apply/3 or compile/3, or EXLA's), which Nx traces to compile it"
+      "Nx traces this code to compile the function a jit, compile or jit_apply (Nx.Defn's or EXLA's) is handed"
+
+  # What traces the code, as a label names it.
+  defp tracer("defn"), do: "a `defn`"
+  defp tracer("grad"), do: "a grad"
+  defp tracer(_jit), do: "a jit"
+
+  # Elixir's `and` and `or` raise through `:erlang.error/1`, the call the
+  # finding is at; `not` is a call of its own.
+  defp boolean_title("not"), do: "gets a tensor where Elixir's `not` takes a boolean"
+
+  defp boolean_title(operator),
+    do: "raises BadBooleanError: Elixir's `#{operator}` gets a tensor, not a boolean"
+
+  defp boolean_raise("not"), do: "ArgumentError"
+
+  defp boolean_raise(_operator), do: "BadBooleanError"
+
+  # A compiled template's misfit, as the rules word Nx's error: `argument
+  # at position 1 is not compatible with compiled function template: got
+  # {3}, expected {2}`, its position counted from 1.
+  defp misfit(detail) do
+    [_, position, got, expected] =
+      Regex.run(~r/^argument at position (\d+) .*: got (.+), expected (.+)$/, detail)
+
+    %{position: Integer.to_string(String.to_integer(position) - 1), got: got, expected: expected}
+  end
 
   defp captured_raise("grad"),
     do:
