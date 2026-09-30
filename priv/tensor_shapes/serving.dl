@@ -204,7 +204,7 @@ call_error(run, "serving_run_name", name, "") :-
 // is handed a serving, wherever the call is.
 call_error(run, "serving_batched_run_struct", "", serving) :-
   remote_call(run, function, "Nx.Serving", "batched_run", _),
-  flow_argument(run, function, 0, kind, source),
+  argument_source(run, function, 0, kind, source),
   on_its_way(function, kind, source, "serving", serving).
 
 // A serving process is started with another batch size than the one
@@ -320,7 +320,7 @@ started(start, serving) :-
 started_with_batch_size(start, setting, size) :-
   option_pair(start, "serving", function, kind, source),
   on_its_way(function, kind, source, "batch_size", setting),
-  flow_argument(setting, _, 1, "literal", size).
+  argument_source(setting, _, 1, "literal", size).
 
 // The options a serving process is started with: those of the child
 // specification `{Nx.Serving, options}`, which Nx documents, and those
@@ -332,7 +332,7 @@ options_source(start, function, kind, source) :-
   flow_field(function, start, "{1}", kind, source).
 options_source(start, function, kind, source) :-
   remote_call(start, function, "Nx.Serving", "start_link", 1),
-  flow_argument(start, function, 0, kind, source).
+  argument_source(start, function, 0, kind, source).
 
 // A call a builder handed to `Nx.Serving.new/1,2` returns the result of.
 .decl builder_returns(serving: symbol, made: symbol)
