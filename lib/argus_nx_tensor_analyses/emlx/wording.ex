@@ -162,7 +162,7 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
     }
   end
 
-  def divergence("wrapped_shift", detail, _cause, _operation) do
+  def divergence("wrapped_shift", detail, _cause, operation) do
     [type | amount] = String.split(detail, " ", parts: 2)
     amount = Enum.join(amount)
     width = if type in ~w(u32 u64 s64), do: 64, else: 32
@@ -171,10 +171,9 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
       title: "shifts #{article(type)} #{type} by #{amount}, which EMLX takes modulo #{width}",
       detail:
         "EMLX shifts #{article(type)} #{type} in #{width} bits and takes the amount modulo " <>
-          "#{width}, so a shift by #{amount} is #{wrapped(amount, width)} there. BinaryBackend and EXLA " <>
-          "shift every bit out and give 0, or -1 for a negative number shifted right: " <>
-          "left_shift(1, 33) of an s32 is 2 on EMLX and 0 on them.",
-      label: "shifts by #{amount} here",
+          "#{width}, where BinaryBackend and EXLA shift every bit out and give 0, or -1 for a " <>
+          "negative number shifted right: #{shift_example(operation, type, amount, width)}.",
+      label: "shifts by #{amount}, #{wrapped(amount, width)}",
       help:
         "keep the amount below #{width}, or select the result for amounts past the type's width (0, or -1 shifting a negative number right)",
       frame: ""
@@ -245,8 +244,26 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
   # A shift's amount as EMLX takes it, modulo the width it shifts in.
   defp wrapped(amount, width) do
     case Integer.parse(amount) do
-      {value, ""} -> "one by #{rem(value, width)}"
-      _unread -> "one by its amount modulo #{width}"
+      {value, ""} -> "which EMLX takes modulo #{width} as #{rem(value, width)}"
+      _unread -> "which EMLX takes modulo #{width}"
+    end
+  end
+
+  # What EMLX and the others give for this shift by the amount: of 1 to
+  # the left, or of the power of 2 the amount wraps to to the right, where
+  # that power fits the type; else of 1 as an s32 by 33.
+  defp shift_example(operation, type, amount, width) do
+    with {value, ""} <- Integer.parse(amount),
+         wrapped = rem(value, width),
+         {size, ""} <- type |> String.slice(1..-1//1) |> Integer.parse(),
+         true <- wrapped < if(String.starts_with?(type, "s"), do: size - 1, else: size) do
+      power = Integer.pow(2, wrapped)
+
+      if String.contains?(operation, ["left_shift", "<<<"]),
+        do: "left_shift(1, #{amount}) is #{power} on EMLX and 0 on them",
+        else: "right_shift(#{power}, #{amount}) is 1 on EMLX and 0 on them"
+    else
+      _unread -> "left_shift(1, 33) of an s32 is 2 on EMLX and 0 on them"
     end
   end
 end
