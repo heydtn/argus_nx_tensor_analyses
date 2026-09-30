@@ -2041,7 +2041,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {"Nx.iota({4, 5})[1..7//1]", "access_out_of_bounds",
      "index 7 is out of bounds for axis 0 in shape {4, 5}", :message},
     {"Nx.iota({4, 5})[1..-1//-1]", "access_negative_step",
-     "range step must be positive, got range: 1..-1//-1", :raises},
+     "range step must be positive, got range: 1..-1//-1. Did you mean to pass the range 1..-1//1 instead?",
+     :message},
     {"Nx.iota({4, 5})[[.., 3..0//-2]]", "access_negative_step",
      "range step must be positive, got range: 3..0//-2", :message},
     {"Nx.iota({4, 5})[3..1//1]", "access_empty_range",
@@ -4699,7 +4700,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       )
 
     assert found.(:head_before) == [
-             {"access_negative_step", "range step must be positive, got range: 0..-1//-1"}
+             {"access_negative_step",
+              "range step must be positive, got range: 0..-1//-1. Did you mean to pass the range 0..-1//1 instead?"}
            ]
 
     assert found.(:span_before) == [
@@ -4729,7 +4731,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert clamped.finding.severity == :warning
 
     [tuple] = by_title["Nx.sum/1 gets a tuple of tensors where it takes a tensor"]
-    assert tuple.finding.detail =~ "Its first argument is a tuple of tensors"
+    assert tuple.finding.at_label == "gets a tuple of tensors as its first argument"
     assert [%{label: "returns the tuple: Nx.split/2"}] = tuple.finding.related
   end
 

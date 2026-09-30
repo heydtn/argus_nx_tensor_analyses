@@ -13,13 +13,14 @@
 // ══ Findings ════════════════════════════════════════════════════════
 
 // A scalar tensor indexed: it has no axis to index.
-call_error(site, "access_scalar", "cannot use the tensor[index] syntax on scalar tensor", "") :-
-  indexed_tensor(_, site, [_, nil]).
+call_error(site, "access_scalar", "cannot use the tensor[index] syntax on scalar tensor", origin) :-
+  indexed_tensor(_, site, [_, nil]),
+  indexed_origin(site, origin).
 
 // An index, or a range's bound, past either end of the axis it indexes, as
 // Nx checks them: the first bound, then the last. An index within an axis
 // of `extent` lies in [-extent, extent).
-call_error(site, "access_out_of_bounds", detail, "") :-
+call_error(site, "access_out_of_bounds", detail, origin) :-
   tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, _, index, _, step),
   step > 0,
@@ -27,8 +28,9 @@ call_error(site, "access_out_of_bounds", detail, "") :-
   extent > 0,
   max(index + 1 - extent, 0 - extent - index) > 0,
   sizes_spelled(axes, spelled),
-  detail = cat("index ", to_string(index), " is out of bounds for axis ", to_string(axis), " in shape ", spelled).
-call_error(site, "access_out_of_bounds", detail, "") :-
+  detail = cat("index ", to_string(index), " is out of bounds for axis ", to_string(axis), " in shape ", spelled),
+  indexed_origin(site, origin).
+call_error(site, "access_out_of_bounds", detail, origin) :-
   tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, _, first, index, step),
   step > 0,
@@ -37,21 +39,26 @@ call_error(site, "access_out_of_bounds", detail, "") :-
   max(first + 1 - extent, 0 - extent - first) <= 0,
   max(index + 1 - extent, 0 - extent - index) > 0,
   sizes_spelled(axes, spelled),
-  detail = cat("index ", to_string(index), " is out of bounds for axis ", to_string(axis), " in shape ", spelled).
+  detail = cat("index ", to_string(index), " is out of bounds for axis ", to_string(axis), " in shape ", spelled),
+  indexed_origin(site, origin).
 spelling_demand(axes) :- indexed_tensor(_, _, [_, axes]).
 
 // A range with a negative step, which Nx rejects before it reads the
-// bounds (and, for a step of -1, suggests the step of 1 meant).
-call_error(site, "access_negative_step", detail, "") :-
+// bounds, and for a step of -1 suggests the range of step 1 meant, as
+// `inspect/1` spells it: without its step where it counts up.
+call_error(site, "access_negative_step", cat(message, suggestion), "") :-
   tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, _, "span", first, last, step),
   step < 0,
-  detail = cat("range step must be positive, got range: ", to_string(first), "..", to_string(last), "//", to_string(step)).
+  message = cat("range step must be positive, got range: ", to_string(first), "..", to_string(last), "//", to_string(step)),
+  ( step < -1, suggestion = ""
+  ; step = -1, first <= last, suggestion = cat(". Did you mean to pass the range ", to_string(first), "..", to_string(last), " instead?")
+  ; step = -1, first > last, suggestion = cat(". Did you mean to pass the range ", to_string(first), "..", to_string(last), "//1 instead?") ).
 
 // A range that holds no index of its axis, its bounds as Nx counts them
 // from the start: where the axis's size is known, or both bounds already
 // count from the start.
-call_error(site, "access_empty_range", detail, "") :-
+call_error(site, "access_empty_range", detail, origin) :-
   tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, "span", first, last, step),
   step > 0,
@@ -62,18 +69,20 @@ call_error(site, "access_empty_range", detail, "") :-
   start = (first + extent) % max(extent, 1),
   stop = (last + extent) % max(extent, 1),
   stop < start,
-  detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(start), "..", to_string(stop), "//", to_string(step)).
-call_error(site, "access_empty_range", detail, "") :-
+  detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(start), "..", to_string(stop), "//", to_string(step)),
+  indexed_origin(site, origin).
+call_error(site, "access_empty_range", detail, origin) :-
   tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, "span", first, last, step),
   step > 0,
   last >= 0,
   last < first,
   axis_extent(axes, axis, 0),
-  detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(first), "..", to_string(last), "//", to_string(step)).
+  detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(first), "..", to_string(last), "//", to_string(step)),
+  indexed_origin(site, origin).
 
 // A list of more indices than the tensor has axes.
-call_error(site, "access_too_many_indices", detail, "") :-
+call_error(site, "access_too_many_indices", detail, origin) :-
   tensor_indexed_by(_, site, axes, key),
   key_entry(key, 0, "", _),
   key_length(key, length),
@@ -81,25 +90,28 @@ call_error(site, "access_too_many_indices", detail, "") :-
   rank > 0,
   length > rank,
   sizes_spelled(axes, spelled),
-  detail = cat("unknown or duplicate axis ", to_string(length - 1), " found when slicing shape ", spelled).
+  detail = cat("unknown or duplicate axis ", to_string(length - 1), " found when slicing shape ", spelled),
+  indexed_origin(site, origin).
 
 // A keyword list naming one axis twice.
-call_error(site, "access_duplicate_name", detail, "") :-
+call_error(site, "access_duplicate_name", detail, origin) :-
   tensor_indexed_by(_, site, axes, key),
   entry_axis(key, axes, slot, axis),
   entry_axis(key, axes, other, axis),
   slot < other,
   sizes_spelled(axes, spelled),
-  detail = cat("unknown or duplicate axis ", to_string(axis), " found when slicing shape ", spelled).
+  detail = cat("unknown or duplicate axis ", to_string(axis), " found when slicing shape ", spelled),
+  indexed_origin(site, origin).
 
 // A keyword list naming an axis the tensor does not have.
-call_error(site, "access_unknown_name", detail, "") :-
+call_error(site, "access_unknown_name", detail, origin) :-
   tensor_indexed_by(_, site, axes, key),
   key_entry(key, _, name, _),
   name != "",
   !axes_axis(axes, _, _, name),
   names_spelled(axes, names),
-  detail = cat("tensor does not have name ", name, ". The tensor names are: ", names).
+  detail = cat("tensor does not have name ", name, ". The tensor names are: ", names),
+  indexed_origin(site, origin).
 
 // A float the code writes as the key, or as the index of an axis in a
 // list.
@@ -156,7 +168,7 @@ call_error(site, "access_update", "Access.pop/2 is not yet supported by Nx.Tenso
 // does not fit the first axis: Nx slices at a tensor index clamped into
 // the axis, so it reads the nearest end (`read`), where an integer index
 // would raise or count from the end.
-call_error(site, "access_index_clamped", detail, "") :-
+call_error(site, "access_index_clamped", detail, origin) :-
   tensor_indexed_by(_, site, axes, _),
   argument_source(site, _, 1, "result", made),
   operation_site(made, "Nx.tensor", _),
@@ -166,7 +178,8 @@ call_error(site, "access_index_clamped", detail, "") :-
   extent > 0,
   read = min(max(value, 0), extent - 1),
   read != value,
-  detail = cat("a scalar tensor index of ", to_string(value), " into axis 0 of size ", to_string(extent), " reads index ", to_string(read)).
+  detail = cat("a scalar tensor index of ", to_string(value), " into axis 0 of size ", to_string(extent), " reads index ", to_string(read)),
+  indexed_origin(site, origin).
 
 // A tuple of tensors handed where an Nx call takes a tensor: Nx converts
 // the argument with `Nx.to_tensor/1`, which rejects a collection of
@@ -251,6 +264,19 @@ access_key(context, site, $Term("Range.new", -1)) :-
   indexed_tensor(context, site, _),
   argument_source(site, _, 1, "result", made),
   remote_call(made, _, "Range", "new", _).
+
+// The Nx call whose result an access indexes, or "" where the tensor is
+// not an Nx call's result there: where a finding about the tensor points.
+// One row for each access, found by its argument, as `indexed_tensor` is.
+.decl indexed_origin(site: symbol, origin: symbol)
+indexed_origin(site, source) :-
+  indexed_tensor(_, site, _),
+  argument_source(site, _, 0, "result", source),
+  operation_site(source, _, _).
+indexed_origin(site, "") :-
+  indexed_tensor(_, site, _),
+  argument_source(site, _, 0, kind, source),
+  ( kind != "result" ; !operation_site(source, _, _) ).
 
 // The axes of a tensor, and a key it is indexed with.
 .decl tensor_indexed_by(context: Context, site: symbol, axes: Axes, key: Value)
