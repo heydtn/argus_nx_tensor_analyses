@@ -16,6 +16,9 @@ defmodule ArgusNxTensorAnalyses.EMLX do
       without the tensor shapes analysis's `unsupported_types` option;
       where the project lists the type there, the tensor shapes analysis
       reports it and this one does not, so no call is reported twice.
+    * A tensor of either type made off EMLX that `Nx.backend_transfer/2`
+      or `Nx.backend_copy/2` moves onto it: EMLX keeps an f64 as f32 while
+      it still says f64, and raises taking a c128 in.
     * A remainder whose divisor or dividend can be negative, which EMLX
       computes wrongly: `Nx.remainder([-6, 7], [2, -2])` is `[-2, -1]`
       on EMLX and `[0, 1]` on BinaryBackend and EXLA.
@@ -77,7 +80,7 @@ defmodule ArgusNxTensorAnalyses.EMLX do
           {:func, :func_id, "the function making it"},
           {:operation, :symbol, "the Nx function, as Nx.remainder/2"},
           {:kind, :symbol,
-           "what EMLX does differently: narrowed_type, negative_remainder, negative_integer_power, round_half or wrapped_shift"},
+           "what EMLX does differently: narrowed_type, narrowed_transfer, negative_remainder, negative_integer_power, round_half or wrapped_shift"},
           {:detail, :symbol,
            "the type (f64, c128), the operand that can be negative (divisor, dividend, exponent), how the operand lands on a half (halved, half_added, mean), or the type and the amount shifted (s32 33)"},
           {:certain, :number,

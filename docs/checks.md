@@ -376,6 +376,7 @@ analysis: run `mix argus tensor_emlx`, or add it to `analyses`.
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
 | `narrowed_type` | warning | A tensor made on EMLX in f64 or c128, which EMLX keeps as f32 or c64 while it still says f64 or c128; a c128 raises when read back. | `Nx.iota({3}, type: :f64)` |
+| `narrowed_transfer` | warning | An f64 or c128 tensor made off EMLX that `Nx.backend_transfer/2` or `Nx.backend_copy/2` moves onto it: EMLX keeps an f64 as f32 while it still says f64, and raises taking a c128 in. One cast to f32 first is not reported. | `Nx.backend_transfer(Nx.iota({3}, type: :f64, backend: EXLA.Backend), EMLX.Backend)` |
 | `negative_remainder` | warning; info if only an input can be negative | A remainder whose divisor or dividend can be negative, which EMLX computes wrongly. | `Nx.remainder(Nx.subtract(Nx.iota({4}), 2), 3)` |
 | `negative_integer_power` | warning; info if only an input can be negative | An integer power whose exponent can be negative, which hangs EMLX's CPU device when run eagerly and gives 0 elsewhere. | `Nx.pow(Nx.iota({3}), -1)` |
 | `round_half` | info | `Nx.round` of a value the code's math puts on a half (an integer halved, an integer plus 0.5, a mean of integers), which EMLX rounds to even. | `Nx.round(Nx.divide(Nx.iota({5}), 2))` |

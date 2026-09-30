@@ -18,6 +18,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     defn inverse(x), do: x ** -1
     defn add_iota(x), do: x + Nx.iota({2}, type: :f32)
     defn shift_far(x), do: x <<< 33
+    defn rope_tables(n), do: %{cos: Nx.as_type(Nx.cos(Nx.iota({4}, type: :f64) * n), :f32)}
     defp on_exla(tensor), do: Nx.backend_transfer(tensor, EXLA.Backend)
     defp combine(left, right), do: Nx.add(left, right)
     defp tables(n), do: %{cos: Nx.iota({n}, type: :f32), sin: Nx.iota({n}, type: :f32)}
@@ -41,6 +42,22 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     {:quiet, "Nx.as_type(Nx.backend_transfer(t, EXLA.Backend), :f64)"},
     # listed as unsupported, so the tensor shapes analysis reports it
     {:quiet, "Nx.tensor([1.0], type: :c128)"},
+    # tensors of those types moved onto EMLX
+    {{:finds, "narrowed_transfer", "f64", "1"},
+     "Nx.backend_transfer(Nx.iota({3}, type: :f64, backend: EXLA.Backend), EMLX.Backend)"},
+    {{:finds, "narrowed_transfer", "f64", "1"},
+     "Nx.backend_copy(Nx.as_type(Nx.backend_transfer(t, EXLA.Backend), :f64), EMLX.Backend)"},
+    {{:finds, "narrowed_transfer", "c128", "1"},
+     "Nx.backend_transfer(Nx.as_type(Nx.backend_transfer(t, EXLA.Backend), :c128), {EMLX.Backend, device: :gpu})"},
+    {:quiet,
+     "Nx.backend_transfer(Nx.iota({3}, type: :f64, backend: EXLA.Backend), Nx.BinaryBackend)"},
+    {{:finds, "narrowed_type", "f64", "1"},
+     "Nx.backend_transfer(Nx.iota({3}, type: :f64), EMLX.Backend)"},
+    # f64 tables built on EXLA and cast to f32 before they move
+    {:quiet,
+     "table = Nx.Defn.jit(&f64_table/1, compiler: EXLA).(t)\nNx.backend_transfer(Nx.as_type(table, :f32), EMLX.Backend)"},
+    {:quiet,
+     "tables = Nx.Defn.jit(&rope_tables/1, compiler: EXLA).(t)\nNx.backend_transfer(tables.cos, EMLX.Backend)"},
     # remainders of negative numbers
     {{:finds, "negative_remainder", "dividend", "1"},
      "Nx.remainder(Nx.subtract(Nx.iota({4}), 2), 3)"},
@@ -180,6 +197,14 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
 
     assert [{"Nx.tensor/2", "unsupported_type", "c128"}] =
              findings_for(rows, "tensor_type_error", function, [:operation, :kind, :subject])
+  end
+
+  test "a tensor made f64 on EMLX is reported where it is made, not where it moves", %{
+    rows: rows
+  } do
+    index = Enum.find_index(@cases, &(elem(&1, 1) =~ "Nx.iota({3}, type: :f64), EMLX")) + 1
+
+    assert [{:divergence, "narrowed_type", "f64", "1"}] = findings(rows, index)
   end
 
   test "a remainder in a defn whose dividend its math makes negative", %{rows: rows} do

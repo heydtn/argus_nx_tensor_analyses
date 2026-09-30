@@ -91,6 +91,29 @@ made_off_emlx(context, site) :-
   placed_on(context, function, kind, source, backend, _),
   backend != "EMLX.Backend".
 
+// A tensor of a type EMLX does not have that a transfer or copy moves
+// onto EMLX (`origin` the call that makes it that type): EMLX keeps an
+// f64 as f32 while the tensor still says f64, and raises taking a c128
+// in. A tensor made on EMLX in that type is that call's finding.
+.decl narrowed_transfer(context: Context, site: symbol, name: symbol, origin: symbol)
+narrowed_transfer(context, site, name, origin) :-
+  moved_to_emlx(context, site, function, kind, source),
+  value_dtype(context, function, kind, source, type, origin),
+  type_instance(type, name),
+  lacked_by_emlx(name),
+  !narrowed_type(_, origin, _).
+
+// A tensor `Nx.backend_transfer/2` or `Nx.backend_copy/2` moves onto
+// EMLX, as a source of the function that moves it, in a context: the
+// values whose types are asked.
+.decl moved_to_emlx(context: Context, site: symbol, function: symbol, kind: symbol, source: symbol)
+moved_to_emlx(context, site, function, kind, source) :-
+  transfers_backend(site),
+  places_on(site, "EMLX.Backend", site),
+  site_active(context, site),
+  flow_argument(site, function, 0, kind, source).
+dtype_demand(context, function, kind, source) :- moved_to_emlx(context, _, function, kind, source).
+
 // The tensor shapes analysis reports every call that makes a type the
 // backend is said to lack (its `unsupported_types` option), so a type
 // the project lists there is left to it, and not reported twice.
@@ -676,6 +699,7 @@ nx_members("set", "leaves_backend", " shape struct template host moved backend "
 
 // An Nx call EMLX computes differently from BinaryBackend and EXLA.
 // `kind` names what: "narrowed_type" (`detail`, the type: f64 or c128),
+// "narrowed_transfer" (`detail`, the type of a tensor moved onto EMLX),
 // "negative_remainder" (`detail`, the operand that can be negative:
 // divisor or dividend), "negative_integer_power" (`detail`, "exponent"),
 // "round_half" (`detail`, how the operand lands on a half: halved,
@@ -685,6 +709,8 @@ nx_members("set", "leaves_backend", " shape struct template host moved backend "
 // "" for none or a written number.
 .decl emlx_divergence(context: Context, site: symbol, kind: symbol, detail: symbol, certain: number, origin: symbol)
 emlx_divergence(context, site, "narrowed_type", name, 1, "") :- narrowed_type(context, site, name).
+emlx_divergence(context, site, "narrowed_transfer", name, 1, origin) :-
+  narrowed_transfer(context, site, name, origin).
 emlx_divergence(context, site, "negative_remainder", operand, certain, origin) :-
   negative_remainder(context, site, operand, certain, origin).
 emlx_divergence(context, site, "negative_integer_power", "exponent", certain, origin) :-

@@ -69,6 +69,33 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
     }
   end
 
+  def divergence("narrowed_transfer", "c128") do
+    %{
+      title: "moves a c128 tensor onto EMLX, which raises",
+      detail:
+        "EMLX has no 128-bit complex type, and it raises taking a c128 tensor in: no " <>
+          "function clause matching in EMLX.Backend.maybe_modify_binary/3.",
+      label: "moves c128 onto EMLX here",
+      help:
+        "make it c64 before it moves, as in Nx.backend_transfer(Nx.as_type(t, :c64), EMLX.Backend)",
+      frame: "makes it c128:"
+    }
+  end
+
+  def divergence("narrowed_transfer", type) do
+    %{
+      title: "moves #{article(type)} #{type} tensor onto EMLX, which keeps it as f32",
+      detail:
+        "EMLX has no 64-bit float: the tensor it takes in still says #{type}, but EMLX holds " <>
+          "it as f32 from here on, and computes with it at f32 precision (0.1 reads back as " <>
+          "0.10000000149011612, and 1 + 1.0e-10 as 1.0).",
+      label: "moves #{type} onto EMLX here",
+      help:
+        "make it f32 before it moves, as in Nx.backend_transfer(Nx.as_type(t, :f32), EMLX.Backend), so its type says what EMLX holds",
+      frame: "makes it #{type}:"
+    }
+  end
+
   def divergence("negative_remainder", "divisor") do
     %{
       title: "takes a remainder by a divisor that can be negative, which EMLX gets wrong",
