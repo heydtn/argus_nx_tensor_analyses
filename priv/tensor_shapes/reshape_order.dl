@@ -67,9 +67,6 @@ reshaped_axis_from(axes, axis + 1, rest) :-
 .decl reshaped_axis(axes: Axes, axis: number, size: Size)
 reshaped_axis(axes, axis, size) :- reshaped_axis_from(axes, axis, [size, _, _]).
 
-.decl reshaped_size(axes: Axes, size: Size)
-reshaped_size(axes, size) :- reshaped_axis(axes, _, size).
-
 // A side has a size neither known nor named by variables: not known at
 // all, or an `:auto` left so.
 .decl holds_undecided_size(axes: Axes)
