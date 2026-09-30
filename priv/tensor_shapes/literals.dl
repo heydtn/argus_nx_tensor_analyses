@@ -32,9 +32,7 @@
 // call. `subject` is the literal as written, with the type Nx makes it in
 // for the literal kinds (`300 as u8`); `position` is the argument it is
 // in, -1 for an option.
-type_error(site, kind, subject, position, 1, "") :-
-  literal_misread(site, kind, subject, position),
-  remote_call(site, _, _, _, _).
+type_error(site, kind, subject, position, 1, "") :- literal_misread(site, kind, subject, position).
 
 // What goes wrong, by kind:
 //

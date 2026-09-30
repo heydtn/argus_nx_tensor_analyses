@@ -388,9 +388,7 @@ type_error(site, "non_integer_start", class, 1, min(certain, 1), origin) :-
   certain = count : {
     non_integer_start(context, site, start_function, kind, source, _, _),
     !value_class(context, start_function, kind, source, "integer", _)
-  },
-  operation_site(site, _, _),
-  nx_origin(origin).
+  }.
 
 // ══ ddof ════════════════════════════════════════════════════════════
 //

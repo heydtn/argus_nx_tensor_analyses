@@ -85,9 +85,7 @@ nonfinite(site, "unsigned_logsumexp", type, origin) :-
   unsigned_logsumexp(_, site, type, origin).
 
 type_error(site, kind, cat(from, " ", to), position, 0, origin) :-
-  type_meeting(site, kind, position, from, to, origin),
-  operation_site(site, _, _),
-  nx_origin(origin).
+  type_meeting(site, kind, position, from, to, origin).
 
 // The type findings: an upcast, a narrowing merge.
 .decl type_meeting(site: symbol, kind: symbol, position: number, from: symbol, to: symbol, origin: symbol)
