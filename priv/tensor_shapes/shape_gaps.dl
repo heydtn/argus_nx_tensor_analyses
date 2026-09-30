@@ -722,25 +722,63 @@ odd_transform(site, size) :-
   size % 2 = 1.
 
 // ── Scaled log-sum-exp ─────────────────────────────────────────────
+//
+// `Nx.logsumexp/2` multiplies the exponentials of its tensor by its
+// `:exp_scaling_factor`, broadcast together, sums the product over
+// `:axes`, which index the product's axes, and adds the tensor's maximum
+// over `:axes`: a factor of more axes than the tensor, or of larger sizes,
+// gives another result than the tensor reduced.
 
-// `Nx.logsumexp/2`'s `:exp_scaling_factor` multiplies the exponentials,
-// broadcast with them, before it sums them over `:axes`: a factor of more
-// axes than the tensor makes those axes index their broadcast shape, and
-// the sum runs over other axes than the tensor's.
+// The factor is the call's second slot: nil where it is not given, or is
+// a number.
+slot_used("Nx.logsumexp", 2, 2).
+option_key("exp_scaling_factor").
+slot_value(context, site, 2, vectorized, axes) :-
+  scaling_factor(site, function, kind, source),
+  site_active(context, site),
+  value_of(context, function, kind, source, value),
+  value_tensor(value, [vectorized, axes]).
+tensor_demand(value) :-
+  scaling_factor(site, function, kind, source),
+  site_active(context, site),
+  value_of(context, function, kind, source, value).
+slot_value(context, site, 2, nil, nil) :-
+  site_active(context, site),
+  operation_site(site, "Nx.logsumexp", 2),
+  ( option_absent(site, "exp_scaling_factor") ; option(site, "exp_scaling_factor", text, start), term_scalar(text, start) ).
+
+// The scaled exponentials: the factor broadcast with the tensor.
+.decl scaled_exponentials(site: symbol, operands: Operands, product: Axes)
+scaled_exponentials(site, [first, second, nil], product) :-
+  site_instance(site, "Nx.logsumexp", _, [first, second, nil]),
+  broadcast(second, first, product).
+.plan 1:(2,1)
+broadcast_demand(second, first) :- site_instance(_, "Nx.logsumexp", _, [first, second, nil]).
+reduced_axes(site, product) :- scaled_exponentials(site, _, product).
+axes_needed(product) :- scaled_exponentials(_, _, product).
+
+// The scaled exponentials summed, and the tensor's maximum, over `:axes`.
+.decl scaled_sum(site: symbol, operands: Operands, summed: Axes, maximum: Axes)
+scaled_sum(site, [first, second, nil], summed, maximum) :-
+  scaled_exponentials(site, [first, second, nil], product),
+  reduction_axes(site, product, product_mask, keep),
+  contracted(product, product_mask, keep, summed),
+  reduction_axes(site, first, mask, keep),
+  contracted(first, mask, keep, maximum).
+.plan 1:(2,1,3,4,5), 2:(3,1,2,4,5), 3:(4,1,2,3,5), 4:(5,1,2,3,4)
+broadcast_demand(summed, maximum) :- scaled_sum(_, _, summed, maximum).
+
+result_axes(site, operands, axes) :-
+  scaled_sum(site, operands, summed, maximum),
+  broadcast(summed, maximum, axes).
+.plan 1:(2,1)
+
+// A factor of more axes than the tensor makes those axes index the
+// product, and the sum run over other axes than the tensor's.
 call_error(site, "scaling_factor_rank", cat(factor_spelled, " scaling ", tensor_spelled), "") :-
-  scaling_factor_axes(context, site, factor),
-  instance(context, site, [first, _, _], _),
+  site_instance(site, "Nx.logsumexp", 2, [first, factor, nil]),
   axes_rank(factor, factor_rank),
   axes_rank(first, rank),
   factor_rank > rank,
   sizes_spelled(factor, factor_spelled),
   sizes_spelled(first, tensor_spelled).
-
-// The scaling factor's axes, in a context.
-.decl scaling_factor_axes(context: Context, site: symbol, factor: Axes)
-scaling_factor_axes(context, site, axes) :-
-  scaling_factor(site, function, kind, source),
-  value_of(context, function, kind, source, $Tensor([_, axes])).
-
-axes_needed(factor) :- scaling_factor_axes(_, _, factor).
-spelling_demand(factor) :- scaling_factor_axes(_, _, factor).

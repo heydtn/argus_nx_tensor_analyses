@@ -4440,6 +4440,7 @@ result_axes(site, operands, axes) :-
   nx_trait(operation, "reduction"),
   operation != "Nx.LinAlg.norm",
   operation != "Nx.weighted_mean",
+  operation != "Nx.logsumexp",
   operands = [first, _, _],
   reduction_axes(site, first, mask, keep),
   contracted(first, mask, keep, axes).

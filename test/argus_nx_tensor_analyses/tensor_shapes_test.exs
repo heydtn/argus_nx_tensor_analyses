@@ -2505,7 +2505,20 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "scaling_factor_rank", "{2, 3} scaling {3}"}, :accepted},
      "Nx.logsumexp(Nx.iota({3}, type: :f32), axes: [0], exp_scaling_factor: Nx.iota({2, 3}, type: :f32))"},
     {:quiet,
-     "Nx.logsumexp(Nx.iota({2, 3}, type: :f32), axes: [1], exp_scaling_factor: Nx.iota({2, 3}, type: :f32))"}
+     "Nx.logsumexp(Nx.iota({2, 3}, type: :f32), axes: [1], exp_scaling_factor: Nx.iota({2, 3}, type: :f32))"},
+    # its result, the scaled sum broadcast with the tensor's maximum
+    {{:finds,
+      {"tensor_shape_mismatch", "broadcast", "cannot broadcast tensor of dimensions {3} to {2}"},
+      :raises},
+     "Nx.logsumexp(Nx.iota({3}, type: :f32), axes: [0], exp_scaling_factor: Nx.iota({2, 3}, type: :f32))\n|> Nx.add(Nx.iota({2}))"},
+    {{:finds,
+      {"tensor_shape_mismatch", "broadcast", "cannot broadcast tensor of dimensions {2} to {3}"},
+      :raises},
+     "Nx.logsumexp(Nx.iota({1, 3}, type: :f32), axes: [1], exp_scaling_factor: Nx.iota({2, 3}, type: :f32))\n|> Nx.add(Nx.iota({3}))"},
+    {:quiet,
+     "Nx.logsumexp(Nx.iota({1, 3}, type: :f32), axes: [1], exp_scaling_factor: Nx.iota({2, 3}, type: :f32))\n|> Nx.add(Nx.iota({2}))"},
+    {:quiet,
+     "Nx.logsumexp(Nx.iota({2, 3}, type: :f32), axes: [1], exp_scaling_factor: 2.0)\n|> Nx.add(Nx.iota({2}))"}
   ]
   @fixture_modules_shape_gaps """
   defmodule ArgusNxTensorAnalyses.TensorShapesTest.ShapeGaps do
