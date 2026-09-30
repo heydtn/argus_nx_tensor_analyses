@@ -9008,7 +9008,8 @@ argument_sign(context, site, position, sign, origin, cause) :-
 
 // A zero only some of a value's elements hold: an index (an iota starts
 // at zero and counts up) and an identity matrix (zero off its diagonal).
-// A sum or mean of the elements is not zero for it, as an element is.
+// A sum, mean or norm of the elements is not zero for it, as an element
+// is.
 .decl partial_zero(cause: symbol)
 partial_zero("index"). partial_zero("identity").
 
@@ -9270,31 +9271,44 @@ zero_kept(site, origin, cause, here, origin, cause) :-
 zero_kept(site, origin, cause, here, site, here) :-
   cause = "input", strlen(origin) >= 0, strlen(site) > 0, strlen(here) > 0.
 
+// Where a result's zero comes from where it is zero only where its
+// operands in two slots both are: the first's, unless the second's is a
+// zero only some elements hold (`partial_zero`), which leaves the result
+// zero at those elements alone. `Nx.multiply(x, x) + Nx.eye(2)` is zero
+// only off the diagonal, where the identity is.
+.decl zero_met(origin: symbol, cause: symbol, other_origin: symbol, other_cause: symbol, kept_origin: symbol, kept_cause: symbol) inline
+zero_met(origin, cause, other_origin, other_cause, origin, cause) :-
+  !partial_zero(other_cause), strlen(other_origin) >= 0.
+zero_met(origin, cause, other_origin, other_cause, other_origin, other_cause) :-
+  partial_zero(other_cause), strlen(origin) >= 0, strlen(cause) >= 0.
+
 // A class's result signs, by the rows of its rules (`sign_image`): the
 // result can have a row's sign where the operands the row names can have
 // the signs it names, but where the form of the call rules the row out
-// (`sign_blocked`). A zero is the operand's in the row's first slot, or
-// the call's own; a zero only some elements hold is none for a call that
-// sums them all (`whole_sum_past`).
+// (`sign_blocked`). A zero is the operands' (`zero_met`), or the call's
+// own; a zero only some elements hold is none for a call that reduces
+// them all (`whole_reduction_past`).
 may_have_sign(context, function, "result", site, sign, "", "") :-
   slot_sign(context, site, slot, from, _, _),
   signed_call(context, site, function, class),
   sign_image(class, slot, from, other, other_from, sign, ""),
   slot_sign(context, site, other, other_from, _, _),
   !sign_blocked(site, slot, from, sign).
-may_have_sign(context, function, "result", site, "zero", origin, cause) :-
+may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause) :-
   slot_sign(context, site, slot, "zero", origin, cause),
   signed_call(context, site, function, class),
   sign_image(class, slot, "zero", other, other_from, "zero", "kept"),
-  slot_sign(context, site, other, other_from, _, _),
+  slot_sign(context, site, other, other_from, other_origin, other_cause),
+  zero_met(origin, cause, other_origin, other_cause, kept_origin, kept_cause),
   !sign_blocked(site, slot, "zero", "zero"),
-  !whole_sum_past(site, cause).
+  !whole_reduction_past(site, kept_cause).
 may_have_sign(context, function, "result", site, "zero", site, cause) :-
   slot_sign(context, site, slot, from, _, _),
   signed_call(context, site, function, class),
   sign_image(class, slot, from, other, other_from, "zero", cause),
   cause != "kept",
-  slot_sign(context, site, other, other_from, _, _).
+  slot_sign(context, site, other, other_from, _, _),
+  !sign_blocked(site, slot, from, "zero").
 
 // A row at slot 0: the result can have its sign whatever the operands
 // have.
@@ -9331,7 +9345,8 @@ sign_image("negate", 1, "positive", 1, "positive", "negative", "").
 sign_image("negate", 1, "negative", 1, "negative", "positive", "").
 sign_image("negate", 1, "zero", 1, "zero", "zero", "kept").
 
-// `absolute`, `norm`: never negative, zero where the operand is.
+// `absolute`, `norm`: never negative, zero where the operand is (a norm
+// only where all of it is, `whole_reduction_past`).
 sign_image("absolute", 1, "positive", 1, "positive", "positive", "").
 sign_image("absolute", 1, "negative", 1, "negative", "positive", "").
 sign_image("norm", 1, "positive", 1, "positive", "positive", "").
@@ -9339,7 +9354,8 @@ sign_image("norm", 1, "negative", 1, "negative", "positive", "").
 may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause) :-
   slot_sign(context, site, 1, "zero", origin, cause), signed_call(context, site, function, class),
   ( class = "absolute" ; class = "norm" ),
-  zero_kept(site, origin, cause, class, kept_origin, kept_cause).
+  zero_kept(site, origin, cause, class, kept_origin, kept_cause),
+  !whole_reduction_past(site, cause).
 
 // `root`: a square root, not negative (a negative operand is NaN).
 sign_image("root", 1, "positive", 1, "positive", "positive", "").
@@ -9377,6 +9393,25 @@ sign_image("add", 2, "zero", 1, "zero", "zero", "kept").
 sign_image("add", 1, "positive", 2, "negative", "zero", "cancel").
 sign_image("add", 1, "negative", 2, "positive", "zero", "cancel").
 
+// A sum of an outer product of a value with itself, in `slot`, and an
+// identity matrix, as `Nx.outer(v, v) + Nx.eye(2)`: the identity is
+// positive only on its diagonal, where the product is a square, so the
+// two never cancel.
+.decl outer_square_plus_identity(site: symbol, slot: number)
+outer_square_plus_identity(site, slot) :-
+  sign_rule(site, "add"),
+  slot_position(site, slot, position),
+  argument_source(site, function, position, "result", product),
+  1 = count : { argument_source(site, function, position, _, _) },
+  operation_site(product, "Nx.outer", 2),
+  self_product(product),
+  slot_position(site, 3 - slot, other),
+  argument_source(site, function, other, "result", identity),
+  1 = count : { argument_source(site, function, other, _, _) },
+  sign_rule(identity, "identity").
+sign_blocked(site, 1, "negative", "zero") :- outer_square_plus_identity(site, 1).
+sign_blocked(site, 1, "positive", "zero") :- outer_square_plus_identity(site, 2).
+
 // `subtract`: a difference is zero where both are, or where they meet.
 sign_image("subtract", 1, "positive", 1, "positive", "positive", "").
 sign_image("subtract", 2, "negative", 2, "negative", "positive", "").
@@ -9408,14 +9443,19 @@ may_have_sign(context, function, "result", site, "zero", kept_origin, kept_cause
   squares(site),
   zero_kept(site, origin, cause, "square", kept_origin, kept_cause).
 
-// A product of a value with itself: both operands the one value.
-.decl squares(site: symbol)
-squares(site) :-
-  sign_rule(site, "multiply"),
+// A product of a value with itself: both operands the one value, as in
+// `x * x` and `Nx.outer(v, v)`.
+.decl self_product(site: symbol)
+self_product(site) :-
+  ( sign_rule(site, "multiply") ; operation_site(site, "Nx.outer", 2) ),
   argument_source(site, function, 0, kind, source),
   argument_source(site, function, 1, kind, source),
   1 = count : { argument_source(site, function, 0, _, _) },
   1 = count : { argument_source(site, function, 1, _, _) }.
+
+// A value times itself, element by element: a square.
+.decl squares(site: symbol)
+squares(site) :- self_product(site), sign_rule(site, "multiply").
 
 // `divide`: signs as a product's, zero where the dividend is.
 sign_image("divide", 1, "positive", 2, "positive", "positive", "").
@@ -9524,15 +9564,16 @@ sign_image("sum", 1, "negative", 1, "negative", "negative", "").
 sign_image("sum", 1, "zero", 1, "zero", "zero", "kept").
 sign_image("sum", 1, "positive", 1, "negative", "zero", "cancel").
 
-// A sum or mean of every element, which a zero only some of them hold
-// does not make zero (a cumulative sum's first element is its operand's).
-.decl whole_sum_past(site: symbol, cause: symbol)
-whole_sum_past(site, cause) :-
+// A reduction of every element (a sum, a mean, a norm), which a zero only
+// some of them hold does not make zero (a cumulative sum's first element
+// is its operand's).
+.decl whole_reduction_past(site: symbol, cause: symbol)
+whole_reduction_past(site, cause) :-
   operation_site(site, operation, _),
-  nx_trait(operation, "whole_sum"),
+  nx_trait(operation, "whole_reduction"),
   partial_zero(cause).
 
-nx_members("trait", "whole_sum", " Nx.sum Nx.mean ").
+nx_members("trait", "whole_reduction", " Nx.sum Nx.mean Nx.LinAlg.norm ").
 
 // `product`: positive from positives, or from negatives paired; negative
 // where an element is; zero where one is.

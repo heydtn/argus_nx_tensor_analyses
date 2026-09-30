@@ -1413,7 +1413,16 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :finite},
      "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v -> Nx.LinAlg.norm(Nx.add(Nx.abs(Nx.outer(v, v)), 1.0), ord: :nuclear) end)"},
     {{:finds_none, :finite},
-     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v ->\n  w = Nx.add(Nx.abs(v), 1.0)\n  Nx.LinAlg.norm(Nx.outer(w, w))\nend)"}
+     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v ->\n  w = Nx.add(Nx.abs(v), 1.0)\n  Nx.LinAlg.norm(Nx.outer(w, w))\nend)"},
+    # norms an identity's diagonal keeps from zero, and one that meets it
+    {{:finds_none, :finite},
+     "Nx.Defn.grad(Nx.add(Nx.iota({2}, type: :f32), 1.0), fn v -> Nx.LinAlg.norm(Nx.add(Nx.outer(v, v), Nx.eye(2)), ord: :nuclear) end)"},
+    {{:finds_none, :finite},
+     "Nx.Defn.grad(t, fn x -> Nx.LinAlg.norm(Nx.add(Nx.multiply(x, x), Nx.eye(2))) end)"},
+    {{:finds_none, :finite},
+     "Nx.Defn.grad(t, fn x -> Nx.LinAlg.norm(Nx.multiply(Nx.exp(x), Nx.eye(2))) end)"},
+    {{:nonfinite, "infinite_gradient", "cancel"},
+     "Nx.Defn.grad(Nx.eye(2), fn x -> Nx.LinAlg.norm(Nx.subtract(x, Nx.eye(2))) end)"}
   ]
   @fixture_modules_gradients """
   defmodule ArgusNxTensorAnalyses.TensorShapesTest.GradientsFixtures do

@@ -124,7 +124,9 @@ Math that keeps the operand away (an epsilon added, `Nx.max` with a
 positive number, a clip inside the domain) stays quiet, and so does a
 check on the way: a test such as `if n > 0`, or
 `Nx.select(Nx.equal(d, 0), 1, d)`. An operand that only an input makes
-zero is an unchecked operand instead.
+zero is an unchecked operand instead. A sum, mean or norm is zero only
+where every element is, so the zero an iota starts with, or an identity
+matrix holds off its diagonal, does not make it zero.
 
 ### Unchecked operands
 
