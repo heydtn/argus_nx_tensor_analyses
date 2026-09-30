@@ -95,6 +95,23 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Options do
   }
 
   @impl true
+  # Options a caller hands down, found at the caller's call: the detail
+  # names the Nx function that raises for them before what breaks them
+  # (`Nx.sum axis`), and the finding says what the call hands it.
+  def call_error(kind, "Nx." <> _handed = detail, _operation)
+      when kind in ["unknown_option", "options_not_keyword", "option_form", "option_value"] do
+    [name, rejected] = String.split(detail, " ", parts: 2)
+    shown = if kind == "unknown_option", do: ":#{rejected}", else: rejected
+    wording = call_error(kind, rejected, name)
+
+    %{
+      wording
+      | title: String.replace_prefix(wording.title, "gets ", "hands #{name} "),
+        label: String.replace_prefix(wording.label, "gets ", "hands #{name} "),
+        frame: "raises for #{shown} in"
+    }
+  end
+
   def call_error("unknown_option", key, operation) do
     name = without_arity(operation)
     keys = Map.get(@option_keys, name, [])

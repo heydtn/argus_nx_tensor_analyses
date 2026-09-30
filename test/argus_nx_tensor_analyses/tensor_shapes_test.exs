@@ -698,6 +698,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     def sums(tensor, opts), do: Nx.sum(tensor, opts)
     def sums_by_axis(tensor), do: sums(tensor, axis: 0)
     def sums_by_axes(tensor), do: sums(tensor, axes: [0])
+    def sums_through(tensor, opts), do: sums(tensor, opts)
+    def sums_through_by_dim(tensor), do: sums_through(tensor, dim: 0)
+    def sums_through_by_axes(tensor), do: sums_through(tensor, axes: [0])
 
     def sums_axes(tensor, axes) do
       axes = if is_list(axes), do: axes, else: [axes]
@@ -3610,19 +3613,78 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   end
 
   # `sums/2` hands on what its callers give it: `[axis: 0]` from one of
-  # them, and `sorts/2` an atom one of its callers gives. `sums_axes/2`
+  # them, directly, and `[dim: 0]` from another through `sums_through/2`;
+  # each is reported where the list is written, with the Nx call as its
+  # origin. `sorts/2` gets an atom one of its callers gives. `sums_axes/2`
   # tests its argument's type before it builds the option, so the integer
   # its caller gives does not reach the call.
   test "options a caller hands down are checked at the call", %{rows: rows} do
     call_errors =
-      &findings_for(rows, "tensor_call_error", function_id(@options_fixtures, &1, 2), [
+      &findings_for(rows, "tensor_call_error", function_id(@options_fixtures, &1, &2), [
+        :operation,
         :kind,
-        :detail
+        :detail,
+        :origin_operation
       ])
 
-    assert call_errors.(:sums) == [{"unknown_option", "axis"}]
-    assert call_errors.(:sorts) == [{"option_value", "direction: :descending"}]
-    assert call_errors.(:sums_axes) == []
+    sums = "#{inspect(@options_fixtures)}.sums/2"
+    through = "#{inspect(@options_fixtures)}.sums_through/2"
+
+    assert call_errors.(:sums, 2) == []
+    assert call_errors.(:sums_through, 2) == []
+    assert call_errors.(:sums_by_axis, 1) == [{sums, "unknown_option", "Nx.sum axis", "Nx.sum/2"}]
+    assert call_errors.(:sums_by_axes, 1) == []
+
+    assert call_errors.(:sums_through_by_dim, 1) == [
+             {through, "unknown_option", "Nx.sum dim", "Nx.sum/2"}
+           ]
+
+    assert call_errors.(:sums_through_by_axes, 1) == []
+
+    assert call_errors.(:sorts, 2) == [
+             {"Nx.sort/2", "option_value", "direction: :descending", ""}
+           ]
+
+    assert call_errors.(:sums_axes, 2) == []
+  end
+
+  test "a finding at the call that hands the options down names the Nx function" do
+    handed =
+      TensorShapes.finding(:tensor_call_error, [
+        "M:g/1#1",
+        "M:g/1",
+        "M.sums/2",
+        "unknown_option",
+        "Nx.sum axis",
+        "M:sums/2#2",
+        "Nx.sum/2"
+      ])
+
+    assert handed.title == "M.sums/2 hands Nx.sum :axis, an option it does not take"
+    assert handed.at_label == "hands Nx.sum :axis here"
+    assert handed.detail =~ "Nx.sum checks every key of its options"
+    assert handed.detail =~ "(:axes and :keep_axes)"
+    assert handed.severity == :error
+
+    assert handed.help == [
+             "use :axes, which takes a list of axes: axes: [...] rather than axis: ..."
+           ]
+
+    assert [%{label: "raises for :axis in Nx.sum/2"}] = handed.related
+
+    form =
+      TensorShapes.finding(:tensor_call_error, [
+        "M:g/1#1",
+        "M:g/1",
+        "M.sums/2",
+        "option_form",
+        "Nx.sum axes: 1",
+        "M:sums/2#2",
+        "Nx.sum/2"
+      ])
+
+    assert form.title == "M.sums/2 hands Nx.sum :axes as one axis rather than a list"
+    assert [%{label: "raises for axes: 1 in Nx.sum/2"}] = form.related
   end
 
   test "a finding says what Nx takes instead" do

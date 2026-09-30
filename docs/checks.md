@@ -200,8 +200,11 @@ at run time is not checked.
 | `norm_axes` | warning | A matrix order of `Nx.LinAlg.norm/2` given `:axes`, which still returns one norm of the whole matrix. | `Nx.LinAlg.norm(Nx.iota({2, 3}, type: :f32), ord: 1, axes: [0])` |
 
 Options are read where the code writes them, in the keyword lists it
-builds, and in a literal list a caller hands down. A value the code tests
-the type of before it builds the pair
+builds, and in a literal list a caller hands down. A list a caller hands
+down is reported at the caller's call that hands it (`sums(t, axis: 0)`,
+where `sums/2` calls `Nx.sum(t, opts)`), with a frame at the Nx call
+that raises for it. A value the code tests the type of before it builds
+the pair
 (`if is_list(axes), do: axes, else: [axes]`) is not taken for the value.
 `Nx.reshape/3` does not check its options, so it is not reported.
 

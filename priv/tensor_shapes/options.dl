@@ -20,15 +20,34 @@
 
 // ── Findings ───────────────────────────────────────────────────────
 
-call_error(site, "unknown_option", key, "") :- unknown_option(_, site, key).
-call_error(site, "options_not_keyword", list, "") :- positional_options(_, site, list).
-call_error(site, "option_form", cat(key, ": ", spelled), "") :-
-  option_of_wrong_form(_, site, key, spelled).
-call_error(site, "option_value", cat(key, ": ", atom), "") :-
-  rejected_option_value(_, site, key, atom).
+// Options Nx rejects are reported where they are written: at the call, or,
+// for a literal list a caller hands down as a helper's options, at the
+// caller's call, which raises whatever the helper's other callers hand it.
+// Such a finding names the Nx function in its detail (`Nx.sum axis`), and
+// its origin is the Nx call that raises.
+call_error(site, kind, detail, "") :-
+  rejected_options(context, site, kind, detail),
+  options_source(site, function, source_kind, source),
+  !hands_down(context, function, source_kind, source, _).
+call_error(hand, kind, cat(operation, " ", detail), site) :-
+  rejected_options(context, site, kind, detail),
+  options_source(site, function, source_kind, source),
+  hands_down(context, function, source_kind, source, hand),
+  option_function(site, operation).
 call_error(site, "option_value", atom, "") :- unknown_padding_type(_, site, atom).
 
 // ── What goes wrong ────────────────────────────────────────────────
+
+// Options a call gets in a context that Nx rejects, by the kind of the
+// finding and what breaks them.
+.decl rejected_options(context: Context, site: symbol, kind: symbol, detail: symbol)
+rejected_options(context, site, "unknown_option", key) :- unknown_option(context, site, key).
+rejected_options(context, site, "options_not_keyword", list) :-
+  positional_options(context, site, list).
+rejected_options(context, site, "option_form", cat(key, ": ", spelled)) :-
+  option_of_wrong_form(context, site, key, spelled).
+rejected_options(context, site, "option_value", cat(key, ": ", atom)) :-
+  rejected_option_value(context, site, key, atom).
 
 // An option key the called function does not take: Nx checks every key a
 // function with options is given, and raises for one it does not know.
@@ -247,6 +266,44 @@ handed_options(context, site, text, start) :-
   site_active(context, site),
   value_of(context, function, kind, source, $Term(text, start)),
   term_list(text, start).
+
+// The call that hands down, from a caller, what a function's parameter is
+// in a context: a call running the function there that hands it the
+// value as anything but its own parameter, or the call that hands down
+// that parameter of the caller's. Walked over the calls themselves, which
+// `arrives_from` does not keep, and a closure's calls with them.
+.decl hands_down(context: Context, function: symbol, kind: symbol, source: symbol, hand: symbol)
+hands_down(context, function, "param", source, hand) :-
+  hand_demand(context, function, source),
+  invocation(_, hand, function, context),
+  flow_argument(hand, _, position, kind, _),
+  source = to_string(position),
+  kind != "param".
+hands_down(context, function, "param", source, hand) :-
+  hands_down(caller_context, caller, "param", caller_source, hand),
+  invocation(caller_context, call, function, context),
+  flow_argument(call, caller, position, "param", caller_source),
+  source = to_string(position),
+  hand_demand(context, function, source).
+hands_down(fork, function, "param", source, hand) :-
+  hands_down(base, function, "param", source, hand),
+  fork_of(fork, base, function),
+  hand_demand(fork, function, source).
+
+// The parameters whose hand is asked: those a call takes options Nx
+// rejects from, then the caller's that each is handed.
+.decl hand_demand(context: Context, function: symbol, source: symbol)
+hand_demand(context, function, source) :-
+  rejected_options(context, site, _, _),
+  options_source(site, function, "param", source).
+hand_demand(caller_context, caller, caller_source) :-
+  hand_demand(context, function, source),
+  invocation(caller_context, call, function, context),
+  flow_argument(call, caller, position, "param", caller_source),
+  source = to_string(position).
+hand_demand(base, function, source) :-
+  hand_demand(fork, function, source),
+  fork_of(fork, base, function).
 
 // An option key a call is given in a context: written at the call (the
 // core's `option_given`), or in a list a caller hands down.
