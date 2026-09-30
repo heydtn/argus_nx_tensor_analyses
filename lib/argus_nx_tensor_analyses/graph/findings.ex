@@ -3,7 +3,13 @@ defmodule ArgusNxTensorAnalyses.Graph.Findings do
   # What the analysis found: `findings(program)`, built by Argus from the
   # solve's rows (`Argus.Findings.build/2`: each relation's rows
   # deduplicated by its key, evidence rows as related frames), or the
-  # solve's error. Anchors are instructions, functions and modules, never
+  # solve's error. The rows are built category by category
+  # (`ArgusNxTensorAnalyses.Categories`), and each finding is reported
+  # under its category, its `analysis` and `concern` in place of the
+  # engine's name. That needs a relation's key, and an evidence
+  # relation's join, to hold its kind: the rows of one finding are then in
+  # one category, and a category's rows deduplicate as the whole
+  # relation's do. Anchors are instructions, functions and modules, never
   # lines: an edit that only moves lines leaves them as they were, and
   # nothing past them runs.
   #
@@ -14,6 +20,7 @@ defmodule ArgusNxTensorAnalyses.Graph.Findings do
 
   use Roux.Query, code: true
 
+  alias ArgusNxTensorAnalyses.Categories
   alias Roux.Blob
   alias Roux.Runtime
 
@@ -25,7 +32,13 @@ defmodule ArgusNxTensorAnalyses.Graph.Findings do
     with {:ok, digest} <- Runtime.query(db, :solve, program),
          {:ok, rows} <- rows(db.blob, digest) do
       %{module: analysis} = Runtime.input(db, :analysis, :all)
-      {:ok, Argus.Findings.build(analysis, rows)}
+
+      findings =
+        for {category, category_rows} <- Categories.split(analysis, rows),
+            finding <- Argus.Findings.build(analysis, category_rows),
+            do: %{finding | analysis: category, concern: category}
+
+      {:ok, findings}
     end
   end
 
