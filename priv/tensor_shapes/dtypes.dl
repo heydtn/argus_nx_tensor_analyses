@@ -373,6 +373,19 @@ literal_underflow(context, site, number, type) :-
   made_f32_first(context, site, type, number),
   number_misfit(number, "f32", "flushes").
 
+// Such a number keeps nothing from zero: a sum of it is zero where its
+// other operand is, for that zero's cause (`x + 1.0e-12` of an f16 square
+// is zero where the square is), and a maximum of it a clamp at zero.
+may_have_sign(context, function, "result", site, "zero", origin, cause) :-
+  slot_sign(context, site, _, "zero", origin, cause),
+  signed_call(context, site, function, "add"),
+  literal_underflow(context, site, _, _).
+may_have_sign(context, function, "result", site, "zero", site, "clamp") :-
+  slot_sign(context, site, _, sign, _, _),
+  sign != "positive",
+  signed_call(context, site, function, "maximum"),
+  literal_underflow(context, site, _, _).
+
 // A value holding a number beyond a float type's range made that type: a
 // number written where it is made (-1.0e9), or a constant at the edge of a
 // wider type (`Nx.Constants.min_finite(:f32)`), is -infinity in f16.

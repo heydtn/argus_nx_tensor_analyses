@@ -2769,6 +2769,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-12 f16"}, :nonfinite},
      "Nx.rsqrt(Nx.add(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-12))"},
     {{:finds_none, :finite}, "Nx.rsqrt(Nx.add(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-4))"},
+    # an epsilon f16 rounds to zero keeps no sum or maximum from zero
+    {{:nonfinite, "divide_by_zero", "square"},
+     "Nx.divide(1, Nx.add(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-12))"},
+    {:finite, "Nx.divide(1, Nx.add(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-4))"},
+    {{:nonfinite, "divide_by_zero", "clamp"},
+     "Nx.divide(1, Nx.max(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-12))"},
+    {:finite, "Nx.divide(1, Nx.max(Nx.as_type(Nx.multiply(t, t), :f16), 1.0e-4))"},
+    {:finite, "Nx.divide(1, Nx.add(Nx.as_type(Nx.multiply(t, t), :f32), 1.0e-12))"},
     # f8 keeps an f16's top byte, so a number overflows and flushes in it
     # where it does written as f8 data
     {{:finds_none, :finite}, "Nx.add(Nx.tensor([1.0], type: :f8), 61440.0)"},

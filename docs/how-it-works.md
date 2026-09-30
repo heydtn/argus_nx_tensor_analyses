@@ -30,7 +30,8 @@ values through the program to where they meet. The EMLX analysis,
   logarithm or root of, or uses as an index, the rules work out whether
   the value can be negative, zero or positive from how it is computed: a
   square is never negative, an exponential never zero, an iota starts at
-  zero, and an input can be anything. A finding says why its operand can
+  zero, an epsilon the tensor's type rounds to zero (1.0e-12 in f16) keeps
+  nothing from zero, and an input can be anything. A finding says why its operand can
   be zero or negative, and points at the call that makes it so. A test on
   the way to the call (`if n == 0`, `n > 0`) or a select on a comparison
   with zero (`Nx.select(Nx.equal(d, 0), 1, d)`) checks the operand it
