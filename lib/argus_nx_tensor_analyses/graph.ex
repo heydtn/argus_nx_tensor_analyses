@@ -35,42 +35,42 @@ defmodule ArgusNxTensorAnalyses.Graph do
   alias Roux.Runtime
   alias Roux.Session
 
-  @modules [
-    Graph.Inputs,
-    Graph.Extraction,
-    Graph.Relations,
-    Graph.Solve,
-    Graph.Findings,
-    Graph.Locate
-  ]
+  # The query modules a run registers, by what it wants: rows need no
+  # findings, and registering a module takes a digest of the code it
+  # reaches, which a VM computes once by reading every module of it. A
+  # session that registers fewer leaves out of its manifest what it kept
+  # of the others (`Roux.Lang.Manifest.restore/2`), which a later run
+  # computes again.
+  @solving [Graph.Inputs, Graph.Extraction, Graph.Relations, Graph.Solve]
+  @modules %{rows: @solving, located: @solving ++ [Graph.Findings, Graph.Locate]}
 
   # The program's id: a session holds one set of beams.
   @program :beams
 
   @doc false
-  # Runs `demand` over the graph, set for the analysis's extractors over
-  # `modules` (atoms or `.beam` paths) and the program made of `roots`
-  # (the files a solve includes, in order), with `options` as the
-  # relations the analysis's options fill: in a session kept under `cache`,
-  # or in one that keeps nothing.
+  # What `analysis` wants of the graph (`:rows`, the rows of the program's
+  # output relations by name, or `:located`, its findings placed at their
+  # calls), set for its extractors over `modules` (atoms or `.beam` paths)
+  # and the program made of `roots` (the files a solve includes, in
+  # order), with `options` as the relations the analysis's options fill:
+  # in a session kept under `cache`, or in one that keeps nothing.
   @spec run(
           module(),
           [module() | Path.t()],
           [Path.t()],
           %{String.t() => String.t()},
           Path.t() | nil,
-          (Roux.Database.t() -> result)
-        ) :: result | {:error, term()}
-        when result: var
-  def run(analysis, modules, roots, options, cache, demand) do
+          :rows | :located
+        ) :: {:ok, map() | [Argus.Located.t()]} | {:error, term()}
+  def run(analysis, modules, roots, options, cache, wanted) do
     with {:ok, paths} <- Argus.Pipeline.Disassemble.resolve_paths(modules) do
-      session = open(cache)
+      session = open(cache, Map.fetch!(@modules, wanted))
 
       try do
         paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq()
         sources = set_program(session.db, paths, analysis.extractors(), session.sources)
         set_rules(session.db, roots, options)
-        result = demand.(session.db)
+        result = demand(session.db, wanted, analysis)
         commit(session, sources)
         result
       after
@@ -79,16 +79,17 @@ defmodule ArgusNxTensorAnalyses.Graph do
     end
   end
 
-  # Opens a session over the graph: kept under `cache` (its manifest, and
-  # the blob store its facts and solves are kept in), or, for nil, in a
-  # blob store of its own that closing it removes, which keeps nothing.
-  defp open(nil), do: Session.open(modules: @modules, blob: Blob.temporary())
+  # Opens a session over the graph's `modules`: kept under `cache` (its
+  # manifest, and the blob store its facts and solves are kept in), or,
+  # for nil, in a blob store of its own that closing it removes, which
+  # keeps nothing.
+  defp open(nil, modules), do: Session.open(modules: modules, blob: Blob.temporary())
 
-  defp open(cache) do
+  defp open(cache, modules) do
     File.mkdir_p!(cache)
 
     Session.open(
-      modules: @modules,
+      modules: modules,
       manifest: Path.join(cache, "manifest"),
       blob: Path.join(cache, "store")
     )
@@ -212,19 +213,14 @@ defmodule ArgusNxTensorAnalyses.Graph do
     end
   end
 
-  @doc false
-  # The rows of the program's output relations, by name.
-  @spec rows(Roux.Database.t()) :: {:ok, map()} | {:error, term()}
-  def rows(db) do
+  defp demand(db, :rows, _analysis) do
     with {:ok, digest} <- Runtime.query(db, :solve, @program),
          do: Graph.Findings.rows(db.blob, digest)
   end
 
-  @doc false
-  # The findings of `analysis`, each placed at its call in its module's
-  # source.
-  @spec located(Roux.Database.t(), module()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
-  def located(db, analysis) do
+  # The analysis whose findings are built is set with its code only here:
+  # rows need neither.
+  defp demand(db, :located, analysis) do
     :ok = Input.set(db, :analysis, :all, %{module: analysis, code: code([analysis], db.blob)})
     Runtime.query(db, :located, @program)
   end

@@ -24,21 +24,22 @@ defmodule ArgusNxTensorAnalyses.Solve do
   @spec solve(module(), [module() | Path.t()], Path.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def solve(analysis, modules, program, options),
-    do: graph(analysis, modules, program, options, &Graph.rows/1)
+    do: graph(analysis, modules, program, options, :rows)
 
   # Solves the analysis's program over the modules and returns each of its
   # findings placed at its call in the module's source.
   @spec run(module(), [module() | Path.t()], keyword()) ::
           {:ok, [Argus.Located.t()]} | {:error, term()}
   def run(analysis, modules, options),
-    do: graph(analysis, modules, analysis.rules_file(), options, &Graph.located(&1, analysis))
+    do: graph(analysis, modules, analysis.rules_file(), options, :located)
 
-  # `demand` over the graph, set for the analysis over the modules and for
-  # `program` after the Argus files it builds on.
-  defp graph(analysis, modules, program, options, demand) do
+  # What is `wanted` of the graph (`ArgusNxTensorAnalyses.Graph.run/6`),
+  # set for the analysis over the modules and for `program` after the Argus
+  # files it builds on.
+  defp graph(analysis, modules, program, options, wanted) do
     roots = argus_includes() ++ [Path.expand(program)]
     cache = Keyword.get(options, :cache)
-    Graph.run(analysis, modules, roots, config_facts(options), cache, demand)
+    Graph.run(analysis, modules, roots, config_facts(options), cache, wanted)
   end
 
   # Each relation the options fill, by its file's text.
