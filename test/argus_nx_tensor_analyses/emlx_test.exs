@@ -67,6 +67,8 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     {{:mixed, "EXLA.Backend", "EMLX.Backend", "Nx.tensor/2"},
      "Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.iota({1}))"},
     {{:mixed, "EXLA.Backend", "EMLX.Backend", "Nx.tensor/2"},
+     "Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.tri(1, 1))"},
+    {{:mixed, "EXLA.Backend", "EMLX.Backend", "Nx.tensor/2"},
      "Nx.add(Nx.tensor([1.0], backend: {EXLA.Backend, client: :host}), Nx.iota({1}))"},
     {{:mixed, "EXLA.Backend", "EMLX.Backend", "Nx.backend_transfer/2"},
      "Nx.add(Nx.backend_transfer(Nx.iota({2}), EXLA.Backend), Nx.iota({2}))"},

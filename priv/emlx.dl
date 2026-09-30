@@ -345,12 +345,9 @@ places_on(call, backend, site) :-
 
 // The calls that make a tensor from data, a shape or a seed, on the
 // default backend or the one their `backend:` option names: those that
-// make one of no tensor but `Nx.tri`, and Nx's constants.
+// make one of no tensor, and Nx's constants.
 .decl creates_tensor(site: symbol)
-creates_tensor(site) :-
-  operation_site(site, operation, _),
-  nx_trait(operation, "creates"),
-  operation != "Nx.tri".
+creates_tensor(site) :- operation_site(site, operation, _), nx_trait(operation, "creates").
 creates_tensor(site) :- remote_call(site, _, "Nx.Constants", _, _).
 
 // A transfer or copy of a tensor to the backend its second argument
