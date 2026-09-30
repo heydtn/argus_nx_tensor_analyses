@@ -10,6 +10,6 @@ defmodule ArgusNxTensorAnalyses.EMLX.WordingTest do
     %{"emlx_divergence" => kinds} = EmittedKinds.emitted(["emlx_divergence"])
 
     assert kinds != [], "the rules name no divergence: read their kinds anew"
-    assert for(kind <- kinds, Wording.divergence(kind, "") == nil, do: kind) == []
+    assert for(kind <- kinds, Wording.divergence(kind, "", "", "Nx.add/2") == nil, do: kind) == []
   end
 end

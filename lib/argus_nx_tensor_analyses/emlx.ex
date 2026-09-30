@@ -85,6 +85,8 @@ defmodule ArgusNxTensorAnalyses.EMLX do
            "the type (f64, c128), the operand that can be negative (divisor, dividend, exponent), how the operand lands on a half (halved, half_added, mean), or the type and the amount shifted (s32 33)"},
           {:certain, :number,
            "1 where the code's own math causes it, 0 where only an input the analysis does not follow may"},
+          {:cause, :symbol,
+           "how, where a label shows it: the number written for an operand that can be negative (-1), or how it can be (subtract, input); else empty"},
           {:origin, :symbol, "the Nx call whose math causes it, or empty"},
           {:origin_operation, :symbol, "that call's function, as Nx.subtract/2"}
         ],
@@ -113,9 +115,11 @@ defmodule ArgusNxTensorAnalyses.EMLX do
   @impl true
   def finding(
         :tensor_emlx_divergence = relation,
-        [_id, _func, _operation, kind, detail | _rest] = row
+        [_id, _func, operation, kind, detail, _certain, cause | _rest] = row
       ) do
-    wording = Wording.divergence(kind, detail) || unknown_divergence(kind, detail)
+    wording =
+      Wording.divergence(kind, detail, cause, operation) || unknown_divergence(kind, detail)
+
     Finding.build(relation, row, wording)
   end
 
@@ -138,7 +142,7 @@ defmodule ArgusNxTensorAnalyses.EMLX do
     %{
       title: "computes something else on EMLX (#{kind})",
       detail: "The analysis reports #{kind}: #{detail}.",
-      label: "here",
+      label: "computes #{kind} (#{detail}) on EMLX",
       help: "see what EMLX computes for this call",
       frame: "because of this:"
     }

@@ -133,13 +133,13 @@ reported_as_unsupported(name) :- unsupported_type(name).
 // rather than -1. EMLX's compiler computes the same.
 
 // A remainder whose divisor or dividend can be negative.
-.decl negative_remainder(context: Context, site: symbol, operand: symbol, certain: number, origin: symbol)
-negative_remainder(context, site, "dividend", certain, origin) :-
+.decl negative_remainder(context: Context, site: symbol, operand: symbol, certain: number, origin: symbol, cause: symbol)
+negative_remainder(context, site, "dividend", certain, origin, cause) :-
   takes_remainder(site),
-  operand_can_be_negative(context, site, 0, certain, origin).
-negative_remainder(context, site, "divisor", certain, origin) :-
+  operand_can_be_negative(context, site, 0, certain, origin, cause).
+negative_remainder(context, site, "divisor", certain, origin, cause) :-
   takes_remainder(site),
-  operand_can_be_negative(context, site, 1, certain, origin).
+  operand_can_be_negative(context, site, 1, certain, origin, cause).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -148,39 +148,45 @@ takes_remainder(site) :- operation_site(site, operation, 2), nx_class(operation,
 
 // An argument asked about that can be negative: because of the code's
 // own math (`certain` 1), with the call whose math makes it so
-// (`origin`, "" for a written number), or only as an input the rules do
-// not follow can be (`certain` 0).
-.decl operand_can_be_negative(context: Context, site: symbol, position: number, certain: number, origin: symbol)
-operand_can_be_negative(context, site, position, 1, origin) :-
-  negative_by_math(context, site, position, origin).
-operand_can_be_negative(context, site, position, 0, "") :-
+// (`origin`, "" for a written number) and how (`cause`: the number
+// written as the argument, else as `lowered_by_math` names it), or only
+// as an input the rules do not follow can be (`certain` 0, "input").
+.decl operand_can_be_negative(context: Context, site: symbol, position: number, certain: number, origin: symbol, cause: symbol)
+operand_can_be_negative(context, site, position, 1, origin, text) :-
+  negative_by_math(context, site, position, "literal", text, origin, _).
+operand_can_be_negative(context, site, position, 1, origin, cause) :-
+  negative_by_math(context, site, position, kind, _, origin, cause),
+  kind != "literal".
+operand_can_be_negative(context, site, position, 0, "", "input") :-
   divergence_negative_asked(site, position),
   argument_sign(context, site, position, "negative", _, _),
-  !negative_by_math(context, site, position, _).
+  !negative_by_math(context, site, position, _, _, _, _).
 
-// Some value reaching the argument can be negative, and can lie at or
-// below -1 because of the code's own math (`in_region`): a written
-// number, or a call whose math puts it there.
-.decl negative_by_math(context: Context, site: symbol, position: number, origin: symbol)
-negative_by_math(context, site, position, origin) :-
+// A value reaching the argument (`kind`, `source`) that can be negative,
+// and can lie at or below -1 because of the code's own math
+// (`in_region`): a written number, or a call whose math puts it there,
+// and how, as `lowered_by_math` names it.
+.decl negative_by_math(context: Context, site: symbol, position: number, kind: symbol, source: symbol, origin: symbol, cause: symbol)
+negative_by_math(context, site, position, kind, source, origin, named) :-
   divergence_negative_asked(site, position),
   signed_argument(context, site, position, function, kind, source),
   may_have_sign(context, function, kind, source, "negative", _, _),
   in_region(context, function, kind, source, region, origin, cause),
   region_order(region, order),
   order <= 1,
-  lowered_by_math(cause, origin).
+  lowered_by_math(cause, origin, named).
 
 // A cause of a region at or below -1, with the call it names, that is
-// the code's own math (`made_by_math`); and, for a call the region rules
-// do not follow ("unbounded"), a difference whose first operand the
-// code's math lets be zero, as an index minus a number. A difference of
-// two inputs, or of two sizes, is negative only as inputs are.
-.decl lowered_by_math(cause: symbol, origin: symbol)
-lowered_by_math(cause, origin) :-
+// the code's own math (`made_by_math`), named as it is; and, for a call
+// the region rules do not follow ("unbounded"), a difference whose first
+// operand the code's math lets be zero, as an index minus a number,
+// named "subtract". A difference of two inputs, or of two sizes, is
+// negative only as inputs are.
+.decl lowered_by_math(cause: symbol, origin: symbol, named: symbol)
+lowered_by_math(cause, origin, cause) :-
   negative_cause(cause, origin),
   made_by_math(cause).
-lowered_by_math("unbounded", origin) :-
+lowered_by_math("unbounded", origin, "subtract") :-
   negative_cause("unbounded", origin),
   sign_rule(origin, "subtract"),
   argument_sign(_, origin, 0, "zero", _, cause),
@@ -212,10 +218,10 @@ divergence_negative_asked(site, 1) :- sign_rule(site, "power").
 
 // A power whose base and exponent can both be integers, and whose
 // exponent can be negative.
-.decl hanging_integer_power(context: Context, site: symbol, certain: number, origin: symbol)
-hanging_integer_power(context, site, certain, origin) :-
+.decl hanging_integer_power(context: Context, site: symbol, certain: number, origin: symbol, cause: symbol)
+hanging_integer_power(context, site, certain, origin, cause) :-
   integer_power(context, site),
-  operand_can_be_negative(context, site, 1, certain, origin).
+  operand_can_be_negative(context, site, 1, certain, origin, cause).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -707,36 +713,38 @@ nx_members("set", "leaves_backend", " shape struct template host moved backend "
 // "round_half" (`detail`, how the operand lands on a half: halved,
 // half_added, mean), or "wrapped_shift" (`detail`, the type and the
 // amount: `s32 33`). `certain` is 1 where the code's own math causes
-// it, 0 where only an input may; `origin` is the call whose math does,
-// "" for none or a written number.
-.decl emlx_divergence(context: Context, site: symbol, kind: symbol, detail: symbol, certain: number, origin: symbol)
-emlx_divergence(context, site, "narrowed_type", name, 1, "") :- narrowed_type(context, site, name).
-emlx_divergence(context, site, "narrowed_transfer", name, 1, origin) :-
+// it, 0 where only an input may; `cause` is how, where a finding shows
+// it: how a negative operand is negative (its number where it is
+// written, `-1`, else `subtract`, `input`, ...); `origin` is the call
+// whose math does, "" for none or a written number.
+.decl emlx_divergence(context: Context, site: symbol, kind: symbol, detail: symbol, certain: number, cause: symbol, origin: symbol)
+emlx_divergence(context, site, "narrowed_type", name, 1, "", "") :- narrowed_type(context, site, name).
+emlx_divergence(context, site, "narrowed_transfer", name, 1, "", origin) :-
   narrowed_transfer(context, site, name, origin).
-emlx_divergence(context, site, "negative_remainder", operand, certain, origin) :-
-  negative_remainder(context, site, operand, certain, origin).
-emlx_divergence(context, site, "negative_integer_power", "exponent", certain, origin) :-
-  hanging_integer_power(context, site, certain, origin).
-emlx_divergence(context, site, "round_half", cause, 1, origin) :-
+emlx_divergence(context, site, "negative_remainder", operand, certain, cause, origin) :-
+  negative_remainder(context, site, operand, certain, origin, cause).
+emlx_divergence(context, site, "negative_integer_power", "exponent", certain, cause, origin) :-
+  hanging_integer_power(context, site, certain, origin, cause).
+emlx_divergence(context, site, "round_half", cause, 1, "", origin) :-
   rounds_half(context, site, cause, origin).
-emlx_divergence(context, site, "wrapped_shift", cat(type, " ", amount), 1, "") :-
+emlx_divergence(context, site, "wrapped_shift", cat(type, " ", amount), 1, "", "") :-
   wrapped_shift(context, site, type, amount).
 
 // The most certain of a finding's rows, in any context.
 .decl divergence_certainty(site: symbol, kind: symbol, detail: symbol, certain: number)
 divergence_certainty(site, kind, detail, certain) :-
-  emlx_divergence(_, site, kind, detail, _, _),
-  certain = max value : { emlx_divergence(_, site, kind, detail, value, _) }.
+  emlx_divergence(_, site, kind, detail, _, _, _),
+  certain = max value : { emlx_divergence(_, site, kind, detail, value, _, _) }.
 
-.decl tensor_emlx_divergence(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, certain: number, origin: symbol, origin_operation: symbol)
+.decl tensor_emlx_divergence(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, certain: number, cause: symbol, origin: symbol, origin_operation: symbol)
 .output tensor_emlx_divergence
-tensor_emlx_divergence(site, function, operation, kind, detail, certain, origin, origin_operation) :-
-  emlx_divergence(_, site, kind, detail, certain, origin),
+tensor_emlx_divergence(site, function, operation, kind, detail, certain, cause, origin, origin_operation) :-
+  emlx_divergence(_, site, kind, detail, certain, cause, origin),
   divergence_certainty(site, kind, detail, certain),
   finding_call(site, function, operation),
   call_spelled(origin, origin_operation).
-named_call(site) :- emlx_divergence(_, site, _, _, _, _).
-named_call(origin) :- emlx_divergence(_, _, _, _, _, origin).
+named_call(site) :- emlx_divergence(_, site, _, _, _, _, _).
+named_call(origin) :- emlx_divergence(_, _, _, _, _, _, origin).
 
 // A tensor on another backend than EMLX's (`backend`, put there by
 // `origin`) and a tensor it cannot meet (`other`, put there by
