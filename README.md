@@ -8,31 +8,7 @@ infinity or a NaN, types, literals and options Nx rejects, and misuse of
 traced code, gradients, random keys, containers and servings.
 [docs/checks.md](docs/checks.md) lists every finding.
 
-```
-error[argus.nx_shapes]: Nx.dot/2 contracts axes that do not match
-   ╭─[lib/my_app/model.ex:13:5]
-   │
-12 │   def project(input, weight) do
-13 │     Nx.dot(input, weight)
-   •     ──────────┬──────────
-   •               ╰── gets {4, 8} and {6, 16}
-14 │   end
-15 │
-16 │   def model do
-17 │     input = Nx.iota({4, 8})
-   •     ───────────┬───────────
-   •                ╰── makes {4, 8}, the first argument of Nx.dot/2
-18 │     good = project(input, Nx.iota({8, 16}))
-19 │     bad = project(input, Nx.iota({6, 16}))
-   •     ──────────────────┬───────────────────
-   •                       ╰── makes {6, 16}, the second argument of Nx.dot/2; calls MyApp.Model.project/2 with these shapes
-20 │     {good, bad}
-21 │   end
-   │
-   ╰─────
-     note: Nx.dot contracts axes in pairs, one from each side, and each pair must have one size; batch axes pair up the same way. Nx raises: dot/zip expects shapes to be compatible, dimension 1 of left-side (8) does not equal dimension 0 of right-side (6).
-     help: contract axes of one size: transpose or reshape an operand, or give the contraction and batch axes explicitly
-```
+![A finding as mix argus prints it: Nx.dot/2 contracts axes that do not match, its call labeled with the shapes it gets, frames at the calls that make each operand, and a note quoting the error Nx raises](example.png)
 
 Each finding's title says what the call does wrong, and its label shows the
 shapes the call gets. Related frames point at the calls that make each
