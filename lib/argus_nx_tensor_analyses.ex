@@ -21,8 +21,9 @@ defmodule ArgusNxTensorAnalyses do
       differently from BinaryBackend and EXLA, and calls that get tensors
       of two backends that cannot meet.
 
-  `run/3` runs the engines a set of categories needs, and solves each
-  engine's program once, whichever of its categories are asked for.
+  `run/3` solves one program for a set of categories: the Nx engine's for
+  the Nx categories alone, and EMLX's, which includes it and finds the Nx
+  categories too, for any set with `emlx`.
 
   Argus runs only the analyses it ships, so `mix argus_nx_tensor_analyses`
   runs these beside Argus's own and reports both as one; aliased as
@@ -92,27 +93,16 @@ defmodule ArgusNxTensorAnalyses do
     end
   end
 
-  # The findings of each engine the categories need, placed: the Nx
-  # engine's for the Nx categories, EMLX's for `emlx`, each only of those
-  # categories.
+  # The categories' findings, placed by the one engine whose program finds
+  # them all: EMLX's for `emlx`, since its program includes the Nx
+  # engine's and builds its findings too, else the Nx engine's.
+  defp placed(_modules, [], _options), do: {:ok, []}
+
   defp placed(modules, categories, options) do
-    engines =
-      for {engine, needed?} <- [
-            {TensorShapes, Enum.any?(categories, &(&1 != :emlx))},
-            {EMLX, :emlx in categories}
-          ],
-          needed?,
-          do: engine
+    engine = if :emlx in categories, do: EMLX, else: TensorShapes
 
-    Enum.reduce_while(engines, {:ok, []}, fn engine, {:ok, placed} ->
-      case engine.run(modules, program_options(options, engine)) do
-        {:ok, found} ->
-          {:cont, {:ok, placed ++ Enum.filter(found, &(&1.finding.analysis in categories))}}
-
-        {:error, _reason} = error ->
-          {:halt, error}
-      end
-    end)
+    with {:ok, found} <- engine.run(modules, program_options(options, engine)),
+         do: {:ok, Enum.filter(found, &(&1.finding.analysis in categories))}
   end
 
   # The options an engine runs with: `:cache` its program's own directory

@@ -7,6 +7,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
   use ArgusNxTensorAnalyses.TensorAnalysisCase
 
   alias ArgusNxTensorAnalyses.EMLX
+  alias ArgusNxTensorAnalyses.TensorShapes
 
   @fixtures ArgusNxTensorAnalyses.EMLXTest.Fixtures
   @on_exla ArgusNxTensorAnalyses.EMLXTest.OnExla
@@ -42,7 +43,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     # a jit's options are its compiler's, and name no tensor's type
     {:quiet, "Nx.add(Nx.Defn.jit(fn x -> x end, type: :f64).(t), 1)"},
     {:quiet, "Nx.as_type(Nx.backend_transfer(t, EXLA.Backend), :f64)"},
-    # listed as unsupported, so the tensor shapes analysis reports it
+    # listed as unsupported, so nx_types reports it
     {:quiet, "Nx.tensor([1.0], type: :c128)"},
     # tensors of those types moved onto EMLX
     {{:finds, "narrowed_transfer", "f64", "1"},
@@ -171,11 +172,17 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     %{source: on_exla_source, beams: on_exla_beams} =
       compile_fixtures("emlx_on_exla", @on_exla_source)
 
-    # c128 listed as unsupported: the tensor shapes analysis reports its
-    # tensors, and this analysis leaves them to it.
+    # c128 listed as unsupported: nx_types reports its tensors, and emlx
+    # leaves them to it.
     solved =
       solve_concurrently("emlx",
         rows: &EMLX.solve(beams, unsupported_types: [:c128], cache: &1),
+        nx_rows:
+          &TensorShapes.solve(beams, TensorShapes.rules_file(),
+            unsupported_types: [:c128],
+            cache: &1
+          ),
+        categorized: &categorized(beams, &1),
         on_exla: &EMLX.run(on_exla_beams, cache: &1)
       )
 
@@ -199,7 +206,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     end
   end
 
-  test "a type listed as unsupported is the tensor shapes analysis's finding", %{rows: rows} do
+  test "a type listed as unsupported is an nx_types finding", %{rows: rows} do
     function = case_id(Enum.find_index(@cases, &(elem(&1, 1) =~ ":c128")) + 1)
 
     assert [{"Nx.tensor/2", "unsupported_type", "c128"}] =
@@ -294,6 +301,36 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
              "Nx.add(moved, Nx.iota({2}))",
              "moved = Nx.backend_transfer(Nx.iota({2}), EMLX.Backend)"
            ]
+  end
+
+  test "the program outputs the Nx engine's rows as the Nx program does", %{
+    rows: rows,
+    nx_rows: nx_rows
+  } do
+    assert nx_rows |> nx_report_rows() |> Map.values() |> Enum.concat() != []
+    assert nx_report_rows(rows) == nx_report_rows(nx_rows)
+  end
+
+  test "a run of every category solves this program alone", %{categorized: categorized} do
+    %{found: found, kept: kept} = categorized
+
+    assert kept == ["emlx"]
+    assert found |> Map.keys() |> Enum.sort() == Enum.sort(ArgusNxTensorAnalyses.analyses())
+
+    for {category, placed} <- found, %{finding: finding} <- placed do
+      assert {finding.analysis, finding.concern} == {category, category}
+    end
+
+    assert found.emlx != []
+    assert Enum.any?(found.nx_types, &(&1.finding.title =~ "c128"))
+  end
+
+  # Every category's findings in the modules, and what the run keeps under
+  # `cache`.
+  defp categorized(beams, cache) do
+    with {:ok, found} <-
+           ArgusNxTensorAnalyses.run(beams, [:all], unsupported_types: [:c128], cache: cache),
+         do: {:ok, %{found: found, kept: File.ls!(cache)}}
   end
 
   defp case_id(index), do: function_id(@fixtures, "case_#{index}", 1)

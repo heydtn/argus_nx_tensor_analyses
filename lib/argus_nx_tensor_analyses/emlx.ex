@@ -48,7 +48,10 @@ defmodule ArgusNxTensorAnalyses.EMLX do
 
   It extracts, solves, caches and places findings as
   `ArgusNxTensorAnalyses.TensorShapes` does, through its `solve/3` and
-  `run/2`.
+  `run/2`. Its program's outputs include the Nx engine's report
+  relations, whose findings it builds as that engine does, so one solve of
+  it finds every category, the Nx ones and `emlx`
+  (`ArgusNxTensorAnalyses.run/3`).
   """
 
   @behaviour Argus.Analysis
@@ -75,47 +78,48 @@ defmodule ArgusNxTensorAnalyses.EMLX do
 
   @impl true
   def output_relations do
-    [
-      %{
-        name: :tensor_emlx_divergence,
-        fields: [
-          {:id, :instr_id, "the Nx call"},
-          {:func, :func_id, "the function making it"},
-          {:operation, :symbol, "the Nx function, as Nx.remainder/2"},
-          {:kind, :symbol,
-           "what EMLX does differently: narrowed_type, narrowed_transfer, negative_remainder, negative_integer_power, round_half or wrapped_shift"},
-          {:detail, :symbol,
-           "the type (f64, c128), the operand that can be negative (divisor, dividend, exponent), how the operand lands on a half (halved, half_added, mean), or the type and the amount shifted (s32 33)"},
-          {:certain, :number,
-           "1 where the code's own math causes it, 0 where only an input the analysis does not follow may"},
-          {:cause, :symbol,
-           "how, where a label shows it: the number written for an operand that can be negative (-1), or how it can be (subtract, input), or the class and number that put a round's operand on a half (divide 2, add 0.5); else empty"},
-          {:origin, :symbol, "the Nx call whose math causes it, or empty"},
-          {:origin_operation, :symbol, "that call's function, as Nx.subtract/2"}
-        ],
-        key: [:id, :kind, :detail],
-        doc: "An Nx call EMLX computes differently from BinaryBackend and EXLA."
-      },
-      %{
-        name: :tensor_emlx_mixed_backends,
-        fields: [
-          {:id, :instr_id, "the Nx call"},
-          {:func, :func_id, "the function making it"},
-          {:operation, :symbol, "the Nx function, as Nx.add/2"},
-          {:backend, :symbol, "the backend of one tensor it gets, as EXLA.Backend"},
-          {:operand, :symbol,
-           "which operand that tensor is: its argument's position, then a list cell for an element of a list (0, 1)"},
-          {:origin, :symbol, "the call that puts that tensor there"},
-          {:origin_operation, :symbol, "that call's function, as Nx.Defn.jit/2"},
-          {:other, :symbol, "the backend of another tensor it gets, as EMLX.Backend"},
-          {:other_operand, :symbol, "which operand that tensor is"},
-          {:other_origin, :symbol, "the call that puts that tensor there"},
-          {:other_origin_operation, :symbol, "that call's function, as Nx.iota/2"}
-        ],
-        key: [:id, :backend, :other],
-        doc: "An Nx call that gets tensors of two backends that cannot meet."
-      }
-    ]
+    TensorShapes.output_relations() ++
+      [
+        %{
+          name: :tensor_emlx_divergence,
+          fields: [
+            {:id, :instr_id, "the Nx call"},
+            {:func, :func_id, "the function making it"},
+            {:operation, :symbol, "the Nx function, as Nx.remainder/2"},
+            {:kind, :symbol,
+             "what EMLX does differently: narrowed_type, narrowed_transfer, negative_remainder, negative_integer_power, round_half or wrapped_shift"},
+            {:detail, :symbol,
+             "the type (f64, c128), the operand that can be negative (divisor, dividend, exponent), how the operand lands on a half (halved, half_added, mean), or the type and the amount shifted (s32 33)"},
+            {:certain, :number,
+             "1 where the code's own math causes it, 0 where only an input the analysis does not follow may"},
+            {:cause, :symbol,
+             "how, where a label shows it: the number written for an operand that can be negative (-1), or how it can be (subtract, input), or the class and number that put a round's operand on a half (divide 2, add 0.5); else empty"},
+            {:origin, :symbol, "the Nx call whose math causes it, or empty"},
+            {:origin_operation, :symbol, "that call's function, as Nx.subtract/2"}
+          ],
+          key: [:id, :kind, :detail],
+          doc: "An Nx call EMLX computes differently from BinaryBackend and EXLA."
+        },
+        %{
+          name: :tensor_emlx_mixed_backends,
+          fields: [
+            {:id, :instr_id, "the Nx call"},
+            {:func, :func_id, "the function making it"},
+            {:operation, :symbol, "the Nx function, as Nx.add/2"},
+            {:backend, :symbol, "the backend of one tensor it gets, as EXLA.Backend"},
+            {:operand, :symbol,
+             "which operand that tensor is: its argument's position, then a list cell for an element of a list (0, 1)"},
+            {:origin, :symbol, "the call that puts that tensor there"},
+            {:origin_operation, :symbol, "that call's function, as Nx.Defn.jit/2"},
+            {:other, :symbol, "the backend of another tensor it gets, as EMLX.Backend"},
+            {:other_operand, :symbol, "which operand that tensor is"},
+            {:other_origin, :symbol, "the call that puts that tensor there"},
+            {:other_origin_operation, :symbol, "that call's function, as Nx.iota/2"}
+          ],
+          key: [:id, :backend, :other],
+          doc: "An Nx call that gets tensors of two backends that cannot meet."
+        }
+      ]
   end
 
   @impl true
@@ -143,6 +147,12 @@ defmodule ArgusNxTensorAnalyses.EMLX do
     Finding.build(wording, id, operation, Finding.severity(relation, row, wording), related)
   end
 
+  # The Nx engine's report relations, which the program outputs too.
+  def finding(relation, row), do: TensorShapes.finding(relation, row)
+
+  @impl true
+  def evidence(relation, row), do: TensorShapes.evidence(relation, row)
+
   # A kind the program has and the wording does not describe still reads.
   defp unknown_divergence(kind, detail) do
     %{
@@ -165,8 +175,9 @@ defmodule ArgusNxTensorAnalyses.EMLX do
   @doc """
   Solves this analysis's program over the modules (atoms or `.beam`
   paths) and returns each finding placed at its call in the module's
-  source. Takes `ArgusNxTensorAnalyses.TensorShapes.solve/3`'s options:
-  give it a `:cache` directory of its own.
+  source, the Nx engine's among them. Takes
+  `ArgusNxTensorAnalyses.TensorShapes.solve/3`'s options: give it a
+  `:cache` directory of its own.
   """
   @spec run([module() | Path.t()], keyword()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
   def run(modules, options \\ []), do: Solve.run(__MODULE__, modules, options)

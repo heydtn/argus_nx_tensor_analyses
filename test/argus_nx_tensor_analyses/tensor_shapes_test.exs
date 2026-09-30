@@ -6,6 +6,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
   import ExUnit.CaptureIO
 
+  alias ArgusNxTensorAnalyses.EMLX
   alias ArgusNxTensorAnalyses.TensorShapes
 
   @fixtures ArgusNxTensorAnalyses.TensorShapesTest.Fixtures
@@ -3577,6 +3578,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       solve_concurrently("tensor_shapes",
         rows: &TensorShapes.solve(beams, probe, unsupported_types: [:f64], cache: &1),
         placed: &TensorShapes.run(beams, cache: &1),
+        nx_rows:
+          &TensorShapes.solve(beams, TensorShapes.rules_file(),
+            unsupported_types: [:f64],
+            cache: &1
+          ),
+        emlx_rows: &EMLX.solve(beams, unsupported_types: [:f64], cache: &1),
         float_rows:
           &TensorShapes.solve([configured], TensorShapes.rules_file(),
             float_types: [:f16, :bf16, :f32],
@@ -5600,6 +5607,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
   # ── LinAlg: tests of their own ──
   # (end of LinAlg tests)
+
+  # A run that asks for `emlx` and Nx categories together solves the EMLX
+  # program alone, and builds the Nx findings from its rows.
+  test "the EMLX program outputs this program's rows", %{nx_rows: nx_rows, emlx_rows: emlx_rows} do
+    assert nx_rows |> nx_report_rows() |> Map.values() |> Enum.concat() != []
+    assert nx_report_rows(emlx_rows) == nx_report_rows(nx_rows)
+  end
 
   test "run/2 places a finding at its call", %{placed: placed, source: source} do
     reshape =

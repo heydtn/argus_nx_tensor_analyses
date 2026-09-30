@@ -352,14 +352,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   @doc """
   Solves the program over the modules (atoms or `.beam` paths) and returns
   each finding placed at its call in the module's source. Takes `solve/3`'s
-  options, and:
-
-    * `:analysis` — the `Argus.Analysis` whose program (its
-      `c:Argus.Analysis.rules_file/0`) is solved and whose output
-      relations the findings are built from, for an analysis whose program
-      includes this one's. Default: this analysis.
+  options.
   """
   @spec run([module() | Path.t()], keyword()) :: {:ok, [Argus.Located.t()]} | {:error, term()}
-  def run(modules, options \\ []),
-    do: Solve.run(Keyword.get(options, :analysis, __MODULE__), modules, options)
+  def run(modules, options \\ []), do: Solve.run(__MODULE__, modules, options)
 end

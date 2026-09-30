@@ -120,6 +120,17 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
         do: project(finding, fields)
   end
 
+  # The rows of the Nx engine's output relations, by name, which the EMLX
+  # program outputs too.
+  @spec nx_report_rows(map()) :: map()
+  def nx_report_rows(rows) do
+    names =
+      for %{name: name} <- ArgusNxTensorAnalyses.TensorShapes.output_relations(),
+          do: Atom.to_string(name)
+
+    Map.take(rows, names)
+  end
+
   # A row of an output relation of either engine by its fields' names.
   defp named(row, names, relation),
     do: names |> Enum.zip(row) |> Map.new() |> Map.put(:relation, relation)
