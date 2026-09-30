@@ -213,26 +213,29 @@ held_asked(function, kind, source, "template") :-
   operation_site(_, "Nx.template", _),
   computes_on(_, function, _, kind, source).
 
-// A call of `Nx.Defn.jit` or `compile` whose function raises when it
-// runs during another compilation: any compile, and a jit told nothing
-// else to do then.
+// A call that returns a jitted or compiled function (`jit_call`) that
+// raises when it runs during another compilation: any compile, and a jit
+// told nothing else to do then.
 .decl makes_jitted(site: symbol)
 makes_jitted(site) :-
-  remote_call(site, _, "Nx.Defn", name, _),
-  match("jit|compile", name),
+  jit_call(site, _, "returns"),
   !resolves_conflict(site).
 
 // A jit whose options may say what to do when another compilation runs:
 // they give `on_conflict:`, or may hold keys the rules cannot read.
 .decl resolves_conflict(site: symbol)
 resolves_conflict(site) :-
-  remote_call(site, _, "Nx.Defn", name, _),
-  match("jit|jit_apply", name),
+  called_name(site, operation, _),
+  nx_trait(operation, "takes_on_conflict"),
   option_given(site, "on_conflict").
 resolves_conflict(site) :-
-  remote_call(site, _, "Nx.Defn", name, _),
-  match("jit|jit_apply", name),
+  called_name(site, operation, _),
+  nx_trait(operation, "takes_on_conflict"),
   options_open(site).
+
+// The jits whose `:on_conflict` option says what the function they jit
+// does when it runs during another compilation.
+nx_members("trait", "takes_on_conflict", " Nx.Defn.jit Nx.Defn.jit_apply EXLA.jit EXLA.jit_apply ").
 
 // An Nx call whose result is a tensor: any but those that answer with a
 // number, a shape, a type, a list, a binary or a tuple, or hand back
@@ -521,7 +524,7 @@ runs_jitted(site, function, maker) :-
   flow_callee(site, function, "fun", kind, source),
   holds(function, kind, source, "jitted", maker).
 runs_jitted(site, function, "") :-
-  remote_call(site, function, "Nx.Defn", "jit_apply", _),
+  jit_call(site, function, "runs"),
   !resolves_conflict(site),
   !runs_own_body(site).
 
@@ -613,7 +616,7 @@ template_computed(site, function, position, template) :-
 .decl computes(site: symbol)
 computes(site) :- operation_site(site, _, _).
 computes(site) :- runs_jitted(site, _, maker), maker != "".
-computes(site) :- remote_call(site, _, "Nx.Defn", "jit_apply", _).
+computes(site) :- jit_call(site, _, "runs").
 
 // The value at `position` that a call would compute with: a tensor
 // operand of an Nx call but one that reads only a tensor's shape, names
@@ -632,7 +635,7 @@ computes_on(site, function, position, kind, source) :-
   flow_dynamic(site, function, _),
   argument_source(site, function, position, kind, source).
 computes_on(site, function, position, kind, source) :-
-  remote_call(site, function, "Nx.Defn", "jit_apply", _),
+  jit_call(site, function, "runs"),
   compiled_argument_cell(site, function, position, cell),
   flow_field(function, cell, "head", kind, source).
 
@@ -644,17 +647,19 @@ nx_members("set", "takes_template", " shape struct template renamed ").
 nx_members("trait", "takes_template", " Nx.tensor Nx.transpose Nx.flatten Nx.fill Nx.iota Nx.eye ").
 
 // The cells of the written list a compile takes its templates in, or
-// `jit_apply` its arguments, by index.
+// `jit_apply` its arguments ("compiled_arguments"), by index.
 .decl compiled_argument_cell(site: symbol, function: symbol, index: number, cell: symbol)
 compiled_argument_cell(site, function, index, cell) :-
-  remote_call(site, function, "Nx.Defn", name, _),
-  match("compile|jit_apply", name),
-  argument_source(site, function, 1, "object", list),
+  called_name(site, operation, arity),
+  nx_argument(operation, arity, position, "compiled_arguments"),
+  argument_source(site, function, position, "object", list),
   list_cell(list, index, cell).
 list_asked(list) :-
-  remote_call(site, function, "Nx.Defn", name, _),
-  match("compile|jit_apply", name),
-  argument_source(site, function, 1, "object", list).
+  called_name(site, operation, arity),
+  nx_argument(operation, arity, position, "compiled_arguments"),
+  argument_source(site, _, position, "object", list).
+
+nx_members("argument", "compiled_arguments", " Nx.Defn.compile:1 Nx.Defn.jit_apply:1 EXLA.compile:1 EXLA.jit_apply:1 ").
 
 // ══ Findings ════════════════════════════════════════════════════════
 

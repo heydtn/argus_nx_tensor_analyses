@@ -3478,7 +3478,8 @@ nx_members("argument", "options", cat(
 nx_members("argument", "options", cat(
   " Nx.reduce/3:3 Nx.reduce/4:2 Nx.window_reduce/4:4 Nx.window_reduce/5:3",
   " Nx.window_scatter_max/4:4 Nx.window_scatter_max/5:4 Nx.window_scatter_min/4:4",
-  " Nx.window_scatter_min/5:4 Nx.Defn.jit/2:1 Nx.Defn.compile/3:2 Nx.Defn.jit_apply/3:2 ")).
+  " Nx.window_scatter_min/5:4 Nx.Defn.jit/2:1 Nx.Defn.compile/3:2 Nx.Defn.jit_apply/3:2",
+  " EXLA.jit/2:1 EXLA.compile/3:2 EXLA.jit_apply/3:2 ")).
 
 .decl option_key(key: symbol)
 option_key("axes"). option_key("keep_axes"). option_key("axis"). option_key("keep_axis").
