@@ -19,6 +19,10 @@ it is committed; all of it can be made again.
   (`_build/dev/lib/<app>/ebin/*.beam`) into `beams/<name>/`. Keep that
   copy frozen for as long as you compare against it.
 
+Beams compiled again differ from the ones they replace (a `defn` keeps
+its source file's path), so after refilling `beams/`, take a new
+baseline before comparing.
+
 ## Checking a change
 
 1. At the commit before the change: `mix run dev/identity/identity.exs baseline`.
