@@ -2,7 +2,9 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
   @moduledoc false
   # A test module of the analyses: fixtures compiled into a directory of
   # their own and solved once, for the module's tests to read what the
-  # analysis finds in them and what Nx does running them.
+  # analysis finds in them and what Nx does running them. A solve's rows
+  # are cached under the build path, and a run whose facts, rules, Argus
+  # and solver are unchanged reads them back.
   #
   # Not async: compiling the fixtures loads them into the VM, and silences
   # the compiler by capturing `:stderr`, which every process shares.
@@ -50,13 +52,17 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
     %{directory: directory, source: path, beams: Path.wildcard(Path.join(directory, "*.beam"))}
   end
 
-  # Runs each solve (a function giving `{:ok, result}`) at once, since each
-  # spends most of its time in Souffle compiling its program, and gives
-  # each result by its name.
-  @spec solve_concurrently(keyword((-> {:ok, term()}))) :: %{atom() => term()}
-  def solve_concurrently(solves) do
+  # Runs each solve at once, since each spends most of its time in Souffle
+  # compiling its program, and gives each result by its name. A solve is a
+  # function of the directory to cache its rows in, giving `{:ok,
+  # result}`; each has its own, named for `group` and the solve, since a
+  # cache keeps only its latest rows.
+  @spec solve_concurrently(String.t(), keyword((Path.t() -> {:ok, term()}))) ::
+          %{atom() => term()}
+  def solve_concurrently(group, solves) do
     solves
-    |> Task.async_stream(fn {name, solve} -> {name, solve.()} end,
+    |> Task.async_stream(
+      fn {name, solve} -> {name, solve.(suite_path(["solves", group, Atom.to_string(name)]))} end,
       max_concurrency: length(solves),
       timeout: :infinity
     )

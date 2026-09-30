@@ -3170,14 +3170,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       Path.join(directory, "Elixir.ArgusNxTensorAnalyses.TensorShapesTest.DtypesConfigured.beam")
 
     solved =
-      solve_concurrently(
-        rows: fn -> TensorShapes.solve(beams, probe, unsupported_types: [:f64]) end,
-        placed: fn -> TensorShapes.run(beams) end,
-        float_rows: fn ->
-          TensorShapes.solve([configured], TensorShapes.rules_file(),
-            float_types: [:f16, :bf16, :f32]
+      solve_concurrently("tensor_shapes",
+        rows: &TensorShapes.solve(beams, probe, unsupported_types: [:f64], cache: &1),
+        placed: &TensorShapes.run(beams, cache: &1),
+        float_rows:
+          &TensorShapes.solve([configured], TensorShapes.rules_file(),
+            float_types: [:f16, :bf16, :f32],
+            cache: &1
           )
-        end
       )
 
     Map.put(solved, :source, source)

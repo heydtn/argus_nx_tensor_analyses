@@ -135,9 +135,9 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     # c128 listed as unsupported: the tensor shapes analysis reports its
     # tensors, and this analysis leaves them to it.
     solved =
-      solve_concurrently(
-        rows: fn -> EMLX.solve(beams, unsupported_types: [:c128]) end,
-        on_exla: fn -> EMLX.run(on_exla_beams) end
+      solve_concurrently("emlx",
+        rows: &EMLX.solve(beams, unsupported_types: [:c128], cache: &1),
+        on_exla: &EMLX.run(on_exla_beams, cache: &1)
       )
 
     Map.put(solved, :on_exla_source, on_exla_source)
