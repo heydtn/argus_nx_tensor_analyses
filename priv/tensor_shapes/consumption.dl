@@ -296,8 +296,7 @@ frees_tensor(site, function, kind, source, freed) :-
 // that, or a JIT call (`Nx.Defn.jit_apply`, a `defn` of the program).
 .decl reads_tensor_data(site: symbol) inline
 reads_tensor_data(site) :- operation_site(site, operation, _), !nx_trait(operation, "struct_only").
-reads_tensor_data(site) :- remote_call(site, _, "Nx.Defn", "jit_apply", _).
-reads_tensor_data(site) :- remote_call(site, _, "EXLA", "jit_apply", _).
+reads_tensor_data(site) :- jit_call(site, _, "runs").
 reads_tensor_data(site) :- program_call(site, _, callee), defn_wrapper(callee, _).
 
 // Nx functions that read and change only a tensor's struct: those that

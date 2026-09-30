@@ -457,22 +457,33 @@ defn_body(function) :- function_def(function, _, name, _, _), match("__defn:.*",
 .decl in_defn(function: symbol)
 in_defn(function) :- function_def(function, _, name, _, _), match("-?__defn:.*", name).
 
-// A call of one of `Nx.Defn`'s traces, and the position of the function
-// it traces: "grad" for `grad` and `value_and_grad`, "jit" for `jit`,
-// `jit_apply`, `compile` and `debug_expr`, and EXLA's, which run
-// `Nx.Defn`'s with EXLA as the compiler, but a `defn`'s own call of
-// `jit_apply` on its body, which is its "defn".
+// A call that traces a function, and the position of the function it
+// traces: "grad" for `Nx.Defn`'s `grad` and `value_and_grad`, "jit" for
+// the others (`jit_call`), but a `defn`'s own call of `jit_apply` on its
+// body, which is its "defn".
 .decl trace_call(site: symbol, function: symbol, position: number, how: symbol)
 trace_call(site, function, 0, "jit") :-
-  remote_call(site, function, "Nx.Defn", name, _),
-  match("jit|jit_apply|compile|debug_expr|debug_expr_apply", name),
+  jit_call(site, function, _),
   !runs_own_body(site).
-trace_call(site, function, 0, "jit") :-
-  remote_call(site, function, "EXLA", name, _),
-  match("jit|jit_apply|compile", name).
 trace_call(site, function, position, "grad") :-
   remote_call(site, function, "Nx.Defn", name, arity),
   gradient_function(name, arity, position).
+
+// A call that traces the function it is handed without differentiating
+// it, the function the call is in, and what the call gives (its class
+// "jit"): the function compiled ("returns": `jit`, `compile`), what that
+// returns over the arguments the call hands it ("runs": `jit_apply`), or
+// the expression traced ("expression": `debug_expr`, `debug_expr_apply`).
+// EXLA's `jit`, `jit_apply` and `compile` run `Nx.Defn`'s with EXLA as
+// the compiler.
+.decl jit_call(site: symbol, function: symbol, gives: symbol)
+jit_call(site, function, gives) :-
+  called_name(site, operation, _),
+  nx_class(operation, "jit", gives),
+  site_function(site, function).
+nx_members("jit", "returns", " Nx.Defn.jit Nx.Defn.compile EXLA.jit EXLA.compile ").
+nx_members("jit", "runs", " Nx.Defn.jit_apply EXLA.jit_apply ").
+nx_members("jit", "expression", " Nx.Defn.debug_expr Nx.Defn.debug_expr_apply ").
 
 // A `defn`'s call of `jit_apply` on its own body.
 .decl runs_own_body(site: symbol)
@@ -568,13 +579,13 @@ function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 // string rather than a fact each.
 .decl nx_members(facet: symbol, value: symbol, members: symbol)
 
-// The Nx functions the program names, by arity: those it calls, `Nx.Defn`'s
-// among them, and those of Nx it hands as a literal external fun
-// (`&Nx.sum/1`). Read from the code alone, so that rules may negate what
-// the views derive from it.
+// The Nx functions the program names, by arity: those it calls
+// (`called_name`: Nx's, its constants', `Nx.Defn`'s and EXLA's, those a
+// `defn` calls through `__remote__` among them), and those of Nx it hands
+// as a literal external fun (`&Nx.sum/1`). Read from the code alone, so
+// that rules may negate what the views derive from it.
 .decl nx_named(operation: symbol, arity: number)
 nx_named(operation, arity) :- called_name(_, operation, arity).
-nx_named(cat("Nx.Defn.", name), arity) :- remote_call(_, _, "Nx.Defn", name, arity).
 nx_named(cat("Nx.", substr(function, 3, strlen(function) - 5)), 1) :-
   fun_handed(_, _, function, _),
   match("Nx:[a-z_]+/1", function).
@@ -10490,10 +10501,13 @@ tensor_type_error(site, function, operation, kind, subject, position, certain, o
 named_call(site) :- type_error(site, _, _, _, _, _).
 named_call(origin) :- type_error(_, _, _, _, _, origin).
 
-// The module and function a call calls, Nx's or its constants'.
+// The module and function a call calls: Nx's, its constants', `Nx.Defn`'s
+// or EXLA's.
 .decl called_name(site: symbol, operation: symbol, arity: number)
 called_name(site, operation, arity) :- operation_site(site, operation, arity).
 called_name(site, cat("Nx.Constants.", name), arity) :- remote_call(site, _, "Nx.Constants", name, arity).
+called_name(site, cat("Nx.Defn.", name), arity) :- remote_call(site, _, "Nx.Defn", name, arity).
+called_name(site, cat("EXLA.", name), arity) :- remote_call(site, _, "EXLA", name, arity).
 
 // ── What a finding shows ───────────────────────────────────────────
 //
