@@ -159,8 +159,7 @@ defmodule ArgusNxTensorAnalyses.Solve do
   # Every relation's facts but the lines, which no rule reads and which a
   # comment moves; the program and every file it includes, without their
   # comments, as Argus keys a program; the Argus whose declarations they
-  # build on; and the solver, named by its version as Argus names it in
-  # its own keys.
+  # build on; and the solver.
   defp digest(directory, program) do
     directory
     |> File.ls!()
@@ -173,9 +172,21 @@ defmodule ArgusNxTensorAnalyses.Solve do
     end)
     |> hash_program(program)
     |> :crypto.hash_update(to_string(Application.spec(:argus_beam, :vsn)))
-    |> :crypto.hash_update(Argus.Souffle.version(Argus.Souffle.executable() || "souffle"))
+    |> hash_solver(Argus.Souffle.executable())
     |> :crypto.hash_final()
     |> Base.encode16(case: :lower)
+  end
+
+  # The solver by its version, as Argus names it in its own keys, and by
+  # the file it runs: a build can print an empty version (`Version: `),
+  # and its file still tells it from another. Without one on PATH there
+  # is no solve to cache.
+  defp hash_solver(state, nil), do: :crypto.hash_update(state, "no solver")
+
+  defp hash_solver(state, executable) do
+    state
+    |> :crypto.hash_update(Argus.Souffle.version(executable))
+    |> :crypto.hash_update(File.read!(executable))
   end
 
   # The program's files, found as Souffle finds an include, each by the
