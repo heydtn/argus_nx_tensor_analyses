@@ -6,7 +6,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording do
   #
   # A call error, hazard or type error is `%{title, detail, label, help,
   # frame}`, with an optional `:severity` (`:error`, `:warning`, `:info`);
-  # a violation is `%{title, why, help}`.
+  # a violation is `%{title, why, help}`, with `label: :detail` where the
+  # operands' shapes are not what its rule checks, so that the label says
+  # the detail instead.
 
   alias __MODULE__, as: Wording
 

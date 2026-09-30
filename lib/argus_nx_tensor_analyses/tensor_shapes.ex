@@ -17,7 +17,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
 
   A finding says what the call does wrong in its title, labels the call
   with the shapes it gets, and notes why Nx rejects them (or why the code
-  should not rely on Nx accepting them) with what Nx raises. Its related
+  should not rely on Nx accepting them) with what Nx raises. Where an
+  operand has several shapes, or none the finding can show, the label
+  says what Nx raises (or what the code does not line up) instead, and
+  the note does not repeat it. Its related
   frames point at the calls that make each operand's shape, then at the
   calls that bring the operands into the function.
 
@@ -171,18 +174,26 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       ) do
     %{title: title, why: why, help: help} = wording = violation(kind)
 
-    raises =
-      case certainty do
-        "always" -> "Nx raises"
-        _some_path -> "On some path to this call, Nx raises"
+    shapes = if wording[:label] == :detail, do: nil, else: gets(operands)
+
+    {label, note} =
+      case {shapes, certainty} do
+        {nil, "always"} ->
+          {"Nx raises: #{detail}", why}
+
+        {nil, _some_path} ->
+          {"on some path, Nx raises: #{detail}", why}
+
+        {shapes, "always"} ->
+          {shapes, "#{why} Nx raises: #{detail}."}
+
+        {shapes, _some_path} ->
+          {shapes, "#{why} On some path to this call, Nx raises: #{detail}."}
       end
 
-    Findings.new(
-      Finding.severity(relation, row, wording),
-      "#{operation} #{title}",
-      "#{why} #{raises}: #{detail}.",
+    Findings.new(Finding.severity(relation, row, wording), "#{operation} #{title}", note,
       at: Findings.at_instr(id),
-      at_label: gets(operands) || "Nx raises here",
+      at_label: label,
       help: [help]
     )
   end
@@ -193,18 +204,24 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
       ) do
     %{title: title, why: why, help: help} = wording = violation(kind)
 
-    where =
-      case certainty do
-        "always" -> ""
-        _some_path -> "on some path to this call "
+    {label, note} =
+      case {gets(operands), certainty} do
+        {nil, "always"} ->
+          {detail, "Nx accepts this. #{why}"}
+
+        {nil, _some_path} ->
+          {"on some path, #{detail}", "Nx accepts this. #{why}"}
+
+        {shapes, "always"} ->
+          {shapes, "Nx accepts this, but #{detail}. #{why}"}
+
+        {shapes, _some_path} ->
+          {shapes, "Nx accepts this, but on some path to this call #{detail}. #{why}"}
       end
 
-    Findings.new(
-      Finding.severity(relation, row, wording),
-      "#{operation} #{title}",
-      "Nx accepts this, but #{where}#{detail}. #{why}",
+    Findings.new(Finding.severity(relation, row, wording), "#{operation} #{title}", note,
       at: Findings.at_instr(id),
-      at_label: gets(operands) || "the axes meet here",
+      at_label: label,
       help: [help]
     )
   end
@@ -270,7 +287,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   end
 
   # The label under the call: the shapes it gets, or nil where some
-  # operand holds several.
+  # operand holds several, or none a finding shows. The label then says
+  # what the detail does, and the note does not repeat it.
   defp gets(""), do: nil
 
   defp gets(operands), do: "gets #{operands |> String.split(";") |> join("and")}"

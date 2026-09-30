@@ -10,7 +10,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Tuples do
       why:
         "A key is a single tensor of shape {2}. Nx.Random.split/2 returns its keys stacked, one per row, and each is taken out before it is used.",
       help:
-        "pass one key: a row of the keys Nx.Random.split/2 returns (keys[0]), or what Nx.Random.key/1 returns"
+        "pass one key: a row of the keys Nx.Random.split/2 returns (keys[0]), or what Nx.Random.key/1 returns",
+      label: :detail
     },
     "sampler_parameters" => %{
       title: "gets parameters that do not fit the shape it draws",

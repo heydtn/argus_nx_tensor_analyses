@@ -197,7 +197,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Core do
     "size_variables" => %{
       title: "lines up sizes the code names differently",
       why:
-        "That holds only while the two happen to be equal, or one of them is 1 and broadcasts, and nothing in the code makes them so.",
+        "Sizes named differently fit only while they happen to be equal, or one of them is 1 and broadcasts, and nothing in the code makes them so.",
       help: "derive both sizes from one variable, or check they agree where the variables are set"
     },
     "unnamed_axis" => %{
