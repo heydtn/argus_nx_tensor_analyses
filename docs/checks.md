@@ -43,7 +43,6 @@ handed, whose contents the analysis cannot see. `key` is a random key.
 | `axis` | error | An axis the operand does not have, or one listed twice. | `Nx.sum(Nx.iota({2, 3}), axes: [2])` |
 | `dot` | error | Contracted or batch axes of different sizes, or a batch axis that is also contracted. | `Nx.dot(Nx.iota({4, 8}), Nx.iota({6, 16}))` |
 | `reshape` | error | A new shape with another element count, or a size below 1. | `Nx.reshape(Nx.iota({2, 3}), {4, 2})` |
-| `names` | error | Axes of different names that meet, or names that are not one per axis or that repeat. | `Nx.add(Nx.iota({2}, names: [:x]), Nx.iota({2}, names: [:y]))` |
 | `concatenate` | error | Joined tensors that differ on an axis other than the one joined. | `Nx.concatenate([Nx.iota({2, 3}), Nx.iota({2, 4})])` |
 | `stack` | error | Stacked tensors of different shapes. | `Nx.stack([Nx.iota({2}), Nx.iota({3})])` |
 | `squeeze` | error | Squeezing an axis whose size is not 1. | `Nx.squeeze(Nx.iota({2, 3}), axes: [0])` |
@@ -102,8 +101,6 @@ size 0 is not reported: Nx builds it.
 | `access_negative_step` | error | A range that steps backwards, as `1..-1` does, and as `0..(k - 1)` does in a `defn` where `k` is 0: a Kernel operator on two numbers computes a number. | `Nx.iota({4, 5})[1..-1//-1]` |
 | `access_empty_range` | error | A range that holds no index of its axis. | `Nx.iota({4, 5})[3..1//1]` |
 | `access_too_many_indices` | error | More indices than the tensor has axes. | `Nx.iota({4, 5})[[0, 0, 0]]` |
-| `access_unknown_name` | error | A name the tensor has no axis for. | `Nx.iota({4, 5}, names: [:a, :b])[c: 1]` |
-| `access_duplicate_name` | error | One axis named twice. | `Nx.iota({4, 5}, names: [:a, :b])[[a: 1, a: 0]]` |
 | `access_float_index` | error | A float index. | `Nx.iota({4, 5})[1.0]` |
 | `access_float_index_tensor` | error | A float tensor as the index. | `Nx.iota({4, 5})[Nx.divide(Nx.iota({2}), 2)]` |
 | `access_tensor_in_list` | error | A tensor with axes in a list of indices. | `Nx.iota({4, 5})[[Nx.iota({2})]]` |
@@ -117,10 +114,13 @@ elements of the tuples Nx returns (the `Nx.Random` samplers, the
 `Nx.LinAlg` decompositions, `Nx.split`), so both meet the shape checks.
 The halves of a float `Nx.split` have sizes that are not known.
 
-## `nx_names`: axis alignment
+## `nx_names`: axis names and alignment
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
+| `names` | error | Axes of different names that meet, or names that are not one per axis or that repeat. | `Nx.add(Nx.iota({2}, names: [:x]), Nx.iota({2}, names: [:y]))` |
+| `access_unknown_name` | error | A `tensor[key]` keyword key naming an axis the tensor does not have. | `Nx.iota({4, 5}, names: [:a, :b])[c: 1]` |
+| `access_duplicate_name` | error | A `tensor[key]` keyword key naming one axis twice. | `Nx.iota({4, 5}, names: [:a, :b])[[a: 1, a: 0]]` |
 | `size_variables` | warning | Sizes the code names differently that meet, which fit only while they happen to be equal. | `Nx.add(Nx.iota({config.heads}), Nx.iota({config.kv_heads}))` |
 | `unnamed_axis` | warning | An axis with no name meeting a named one. | `Nx.add(Nx.iota({2, 3}, names: [:rows, :cols]), Nx.iota({2, 3}))` |
 | `contracted_names` | warning | Contracting axes of different names. | `Nx.dot(Nx.iota({2, 3}, names: [:rows, :cols]), [:cols], Nx.iota({3, 4}, names: [:inner, :out]), [:inner])` |
@@ -164,7 +164,6 @@ matrix holds off its diagonal, does not make it zero.
 | `unchecked_logarithm` | info | A logarithm of such a value, or of one that can be negative. | `Nx.log(t)` |
 | `unchecked_root` | info | A square root of a value nothing keeps from going negative. | `Nx.sqrt(t)` |
 | `unchecked_domain` | info | asin, acos, atanh, erf_inv, log1p or acosh of a value no clip and no test keeps in the domain. | `Nx.asin(t)` |
-| `unchecked_cast_wraparound` | info | A cast to an unsigned type of a value only an input can make negative. | `Nx.as_type(Nx.round(Nx.multiply(t, 255)), :u8)` |
 
 A test has to check the operand itself: `if n > 0` checks
 `Nx.divide(t, n)`, not `Nx.divide(t, Nx.multiply(t, n))`. A call with a
@@ -194,6 +193,7 @@ definite finding gets no unchecked one. A sample of `Nx.Random.uniform` or
 | `index_wraparound` | warning; info for a length the code does not write | An `argmax`, `argmin` or `argsort` `:type` too small for the largest index. | `Nx.argmax(Nx.iota({300}), type: :u8)` |
 | `sequence_precision` | warning; info for a length the code does not write | An iota or linspace made in, or brought into, a type that cannot hold its whole numbers. | `Nx.iota({1000}, type: :bf16)` |
 | `cast_wraparound` | warning | A cast to an unsigned type of a value the code's math makes negative, or a written number outside an integer type. | `Nx.as_type(Nx.subtract(Nx.iota({3}), 1), :u8)` |
+| `unchecked_cast_wraparound` | info | A cast to an unsigned type of a value only an input can make negative. | `Nx.as_type(Nx.round(Nx.multiply(t, 255)), :u8)` |
 | `complex_to_real` | warning | A cast from complex to real, which drops the imaginary part. | `Nx.as_type(Nx.c64([1]), :f32)` |
 | `float_truncation` | info | A cast from float to integer with no rounding first. | `Nx.as_type(Nx.divide(Nx.iota({3}), 2), :s32)` |
 | `literal_overflow` | warning | A written number past the tensor's float range where the tensor keeps its type (a `-1.0e9` mask on f16), or past f32's where Nx makes it an f32 before it meets an f64 or c128 tensor, outside traced code. | `Nx.add(Nx.f16([1, 2]), -1.0e9)` |

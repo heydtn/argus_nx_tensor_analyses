@@ -99,7 +99,7 @@ Each analysis is a category of finding, reported under its name
 | Analysis | Finds | Default |
 |---|---|:---:|
 | `nx_shapes` | operands that do not broadcast; `dot`, `conv` and window axes that do not fit; reshapes that change the element count; axes a tensor lacks; out-of-range slices and `tensor[key]` access; tuples used as tensors | ✓ |
-| `nx_names` | sizes the code names differently (`config.heads` and `config.kv_heads`); named axes meeting unnamed ones; contracted axes of different names; named axes vectorized under another name; reshapes that scramble axes | ✓ |
+| `nx_names` | axis names Nx rejects (names that do not merge, `tensor[key]` naming an axis the tensor lacks or naming one twice); sizes the code names differently (`config.heads` and `config.kv_heads`); named axes meeting unnamed ones; contracted axes of different names; named axes vectorized under another name; reshapes that scramble axes | ✓ |
 | `nx_math` | division by zero; logarithms of zero or negatives; square roots of negatives; `exp` overflow in an unshifted softmax or a written-out softplus or logistic; asin, acos, atanh and acosh past their domain; NaN comparisons; divisors and logarithms of unchecked inputs | ✓ |
 | `nx_types` | floats where only integers go; unsigned wraparound; literals a type cannot hold; lossy casts; silent upcasts and narrowing merges; types the backend lacks | ✓ |
 | `nx_options` | option keys a function does not take; options in the wrong form or with values Nx rejects | ✓ |
