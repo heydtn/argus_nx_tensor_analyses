@@ -10608,10 +10608,11 @@ named_call(origin) :- call_error(_, _, _, origin).
 // relations above and the files included below add, and "" for none.
 .decl named_call(site: symbol)
 
-// A call as a finding names it: the module, function and arity of the
-// function a remote call runs or a built-in function (`Nx.dot/2`), the
-// function a local call runs, and "" for any other instruction, a fun's
-// call, and none.
+// A call as a finding names it, as Elixir's frames do: the module,
+// function and arity of the function a remote call runs or a built-in
+// function (`Nx.dot/2`), the function a local call runs
+// (`Mod.helper/2`), and "" for any other instruction, a fun's call, and
+// none.
 .decl call_spelled(site: symbol, shown: symbol)
 call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
   named_call(site),
@@ -10619,9 +10620,10 @@ call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
 call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
   named_call(site),
   bif_call(site, _, module, name, arity, _).
-call_spelled(site, target) :-
+call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
   named_call(site),
-  local_call(site, _, target, _).
+  local_call(site, _, target, _),
+  function_def(target, module, name, arity, _).
 call_spelled(site, "") :-
   named_call(site),
   !remote_function(site, _, _, _),
