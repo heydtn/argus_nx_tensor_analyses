@@ -23,7 +23,7 @@ defmodule ArgusNxTensorAnalyses.Solve do
   @spec solve(module(), [module() | Path.t()], Path.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def solve(analysis, modules, program, options),
-    do: with_facts(analysis, modules, &solve_facts(&1, program, options))
+    do: with_facts(analysis, modules, options, &solve_facts(&1, program, options))
 
   # Solves the analysis's program over the modules and returns each of its
   # findings placed at its call in the module's source.
@@ -31,7 +31,7 @@ defmodule ArgusNxTensorAnalyses.Solve do
           {:ok, [Argus.Located.t()]} | {:error, term()}
   def run(analysis, modules, options) do
     solved =
-      with_facts(analysis, modules, fn directory ->
+      with_facts(analysis, modules, options, fn directory ->
         with {:ok, rows} <- solve_facts(directory, analysis.rules_file(), options),
              do: {:ok, rows, Argus.Lines.from_facts_dir(directory)}
       end)
@@ -45,7 +45,7 @@ defmodule ArgusNxTensorAnalyses.Solve do
 
   # Extracts the modules into a directory of facts named for the analysis,
   # hands it to `solve`, and removes it.
-  defp with_facts(analysis, modules, solve) do
+  defp with_facts(analysis, modules, options, solve) do
     directory =
       Path.join(
         System.tmp_dir!(),
@@ -53,7 +53,8 @@ defmodule ArgusNxTensorAnalyses.Solve do
       )
 
     try do
-      with {:ok, directory} <- extract(analysis, modules, directory), do: solve.(directory)
+      with {:ok, directory} <- extract(analysis, modules, directory, Keyword.get(options, :cache)),
+           do: solve.(directory)
     after
       File.rm_rf!(directory)
     end
@@ -81,16 +82,21 @@ defmodule ArgusNxTensorAnalyses.Solve do
   defp type_name(type) when is_binary(type), do: type
 
   # Every relation's file, extracted through the query graph
-  # (`ArgusNxTensorAnalyses.Graph`) in a session that keeps nothing.
-  defp extract(analysis, modules, directory) do
+  # (`ArgusNxTensorAnalyses.Graph`) in a session kept under `cache`, or in
+  # one that keeps nothing.
+  defp extract(analysis, modules, directory, cache) do
     with {:ok, paths} <- Argus.Pipeline.Disassemble.resolve_paths(modules) do
-      session = Graph.open()
+      session = Graph.open(cache)
 
       try do
         paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq()
-        _sources = Graph.set_program(session.db, paths, analysis.extractors(), %{})
+        sources = Graph.set_program(session.db, paths, analysis.extractors(), session.sources)
         File.mkdir_p!(directory)
-        with :ok <- Graph.write_facts(session.db, directory), do: {:ok, directory}
+
+        with :ok <- Graph.write_facts(session.db, directory) do
+          Graph.commit(session, sources)
+          {:ok, directory}
+        end
       after
         Roux.Session.close(session)
       end
@@ -136,7 +142,7 @@ defmodule ArgusNxTensorAnalyses.Solve do
     else
       _missing ->
         with {:ok, rows} <- solve_rules(directory, program) do
-          File.rm_rf!(cache)
+          for stale <- Path.wildcard(Path.join(cache, "*.json")), do: File.rm!(stale)
           File.mkdir_p!(cache)
           File.write!(entry, Jason.encode!(rows))
           {:ok, rows}

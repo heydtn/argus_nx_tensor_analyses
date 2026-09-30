@@ -30,10 +30,35 @@ defmodule ArgusNxTensorAnalyses.Graph do
   @program :beams
 
   @doc false
-  # Opens a session over the graph in a blob store of its own, which
-  # closing it removes: a run that keeps nothing.
-  @spec open() :: Session.t()
-  def open, do: Session.open(modules: @modules, blob: Blob.temporary())
+  # Opens a session over the graph: kept under `cache` (its manifest, and
+  # the blob store its facts and solves are kept in), or, for nil, in a
+  # blob store of its own that closing it removes, which keeps nothing.
+  @spec open(Path.t() | nil) :: Session.t()
+  def open(nil), do: Session.open(modules: @modules, blob: Blob.temporary())
+
+  def open(cache) do
+    File.mkdir_p!(cache)
+
+    Session.open(
+      modules: @modules,
+      manifest: Path.join(cache, "manifest"),
+      blob: Path.join(cache, "store")
+    )
+  end
+
+  @doc false
+  # Keeps what the session's run computed (`Roux.Session.commit/3`), with
+  # `sources` as its beams' metadata. A kept store is collected at most
+  # once a day (`Roux.Blob.maybe_gc/2`): what the manifest names stays, and
+  # so does what a recent run used.
+  @spec commit(Session.t(), map()) :: :ok
+  def commit(%Session{manifest: nil}, _sources), do: :ok
+
+  def commit(session, sources) do
+    {_status, _session} = Session.commit(session, sources)
+    _collected = Blob.maybe_gc(session.blob)
+    :ok
+  end
 
   @doc false
   # Sets what the graph extracts: the beams at `paths` (absolute, in the
