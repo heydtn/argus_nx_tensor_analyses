@@ -3,6 +3,7 @@
 # that differs, with how many rows only one side has. Prints nothing and
 # exits 0 when they are the same; exits 1 when they differ, and 2 when a
 # snapshot is missing.
+export LC_ALL=C
 root="$("$(dirname "$0")/data_dir.sh")/snapshots"
 for name in "$1" "$2"; do
   if [ -z "$name" ] || [ ! -d "$root/$name" ]; then
