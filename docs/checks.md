@@ -147,7 +147,7 @@ definite finding gets no unchecked one. A sample of `Nx.Random.uniform` or
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
 | `non_integer_operand` | error | A float or complex operand where Nx takes integers: bitwise operations, `quotient`, and the indices of `take`, `gather` and the indexed updates. | `Nx.take(t, Nx.divide(t, 2))` |
-| `unsupported_type` | error | A tensor made in a type listed in `unsupported_types`. | `Nx.as_type(t, :f64)`, with `unsupported_types: [:f64]` |
+| `unsupported_type` | error | A tensor made in a type listed in `unsupported_types`. A call whose options Nx rejects raises before it makes one, and gets only the options finding. | `Nx.as_type(t, :f64)`, with `unsupported_types: [:f64]` |
 | `complex_operand` | error | A complex operand to a call that orders or rounds values (`argmax`, `sort`, comparisons, `clip`, `floor`, `Nx.LinAlg.svd`, ...). | `Nx.argmax(Nx.fft(t))` |
 | `complex_spread` | warning | A variance or standard deviation of complex values, which squares them rather than their magnitudes. | `Nx.variance(Nx.fft(t))` |
 | `integer_past_s32` | warning | An integer literal outside s32 where Nx types it s32, so it wraps. | `Nx.add(Nx.tensor(0, type: :s64), 1_700_000_000_000)` |
@@ -378,7 +378,7 @@ analysis: run `mix argus tensor_emlx`, or add it to `analyses`.
 
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
-| `narrowed_type` | warning | A tensor made on EMLX in f64 or c128, which EMLX keeps as f32 or c64 while it still says f64 or c128; a c128 raises when read back. | `Nx.iota({3}, type: :f64)` |
+| `narrowed_type` | warning | A tensor made on EMLX in f64 or c128, which EMLX keeps as f32 or c64 while it still says f64 or c128; a c128 raises when read back. Not a call whose options Nx rejects, which makes none. | `Nx.iota({3}, type: :f64)` |
 | `narrowed_transfer` | warning | An f64 or c128 tensor made off EMLX that `Nx.backend_transfer/2` or `Nx.backend_copy/2` moves onto it: EMLX keeps an f64 as f32 while it still says f64, and raises taking a c128 in. One cast to f32 first is not reported. | `Nx.backend_transfer(Nx.iota({3}, type: :f64, backend: EXLA.Backend), EMLX.Backend)` |
 | `negative_remainder` | warning; info if only an input can be negative | A remainder whose divisor or dividend can be negative, which EMLX computes wrongly. | `Nx.remainder(Nx.subtract(Nx.iota({4}), 2), 3)` |
 | `negative_integer_power` | warning; info if only an input can be negative | An integer power whose exponent can be negative, which hangs EMLX's CPU device when run eagerly and gives 0 elsewhere. | `Nx.pow(Nx.iota({3}), -1)` |

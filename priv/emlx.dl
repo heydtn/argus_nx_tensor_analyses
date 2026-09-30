@@ -50,11 +50,13 @@ narrowed_type(context, site, name) :-
 
 // ── Words ──────────────────────────────────────────────────────────
 
-// A call in a context given a type EMLX does not have.
+// A call in a context given a type EMLX does not have: not one whose
+// options Nx rejects, which raises before it makes a tensor.
 .decl makes_type_emlx_lacks(context: Context, site: symbol, name: symbol)
 makes_type_emlx_lacks(context, site, name) :-
   given_type(context, site, name, _),
-  lacked_by_emlx(name).
+  lacked_by_emlx(name),
+  !rejected_options(context, site, _, _).
 
 .decl lacked_by_emlx(name: symbol)
 lacked_by_emlx("f64"). lacked_by_emlx("c128").

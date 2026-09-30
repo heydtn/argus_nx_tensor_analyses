@@ -35,6 +35,8 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     {{:finds, "narrowed_type", "f64", "1"}, "Nx.as_type(t, :f64)"},
     {{:finds, "narrowed_type", "f64", "1"}, "Nx.Constants.pi({:f, 64})"},
     {:quiet, "Nx.iota({3}, type: :f32)"},
+    # a call whose options Nx rejects makes no tensor of the type they name
+    {:quiet, "Nx.Constants.pi(:f32, type: :f64)"},
     {:quiet, "Nx.iota({3}, type: :f64, backend: EXLA.Backend)"},
     {:quiet, "Nx.Defn.jit(&f64_table/1, compiler: EXLA).(t)"},
     # a jit's options are its compiler's, and name no tensor's type

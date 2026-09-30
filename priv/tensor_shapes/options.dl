@@ -38,9 +38,7 @@ call_error(site, "option_value", atom, "") :- unknown_padding_type(_, site, atom
 
 // ── What goes wrong ────────────────────────────────────────────────
 
-// Options a call gets in a context that Nx rejects, by the kind of the
-// finding and what breaks them.
-.decl rejected_options(context: Context, site: symbol, kind: symbol, detail: symbol)
+// Options Nx rejects (the core's `rejected_options`), by kind.
 rejected_options(context, site, "unknown_option", key) :- unknown_option(context, site, key).
 rejected_options(context, site, "options_not_keyword", list) :-
   positional_options(context, site, list).

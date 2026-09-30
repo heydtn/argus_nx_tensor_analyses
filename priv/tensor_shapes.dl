@@ -3412,6 +3412,11 @@ options_open(site) :- options_source(site, _, kind, _), kind != "object", kind !
 options_open(site) :- options_source(site, function, "object", source), !flow_object(function, source, "list", _).
 options_open(site) :- options_source(site, _, "literal", text), !term_list(text, 0).
 
+// Options a call gets in a context that Nx rejects, by the kind of the
+// finding and what breaks them (the files included below add them). Nx
+// raises for them before the call makes anything.
+.decl rejected_options(context: Context, site: symbol, kind: symbol, detail: symbol)
+
 // Every option the call is given is known: its keys, if not every value.
 .decl site_options_known(site: symbol)
 site_options_known(site) :- options_source(site, _, _, _), !options_open(site).
@@ -9985,11 +9990,13 @@ only_wrong_class(context, site, position, requirement) :-
   reaches(context, site, position, requirement, _, _, "class"),
   !takes_a_class(context, site, position, requirement).
 
-// An Nx call that makes a tensor of a type the backend does not support.
+// An Nx call that makes a tensor of a type the backend does not support:
+// not one whose options Nx rejects, which raises before it makes any.
 .decl makes_unsupported_type(context: Context, site: symbol, name: symbol)
 makes_unsupported_type(context, site, name) :-
   given_type(context, site, name, _),
-  unsupported_type(name).
+  unsupported_type(name),
+  !rejected_options(context, site, _, _).
 
 // ── Words ──────────────────────────────────────────────────────────
 

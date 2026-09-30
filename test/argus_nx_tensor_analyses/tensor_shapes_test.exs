@@ -625,6 +625,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "unknown_option", "type"}, :raises},
      "Nx.Constants.pi(:f32, type: :f32)"},
     {:quiet, "Nx.Constants.pi(:f32, backend: Nx.BinaryBackend)"},
+    # a call whose options Nx rejects makes no tensor of the type they name
+    {{:finds, {"tensor_call_error", "unknown_option", "type"}, :raises},
+     "Nx.Constants.pi(:f32, type: :f64)"},
+    {:quiet, "Nx.Constants.pi(:f32)"},
+    {{:finds, {"tensor_call_error", "unknown_option", "dim"}, :raises},
+     "Nx.iota({2}, type: :f64, dim: 0)"},
     {{:finds, {"tensor_call_error", "unknown_option", "axis"}, :raises},
      "Nx.Random.uniform(Nx.Random.key(1), shape: {2}, axis: 0)"},
     {{:finds_none, :accepted}, "Nx.Random.uniform(Nx.Random.key(1), shape: {2})"},
@@ -711,6 +717,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     def sorts(tensor, direction), do: Nx.sort(tensor, direction: direction)
     def sorts_descending(tensor), do: sorts(tensor, :descending)
     def sorts_down(tensor), do: sorts(tensor, :desc)
+    def pi_typed_by_option, do: Nx.Constants.pi(:f32, type: :f64)
+    def iota_typed_with_typo, do: Nx.iota({2}, type: :f64, dim: 0)
+    def iota_typed, do: Nx.iota({2}, type: :f64)
   end
   """
 
@@ -3646,6 +3655,23 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
            ]
 
     assert call_errors.(:sums_axes, 2) == []
+  end
+
+  # Nx raises for options it rejects before it makes a tensor, so the type
+  # they name is not reported too. `iota_typed/0` makes an f64 tensor, a
+  # type the fixtures are solved as unsupported.
+  test "a call whose options Nx rejects makes no tensor of their type", %{rows: rows} do
+    found =
+      &findings_for(
+        rows,
+        ["tensor_call_error", "tensor_type_error"],
+        function_id(@options_fixtures, &1, 0),
+        [:relation, :kind]
+      )
+
+    assert found.(:pi_typed_by_option) == [{"tensor_call_error", "unknown_option"}]
+    assert found.(:iota_typed_with_typo) == [{"tensor_call_error", "unknown_option"}]
+    assert found.(:iota_typed) == [{"tensor_type_error", "unsupported_type"}]
   end
 
   test "a finding at the call that hands the options down names the Nx function" do
