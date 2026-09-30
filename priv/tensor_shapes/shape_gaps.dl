@@ -306,22 +306,12 @@ output_source(site, first, position, position) :-
 
 // ── Padding ────────────────────────────────────────────────────────
 
-// Padding written whole that crops an axis to nothing: the backend fails
-// to build the result.
-operand_misfit(site, [first, second, third], "cropped_axis", cat("no match of right hand side value (MatchError), from padding axis ", to_string(axis), " of size ", to_string(size), " to ", to_string(padded))) :-
-  site_instance(site, "Nx.pad", 3, [first, second, third]),
-  pad_configuration(site, axis, low, high, interior),
-  interior >= 0,
-  axes_axis(first, axis, [size, nil], _),
-  size > 0,
-  padded = size + (size - 1) * interior + low + high,
-  padded < 1.
-operand_misfit(site, [first, second, third], "cropped_axis", cat("no match of right hand side value (MatchError), from padding axis ", to_string(axis), " of size ", to_string(size), " to ", to_string(size + low + high))) :-
-  site_instance(site, "Nx.pad_outer", 3, [first, second, third]),
-  outer_padding(site, axis, low, high),
-  axes_axis(first, axis, [size, nil], _),
-  size > 0,
-  size + low + high < 1.
+// Padding that crops an axis to nothing: the backend fails to build the
+// result.
+violation(context, site, "cropped_axis", cat("no match of right hand side value (MatchError), from padding axis ", to_string(axis), " of size ", to_string(size), " to ", to_string(elements))) :-
+  padded_count(context, site, first, axis, elements),
+  elements < 1,
+  axes_axis(first, axis, [size, nil], _).
 
 // ── Literal sizes below 1 ──────────────────────────────────────────
 
