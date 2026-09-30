@@ -22,10 +22,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
           "exponent can be positive: above about 88 in f32 and bf16 (11 in f16) the " <>
           "exponential overflows to infinity, and so does the result. Its gradient there is " <>
           "infinity over infinity, NaN.",
-      label: "takes the logarithm here",
+      label: "takes the logarithm of 1 plus an exponential, infinite for exponents above 88",
       help:
         "write the softplus in its stable form, Nx.max(x, 0) + Nx.log1p(Nx.exp(-Nx.abs(x))), which is the same function (Nx has no softplus of its own)",
-      frame: "the exponential that can overflow"
+      frame: "can overflow to infinity:"
     }
   end
 
@@ -36,9 +36,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
         "It is the logistic function written out, an exponential over one plus the same " <>
           "exponential, and the exponent can be positive: above about 88 in f32 and bf16 " <>
           "(11 in f16) both overflow to infinity, and infinity over infinity is NaN.",
-      label: "divides here",
+      label:
+        "divides an exponential by 1 plus itself, infinity over infinity for exponents above 88",
       help: "use Nx.sigmoid(x), which is the same function, computed without overflowing",
-      frame: "the exponential that can overflow"
+      frame: "can overflow to infinity:"
     }
   end
 
@@ -49,10 +50,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
         "Its operand is a sigmoid of a value that can be negative. Below about -100 in f32 " <>
           "and bf16 (-17 in f16) the sigmoid rounds to zero, and its logarithm is negative " <>
           "infinity where the log-sigmoid is a finite negative number.",
-      label: "takes the logarithm here",
+      label: "takes the logarithm of a sigmoid, which rounds to 0 below about -100",
       help:
         "write the log-sigmoid in its stable form, Nx.min(x, 0) - Nx.log1p(Nx.exp(-Nx.abs(x))), which is minus the softplus of -x (Nx has no log-sigmoid of its own)",
-      frame: "the sigmoid that can underflow"
+      frame: "can underflow to 0:"
     }
   end
 
@@ -63,10 +64,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
         "Nx.log/2 divides the logarithm of its operand by the logarithm of its base, and the " <>
           "base can be exactly 1: #{Causes.one(cause)}. The logarithm of 1 is zero, so the " <>
           "result there is an infinity or NaN, and Nx raises for a base that is the number 1.",
-      label: "takes the logarithm here",
+      label: "takes the logarithm to a base that can be 1",
       help:
         "keep the base away from 1, or take the logarithm in a fixed base (Nx.log2/1, Nx.log10/1)",
-      frame: "the base can be 1 because of this"
+      frame: "can make the base 1:"
     }
   end
 
@@ -74,9 +75,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
       when kind in ["log_of_zero", "unchecked_logarithm"],
       do: scaling_hazard(kind, cause)
 
-  def hazard(kind, cause, _operation) do
-    if why = Causes.sampled(cause),
-      do: Nonfinite.zero_hazard(kind, why, help: @sampled_help, sampled: true)
+  def hazard(kind, cause, operation) do
+    if Causes.sampled(cause),
+      do: Nonfinite.zero_hazard(kind, cause, operation, help: @sampled_help)
   end
 
   # A log-sum-exp whose scaling factor can be zero or negative.
@@ -87,10 +88,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
         "It scales its exponentials by its :exp_scaling_factor before it sums them, and the " <>
           "factor cannot be negative but can be zero everywhere a sum takes, as a mask that " <>
           "selects nothing is. The sum is zero there, and its logarithm negative infinity.",
-      label: "takes the logarithm here",
+      label: "sums exponentials scaled by a factor that can be all 0",
       help:
         "keep every reduced slice of the factor from being all zero, or handle the empty slice apart, such as with Nx.select on its sum",
-      frame: "the factor can be zero because of this"
+      frame: "can make the factor 0:"
     }
   end
 
@@ -101,9 +102,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
         "It scales its exponentials by its :exp_scaling_factor before it sums them and takes " <>
           "the logarithm, and nothing in how the factor is computed keeps it from going below " <>
           "zero. The logarithm of a negative sum is NaN.",
-      label: "takes the logarithm here",
+      label: "sums exponentials scaled by a factor that can be below 0",
       help: "keep the factor from going below zero, such as with Nx.abs/1 or Nx.max of it and 0",
-      frame: "the factor can be negative because of this"
+      frame: "can make the factor negative:"
     }
   end
 
@@ -114,9 +115,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
         "It scales its exponentials by its :exp_scaling_factor before it sums them and takes " <>
           "the logarithm, and the factor can be zero as far as the code shows. Where it is " <>
           "zero everywhere a sum takes, the logarithm is negative infinity.",
-      label: "takes the logarithm here",
+      label: "sums exponentials scaled by a factor that can be 0",
       help: "check the factor first, or keep it from zero with a positive epsilon",
-      frame: "the factor can be zero because of this"
+      frame: "can make the factor 0:"
     }
   end
 
@@ -129,9 +130,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
       detail:
         "One of its operands is NaN, and NaN compares false with everything, itself " <>
           "included: the result is #{value} whatever the other operand holds.",
-      label: "compares here",
+      label: "compares with NaN, always #{value}",
       help: "test for NaN with Nx.is_nan/1",
-      frame: "the NaN comes from",
+      frame: "makes the NaN:",
       severity: :warning
     }
   end

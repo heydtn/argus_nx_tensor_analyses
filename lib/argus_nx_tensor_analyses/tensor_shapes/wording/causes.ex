@@ -3,8 +3,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Causes do
   # How an operand comes to a value its call is not defined at, by the
   # cause the rules name: a table for each value a finding is about, which
   # copies the texts it shares with another table and writes its own where
-  # its findings say it otherwise. A cause a table does not describe still
-  # reads.
+  # its findings say it otherwise, and for a zero and a negative value a
+  # table of what the value is made of, which a label names at the call. A
+  # cause a table does not describe still reads.
 
   # How a value comes to be zero.
   @zero %{
@@ -29,6 +30,29 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Causes do
     "negative" => "nothing in how it is computed keeps it from going below zero"
   }
 
+  # What a value that can be zero is made of, as a label names it at the
+  # call: the value's maker and where it is zero.
+  @zero_value %{
+    "square" => "a value made of a square, 0 where its operand is",
+    "absolute" => "a value made of an absolute value, 0 where its operand is",
+    "root" => "a value made of a square root, 0 where its operand is",
+    "norm" => "a value made of a norm, 0 for a zero vector",
+    "comparison" => "a value made of a comparison, 0 where it does not hold",
+    "index" => "a value made of an iota or index, which starts at 0",
+    "identity" => "a value made of an identity matrix, 0 off its diagonal",
+    "spread" => "a value made of a spread, 0 where every value is the same",
+    "clamp" => "a value clamped at 0",
+    "remainder" => "a value made of a remainder, 0 where the division is whole",
+    "quotient" => "a value made of an integer quotient, 0 where the dividend is smaller",
+    "round" => "a value made of a rounding, 0 from -1 to 1",
+    "zero" => "a written 0",
+    "input" => "a value from an input, which can be 0",
+    "cancel" => "a sum or difference whose terms can cancel to 0",
+    "negative" => "a value that can be below 0",
+    "sample" => "a random sample, at its minimum of 0 now and then",
+    "product_underflow" => "a product of fractions, which underflows to 0"
+  }
+
   # How an operand comes to the edge of a function's domain, or past it.
   @domain @zero
           |> Map.take(["input"])
@@ -36,8 +60,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Causes do
             "rounding" =>
               "it is within ±1 only before rounding, as a cosine similarity or a vector over its norm is, and rounding can take it just past",
             "saturation" =>
-              "it is made of a tanh, erf or sigmoid, which rounds to exactly ±1 for large inputs",
-            "trigonometric" => "it is made of a sine or cosine, which reaches ±1",
+              "it is made of a tanh, erf or sigmoid, which lies within ±1 and rounds to exactly ±1 for large inputs",
+            "trigonometric" =>
+              "it is made of a sine or cosine, which lies within ±1 and reaches both",
             "clip" => "it is clipped to a bound at the edge",
             "written" => "a written number puts it there",
             "size" => "it is a size, which is at least 1",
@@ -91,6 +116,16 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Causes do
     "ddof" => "it is a variance whose ddof is past its count, which is negative"
   }
 
+  # What a value that can go below zero is made of, as a label names it at
+  # the call.
+  @negative_value %{
+    "written" => "a written negative number",
+    "subtract" => "a subtraction, as 0 - 1 is -1",
+    "negate" => "a negation of a positive value",
+    "remainder" => "a remainder of a negative dividend",
+    "ddof" => "a variance whose ddof is past its count"
+  }
+
   # How a value never below zero comes to be exactly zero now and then.
   @sampled %{
     "sample" =>
@@ -105,6 +140,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Causes do
   @spec zero(String.t()) :: String.t()
   def zero(cause), do: Map.get(@zero, cause, "its math lets it be zero")
 
+  @spec zero_value(String.t()) :: String.t()
+  def zero_value(cause), do: Map.get(@zero_value, cause, "a value its math lets be 0")
+
   @spec domain(String.t()) :: String.t()
   def domain(cause), do: Map.get(@domain, cause, "its math takes it there")
 
@@ -116,6 +154,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Causes do
 
   @spec negative(String.t()) :: String.t()
   def negative(cause), do: Map.get(@negative, cause, "its math takes it below zero")
+
+  @spec negative_value(String.t()) :: String.t()
+  def negative_value(cause), do: Map.get(@negative_value, cause, "a value its math takes below 0")
 
   # nil for a cause that does not make a value zero now and then.
   @spec sampled(String.t()) :: String.t() | nil
