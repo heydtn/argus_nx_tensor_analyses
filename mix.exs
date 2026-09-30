@@ -13,7 +13,7 @@ defmodule ArgusNxTensorAnalyses.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       description:
-        "Argus analyses of Nx code: tensor shapes that Nx rejects, or that the code does not line up, found in compiled modules.",
+        "Argus analyses of Nx code: shapes, values, types and uses of Nx that are wrong, found in compiled modules before the code runs.",
       package: package(),
       docs: docs(),
       source_url: @source_url
@@ -42,7 +42,7 @@ defmodule ArgusNxTensorAnalyses.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv mix.exs README.md CHANGELOG.md LICENSE .formatter.exs)
+      files: ~w(lib priv docs mix.exs README.md CHANGELOG.md LICENSE .formatter.exs)
     ]
   end
 
@@ -50,7 +50,7 @@ defmodule ArgusNxTensorAnalyses.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "CHANGELOG.md"]
+      extras: ["README.md", "docs/checks.md", "docs/how-it-works.md", "CHANGELOG.md"]
     ]
   end
 end

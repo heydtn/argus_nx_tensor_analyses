@@ -2,37 +2,11 @@
 
 [Argus](https://github.com/QuinnWilton/argus) analyses for code that uses
 [Nx](https://github.com/elixir-nx/nx). They read a project's compiled
-modules and report tensor shapes that do not fit where they meet, math
-that can give an infinity or a NaN, and tensor types Nx or the backend
-rejects, before the code runs.
-
-- **Shape mismatches:** Nx calls whose operand shapes Nx rejects, such as
-  shapes that do not broadcast, a `dot` over axes of different sizes, a
-  reshape that changes the number of elements, or an axis the tensor does
-  not have.
-- **Axis misalignments:** calls Nx accepts but where the code does not line
-  its axes up. For example, sizes the code names differently
-  (`config.heads` against `config.kv_heads`), an unnamed axis meeting a
-  named one, or contracted axes with different names.
-- **Results that can be infinite or NaN:** Nx calls whose operand the
-  code's own math lets reach a value the call is not defined at. For
-  example, a divisor that is a sum of squares or a norm, which is zero for
-  a zero vector; the logarithm of a count; the square root of a variance
-  written as E[x²] − E[x]², which rounding can take below zero; a
-  softmax that does not subtract the maximum first; atanh of a tanh,
-  which rounds to 1 for large inputs; the arc cosine of a cosine
-  similarity, which rounding can take just past 1; or a square root or
-  norm that can be zero where a `grad` differentiates it.
-- **Unchecked operands:** a division, logarithm, square root, or asin,
-  acos, atanh, erf_inv, log1p or acosh of a value the analysis cannot see
-  into, such as an input or a config field, that no test on the way to
-  the call, no `Nx.select` and no clip keeps where the call is defined.
-  Such a value may never get there, so these are noisier and reported as
-  info.
-- **Tensor types:** calls that take only integers handed a float, such as
-  a bitwise operation, an integer quotient, or `Nx.take` with indices
-  computed by division; and, for a project that names the types its
-  backend lacks, calls that make a tensor of one, such as f64 on EMLX.
+modules and report, before the code runs, calls Nx would reject or compute
+wrongly: shapes that do not fit where tensors meet, math that can give an
+infinity or a NaN, types, literals and options Nx rejects, and misuse of
+traced code, gradients, random keys, containers and servings.
+[docs/checks.md](docs/checks.md) lists every finding.
 
 ```
 error[argus.tensor_shapes]: Nx.dot/2 contracts axes that do not match
@@ -100,10 +74,10 @@ which is what Soufflé's Ubuntu PPA installs: take 2.5's package from its
 ## Usage
 
 ```
+mix argus                       # Argus's configured analyses and the default ones here
 mix argus --all                 # every analysis, Argus's and these
-mix argus tensor_shapes         # the tensor shape analysis alone
-mix argus tensor_shapes ets     # it and Argus's `ets`
-mix argus                       # Argus's configured analyses only
+mix argus tensor_emlx           # the EMLX analysis alone
+mix argus tensor_shapes ets     # the tensor shape analysis and Argus's `ets`
 mix argus --list                # what's available
 ```
 
@@ -115,103 +89,42 @@ The analyses read your project's own modules, not its dependencies. Results
 are kept under `_build/<env>/argus_nx_tensor_analyses` and reused until the
 compiled code changes, so an edit to a comment or a doc solves nothing again.
 
-A project whose backend lacks some tensor types names them in its
-`mix.exs`, and every call that makes a tensor of one is reported:
+## Choose analyses
+
+The analyses marked ✓ run by default.
+
+| Analysis | Finds | Default |
+|---|---|:---:|
+| `tensor_shapes` | shapes, types, literals and options Nx rejects; misaligned axes; math that can turn infinite or NaN; misuse of traced code, gradients, random keys, containers and servings | ✓ |
+| `tensor_emlx` | calls EMLX computes differently from BinaryBackend and EXLA (f64 kept as f32, remainders of negatives, hanging integer powers, halves rounded to even), and tensors of two backends meeting | |
+
+Use analysis names or these sets in `analyses:`:
+
+- `:default`: the analyses marked ✓;
+- `:all`: every analysis in the table.
 
 ```elixir
 def project do
   [
     # ...
-    argus_nx_tensor_analyses: [unsupported_types: [:f64]]
+    argus_nx_tensor_analyses: [analyses: [:default, :tensor_emlx]]
   ]
 end
 ```
 
-## How it works
+Analyses named on the command line run instead, and `--all` runs them all.
 
-`ArgusNxTensorAnalyses.TensorShapes.ShapeFlow`, an Argus extractor,
-summarizes where each function's values come from: its parameters, the
-calls it makes, the terms it builds and the fields it reads. A Soufflé
-program, `priv/tensor_shapes.dl`, runs over those summaries and Argus's own
-facts. It applies the rules `Nx.Shape` applies, operation by operation, and
-follows shapes through the program to where tensors meet.
+Two more options there change what `tensor_shapes` reports:
 
-- **Sizes are symbolic.** A size is known where the code writes it
-  (`Nx.iota({2, 3})`). It is a variable where the code reads it from a
-  parameter (`config.heads`), and otherwise not known. Sizes multiply and
-  divide symbolically, so a reshape's `:auto` is inferred where the
-  variables cancel.
-- **Analysis crosses functions.** Shapes cross calls and returns, `defn`
-  calls between modules, closures (where `cond` and `if` put a `defn`'s
-  branches), protocol dispatch to the project's own implementations, and
-  funs the code captures and calls. A function is analyzed once for each
-  set of arguments it is handed. A call that hands values naming size
-  variables, or terms the caller built, runs its callee in a context of
-  its own, up to five calls deep.
-- **Signs follow the math.** For what a call divides by, or takes the
-  logarithm or root of, the rules work out whether the value can be
-  negative, zero or positive from how it is computed: a square is never
-  negative, an exponential never zero, an iota starts at zero, and an
-  input can be anything. A finding says why its operand can be zero and
-  points at the call that makes it so. A test on the way to the call
-  (`if n == 0`, `n > 0`) or a select on a comparison with zero
-  (`Nx.select(Nx.equal(d, 0), 1, d)`) checks the operand it tests.
-- **Ranges follow the math.** For asin, acos, atanh, erf_inv, log1p and
-  acosh, the rules work out where the operand can lie against ±1: a tanh,
-  erf or sigmoid rounds to exactly ±1 for large inputs, a sine or cosine
-  reaches it, a clip reaches its bounds, and a vector over its norm or a
-  cosine similarity is within ±1 only before rounding. A clip or a test on
-  the way to the call keeps the operand where it is.
-- **Gradients.** A function handed to `Nx.Defn.grad` or `value_and_grad`,
-  and whatever it calls, is differentiated. A square root, root power or
-  norm there whose result can be zero has an infinite or NaN derivative.
-- **Types follow the math.** For the calls that take only integers, the
-  rules work out whether each operand can be an integer, a float or a
-  complex number, as `Nx.Type` has it: a float operand makes a float,
-  division and the transcendental functions make one, comparisons and
-  indices give integers, and a `type:` gives its own. A tensor whose type
-  the code does not show has none, and nothing is reported of it.
-- **Helpers take what the program hands them.** A function the program
-  enters only through its own calls takes, in each context, what those
-  calls hand it. A function the program is entered at from outside (one
-  nothing in the project calls, or one handed out as a fun) takes inputs.
-- **Literal tests pick branches.** A `case` on an option the caller writes
-  takes the branch the option names, and two dispatches on one value in a
-  function run one implementation. Other branches are not told apart: a
-  value that reaches a call along several paths has every shape it can
-  arrive with.
+- `unsupported_types:` the tensor types your backend lacks. A call that
+  makes one is reported (`[:f64]` for a backend without f64).
+- `float_types:` the float types the code may run at. A type the code
+  reads from configuration is checked as each of them
+  (`[:f16, :bf16, :f32]`).
 
-A mismatch is an error when some chain of calls reaching the call brings it
-no other operands. It is a warning when the operands also arrive otherwise,
-since not every combination may occur. Misalignments and results that can
-be infinite or NaN are warnings, and unchecked operands are info. An
-operand that takes only integers is an error where some context hands it
-nothing else, and a warning otherwise; a type the backend lacks is an
-error.
-
-The rules model Nx 1.0. The test suite runs each of its cases through Nx
-itself and checks that the analysis agrees with what Nx computes or raises.
-
-## Limits
-
-- A shape that depends on runtime data (a tensor read from a file, a size
-  computed from a value the code never writes) is not known. Operations
-  over it give no shape and no findings.
-- The analysis follows the project's own code. A call into a dependency
-  other than Nx gives a value that is not known, apart from the lookups it
-  models: `Map.get`, `Map.fetch!`, `Keyword.get`, `Keyword.fetch!` and
-  `Access.get`.
-- Branches that no literal test separates are merged, so a finding on
-  such a path is reported as a warning rather than an error.
-- A check has to test the operand itself: `if n > 0` checks
-  `Nx.divide(t, n)`, not `Nx.divide(t, Nx.multiply(t, n))`.
-- A function the project calls is judged by what the project hands it,
-  even where code outside the project calls it too.
-- Only the `grad` calls in the project are seen: a training library that
-  differentiates a function the project hands it does not make that
-  function differentiated here. A `custom_grad` is not modeled.
-- A clip's bounds keep a value in range only where they are written
-  numbers.
+[docs/checks.md](docs/checks.md) gives every finding and its severity.
+[docs/how-it-works.md](docs/how-it-works.md) explains how the analyses
+follow values through a program, and what they cannot see.
 
 ## Development
 
@@ -220,10 +133,12 @@ mix deps.get
 mix test
 ```
 
-The tests need Soufflé 2.5 on `PATH`.
-`test/argus_nx_tensor_analyses/tensor_shapes_test.exs` compiles its
-fixtures into a temporary directory, runs each case through Nx and through
-the analysis, and checks that they agree.
+The tests need Soufflé 2.5 on `PATH`. They compile their fixtures under
+`_build/test`, run each case through Nx and through the analysis, and
+check that the two agree. Their solves are cached there as well, so a run
+that changes neither the rules nor the fixtures solves nothing again.
+[dev/identity](dev/identity/README.md) checks that a change to the rules
+that should change no finding changes no row.
 
 ## License
 

@@ -1,17 +1,19 @@
 defmodule ArgusNxTensorAnalyses.TensorShapes do
   @moduledoc """
-  Tensor shapes that do not fit where they meet, found in compiled code by
-  the Datalog program in `priv/tensor_shapes.dl`: Nx calls whose operands
-  Nx rejects, and calls Nx accepts where the code does not line its axes
-  up.
+  Shapes, values, types and uses of Nx that are wrong before the code
+  runs, found in compiled code by the Datalog program in
+  `priv/tensor_shapes.dl` and the files it includes: Nx calls whose
+  shapes, types or options Nx rejects, calls Nx accepts where the code
+  does not line its axes up, math that can give an infinity or a NaN, and
+  misuse of traced code, gradients, random keys, containers and servings.
+  `docs/checks.md` lists what it reports.
 
   The program reads what `ArgusNxTensorAnalyses.TensorShapes.ShapeFlow`
   extracts besides Argus's own facts, and Argus's analyses run only the
   extractors it ships with, so this module extracts and solves itself
-  (`solve/3`),
-  turns the program's rows into findings (`c:Argus.Analysis.finding/2`),
-  and places them at their calls' lines (`run/2`) for `Argus.Report` to
-  render.
+  (`solve/3`), turns the program's rows into findings
+  (`c:Argus.Analysis.finding/2`), and places them at their calls' lines
+  (`run/2`) for `Argus.Report` to render.
 
   A finding says what the call does wrong in its title, labels the call
   with the shapes it gets, and notes why Nx rejects them (or why the code
@@ -45,7 +47,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   def name, do: :tensor_shapes
 
   @impl true
-  def description, do: "Tensor shapes that do not fit where they meet"
+  def description,
+    do: "Shapes, values, types and uses of Nx that are wrong before the code runs"
 
   @impl true
   def rules_file, do: Application.app_dir(:argus_nx_tensor_analyses, "priv/tensor_shapes.dl")
