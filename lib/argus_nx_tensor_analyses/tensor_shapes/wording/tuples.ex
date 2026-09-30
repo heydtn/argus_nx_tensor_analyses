@@ -51,10 +51,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Tuples do
       title: "repeats one draw across its mean or standard deviation",
       detail:
         "#{operation} #{detail}: it draws values of its :shape only, and broadcasting them against a larger mean or standard deviation repeats each value along the axes those add, so the elements along them are not independent draws.",
-      label: "draws fewer values than it returns",
+      label: detail,
       help:
         "give :shape the shape of the sample, such as shape: Nx.shape(mean), so that each element gets a draw of its own",
-      frame: "because of this",
+      frame: "",
       severity: :warning
     }
   end

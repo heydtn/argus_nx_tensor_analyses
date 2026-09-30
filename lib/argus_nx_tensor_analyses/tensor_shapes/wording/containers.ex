@@ -60,7 +60,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Containers do
       help:
         "pass a tensor or a number there (Nx.tensor/1 for a boolean), a tuple for a list, and " <>
           "move a value fixed at compile time out of the container: into an option, or a " <>
-          "derived struct's keep:",
+          "derived struct's `keep:` list",
       frame: "",
       severity: severity
     }

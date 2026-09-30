@@ -40,6 +40,16 @@ defmodule ArgusNxTensorAnalyses.Finding do
   @spec origin_frame(String.t(), String.t(), String.t()) :: [Findings.related()]
   def origin_frame(_frame, "", _shown), do: []
 
+  # A call with no name to show (a fun's call, a child specification's
+  # tuple) leaves the frame's text without the colon that would lead to it.
+  def origin_frame(frame, origin, ""),
+    do: [
+      Findings.related(
+        frame |> String.trim() |> String.trim_trailing(":"),
+        Findings.at_instr(origin)
+      )
+    ]
+
   def origin_frame(frame, origin, shown),
     do: [Findings.related(String.trim("#{frame} #{shown}"), Findings.at_instr(origin))]
 
