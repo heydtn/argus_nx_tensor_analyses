@@ -340,7 +340,7 @@ nx_members("default", "integer", " Nx.Random.randint_split ").
 
 // `Nx.log/2` is the logarithm of its first operand over the logarithm of
 // its base: a logarithm of zero, as `Nx.log/1` is.
-takes_logarithm(site, 0) :- logarithm_with_base(site).
+nx_members("argument", "positive", " Nx.log/2:0 ").
 
 // A logarithm to a base the code's math can make exactly 1: the
 // logarithm of the base is zero, and the quotient an infinity or NaN.
@@ -592,7 +592,7 @@ nx_members("sign", "divide", " Nx.weighted_mean ").
 
 // `Nx.weighted_mean/3` divides by the sum of its weights, which is zero
 // where they all are.
-divisor_position("Nx.weighted_mean", 2, 1). divisor_position("Nx.weighted_mean", 3, 1).
+nx_members("argument", "nonzero", " Nx.weighted_mean/2:1 Nx.weighted_mean/3:1 ").
 
 // Floats whatever the operands: a window's or weighted mean, a covariance
 // (a mean), a convolution (computed in floating point), an inverse real

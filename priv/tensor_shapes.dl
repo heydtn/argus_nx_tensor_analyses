@@ -8443,10 +8443,12 @@ checked_operand(site, position, need) :-
 // The operands whose checks are asked of: what a call divides by, or
 // takes the logarithm, root or other partial function of.
 .decl check_demand(site: symbol, position: number)
-check_demand(site, position) :- divides_by(site, position).
-check_demand(site, position) :- takes_logarithm(site, position).
-check_demand(site, position) :- takes_root(site, position, _).
-check_demand(site, 0) :- takes_domain(site, _).
+check_demand(site, position) :-
+  operand_requirement(site, position, requirement),
+  in_set("checked_requirement", requirement).
+nx_members("set", "checked_requirement", cat(
+  " nonzero positive nonnegative closed_unit open_unit above_minus_one",
+  " at_least_one ")).
 
 // What a value passing a test against a literal is: not zero, positive,
 // not negative. An exact test against 0 (`!==`, a `case` arm) lets 0.0
@@ -8515,24 +8517,36 @@ guard_literal(literal) :-
   check_demand(site, position),
   flow_checked(site, _, position, literal, _).
 
-// The operand an Nx call divides by: a quotient's or remainder's divisor,
-// the operand of a reciprocal square root, or the base of a power written
-// negative.
-.decl divides_by(site: symbol, position: number)
-divides_by(site, position) :-
+// The operand at `position` of a call must be `requirement` for the call
+// to be defined: "nonzero", "positive", "nonnegative", in a domain
+// (`takes_domain`), "integer", or real ("real" where the call orders or
+// rounds values, "real_spread" where it squares them): the requirements
+// the functions' arguments have as roles, and the bases of powers whose
+// exponent is written. Real is asked only of a program that can make a
+// complex tensor.
+.decl operand_requirement(site: symbol, position: number, requirement: symbol)
+operand_requirement(site, position, requirement) :-
   operation_site(site, operation, arity),
-  divisor_position(operation, arity, position).
+  nx_argument(operation, arity, position, requirement),
+  in_set("requirement", requirement).
+operand_requirement(site, 0, "nonzero") :- negative_power(site).
+operand_requirement(site, 0, "nonnegative") :- fractional_power(site).
 
-.decl divisor_position(operation: symbol, arity: number, position: number)
-divisor_position("Nx.divide", 2, 1).
-divisor_position("Nx.quotient", 2, 1).
-divisor_position("Nx.remainder", 2, 1).
-divisor_position("Nx.Defn.Kernel./", 2, 1).
-divisor_position("Nx.Defn.Kernel.div", 2, 1).
-divisor_position("Nx.Defn.Kernel.rem", 2, 1).
-divisor_position("Nx.rsqrt", 1, 0).
+// The requirements whose operands the rules ask the signs, regions and
+// classes of: all but real.
+nx_members("set", "requirement", cat(
+  " nonzero positive nonnegative closed_unit open_unit above_minus_one at_least_one",
+  " integer ")).
 
-divides_by(site, 0) :- negative_power(site).
+// The operand an Nx call divides by ("nonzero"): a quotient's or
+// remainder's divisor, the operand of a reciprocal square root, or the
+// base of a power written negative.
+.decl divides_by(site: symbol, position: number) inline
+divides_by(site, position) :- operand_requirement(site, position, "nonzero").
+
+nx_members("argument", "nonzero", cat(
+  " Nx.divide/2:1 Nx.quotient/2:1 Nx.remainder/2:1 Nx.Defn.Kernel.//2:1 Nx.Defn.Kernel.div/2:1",
+  " Nx.Defn.Kernel.rem/2:1 Nx.rsqrt/1:0 ")).
 
 // A power whose exponent is written negative: `x ** -0.5`, at the call or
 // where a value the exponent holds is written.
@@ -8543,17 +8557,21 @@ negative_power(site) :-
   flow_argument(site, _, 1, "literal", text),
   written_number(text, "sign", "negative").
 
-// The operand an Nx call takes the logarithm of.
-.decl takes_logarithm(site: symbol, position: number)
-takes_logarithm(site, 0) :- operation_site(site, operation, 1), nx_class(operation, "sign", "logarithm").
+// The operand an Nx call takes the logarithm of ("positive"): a
+// logarithm's of its one operand.
+.decl takes_logarithm(site: symbol, position: number) inline
+takes_logarithm(site, position) :- operand_requirement(site, position, "positive").
 
-// The operand an Nx call takes a root or logarithm of, which is NaN below
-// zero, and what the finding calls that.
-.decl takes_root(site: symbol, position: number, kind: symbol)
-takes_root(site, 0, "root_of_negative") :- operation_site(site, "Nx.sqrt", 1).
-takes_root(site, 0, "root_of_negative") :- operation_site(site, "Nx.rsqrt", 1).
-takes_root(site, 0, "log_of_negative") :- takes_logarithm(site, 0).
-takes_root(site, 0, "root_of_negative") :- fractional_power(site).
+nx_argument(operation, 1, 0, "positive") :- nx_class(operation, "sign", "logarithm"), nx_named(operation, 1).
+
+// The operand an Nx call takes a root ("nonnegative": a square root's, a
+// reciprocal square root's, a root power's base) or logarithm of, which
+// is NaN below zero, and what the finding calls that.
+.decl takes_root(site: symbol, position: number, kind: symbol) inline
+takes_root(site, position, "root_of_negative") :- operand_requirement(site, position, "nonnegative").
+takes_root(site, position, "log_of_negative") :- operand_requirement(site, position, "positive").
+
+nx_members("argument", "nonnegative", " Nx.sqrt/1:0 Nx.rsqrt/1:0 ").
 
 // A power whose exponent is written as a fraction, which is a root:
 // `x ** 0.5`, at the call or where a value the exponent holds is written.
@@ -8612,13 +8630,14 @@ stopped_gradient(site) :-
 // A function defined on only part of the line, by its domain: asin and
 // acos on [-1, 1] (`closed_unit`), atanh and erf_inv inside it, infinite
 // at ±1 (`open_unit`), log1p above -1, infinite at -1, and acosh from 1.
-.decl takes_domain(site: symbol, domain: symbol)
-takes_domain(site, domain) :- operation_site(site, operation, 1), nx_class(operation, "domain", domain).
+.decl takes_domain(site: symbol, domain: symbol) inline
+takes_domain(site, domain) :- operand_requirement(site, 0, domain), in_set("domain", domain).
 
-nx_members("domain", "closed_unit", " Nx.asin Nx.acos ").
-nx_members("domain", "open_unit", " Nx.atanh Nx.erf_inv ").
-nx_members("domain", "above_minus_one", " Nx.log1p ").
-nx_members("domain", "at_least_one", " Nx.acosh ").
+nx_members("argument", "closed_unit", " Nx.asin/1:0 Nx.acos/1:0 ").
+nx_members("argument", "open_unit", " Nx.atanh/1:0 Nx.erf_inv/1:0 ").
+nx_members("argument", "above_minus_one", " Nx.log1p/1:0 ").
+nx_members("argument", "at_least_one", " Nx.acosh/1:0 ").
+nx_members("set", "domain", " closed_unit open_unit above_minus_one at_least_one ").
 
 // The regions a domain leaves out: where the function is NaN, where it is
 // infinite, and both.
@@ -8757,11 +8776,10 @@ sign_demand(context, function, "result", site) :- gradient_asked(context, site, 
 
 // The calls whose arguments signs are asked of, and their arguments.
 .decl sign_site(context: Context, site: symbol)
-sign_site(context, site) :- divides_by(site, _), site_active(context, site).
-sign_site(context, site) :- takes_logarithm(site, _), site_active(context, site).
-sign_site(context, site) :- takes_root(site, _, _), site_active(context, site).
-sign_site(context, site) :- takes_domain(site, _), site_active(context, site).
-sign_site(context, site) :- integer_only(site, _), site_active(context, site).
+sign_site(context, site) :-
+  operand_requirement(site, _, requirement),
+  in_set("requirement", requirement),
+  site_active(context, site).
 sign_site(context, site) :- sign_demand(context, _, "result", site), type_rule(site, _).
 sign_site(context, site) :- sign_demand(context, _, "result", site), sign_rule(site, _).
 
@@ -9882,10 +9900,8 @@ makes_unsupported_type(context, site, name) :-
 
 // The operands of the Nx calls defined only on integers ("integer"): the
 // bitwise operations' and the integer quotient's, and indices.
-.decl integer_only(site: symbol, position: number)
-integer_only(site, position) :-
-  operation_site(site, operation, arity),
-  nx_argument(operation, arity, position, "integer").
+.decl integer_only(site: symbol, position: number) inline
+integer_only(site, position) :- operand_requirement(site, position, "integer").
 
 nx_argument(operation, 2, position, "integer") :-
   nx_trait(operation, "integer_binary"),

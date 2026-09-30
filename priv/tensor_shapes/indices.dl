@@ -594,46 +594,43 @@ complex_operand(context, site, position, kind, origin) :-
   operand_class(context, site, position, "complex", origin).
 
 // The operands of Nx calls that reject complex tensors or misread them.
-.decl complex_hazard(site: symbol, position: number, kind: symbol)
-complex_hazard(site, position, "complex_operand") :-
-  operation_site(site, operation, _),
-  rejects_complex(operation, position).
-complex_hazard(site, 0, "complex_operand") :-
+.decl complex_hazard(site: symbol, position: number, kind: symbol) inline
+complex_hazard(site, position, "complex_operand") :- operand_requirement(site, position, "real").
+complex_hazard(site, position, "complex_spread") :- operand_requirement(site, position, "real_spread").
+
+// An operand of the functions that order or round values, or take them
+// as real ("real"), of the matrix norms of singular values, and of a
+// variance or standard deviation, which squares its values rather than
+// their magnitudes ("real_spread"): Nx raises for a complex one there, or
+// misreads it.
+operand_requirement(site, position, "real") :-
+  makes_complex(),
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "real").
+operand_requirement(site, 0, "real") :-
+  makes_complex(),
   operation_site(site, "Nx.LinAlg.norm", _),
   ( option_atom(site, "ord", ":nuclear") ; option_integer(site, "ord", -2) ).
-complex_hazard(site, 0, "complex_spread") :-
+operand_requirement(site, 0, "real_spread") :-
+  makes_complex(),
   operation_site(site, operation, _),
   nx_class(operation, "spreads_over", "axes").
 
-// The operands of the functions that order or round values, or take them
-// as real: Nx raises for a complex one.
-.decl rejects_complex(operation: symbol, position: number)
-rejects_complex("Nx.reduce_max", 0). rejects_complex("Nx.reduce_min", 0). rejects_complex("Nx.argmax", 0).
-rejects_complex("Nx.argmin", 0). rejects_complex("Nx.window_max", 0). rejects_complex("Nx.window_min", 0).
-rejects_complex("Nx.cumulative_max", 0). rejects_complex("Nx.cumulative_min", 0). rejects_complex("Nx.sort", 0).
-rejects_complex("Nx.argsort", 0). rejects_complex("Nx.top_k", 0). rejects_complex("Nx.median", 0).
-rejects_complex("Nx.mode", 0). rejects_complex("Nx.logsumexp", 0). rejects_complex("Nx.erf", 0).
-rejects_complex("Nx.erfc", 0). rejects_complex("Nx.erf_inv", 0). rejects_complex("Nx.floor", 0).
-rejects_complex("Nx.ceil", 0). rejects_complex("Nx.round", 0). rejects_complex("Nx.rfft", 0).
-rejects_complex("Nx.LinAlg.svd", 0). rejects_complex("Nx.LinAlg.pinv", 0). rejects_complex("Nx.LinAlg.matrix_rank", 0).
-rejects_complex("Nx.LinAlg.least_squares", 0). rejects_complex("Nx.LinAlg.least_squares", 1).
-rejects_complex("Nx.clip", 0). rejects_complex("Nx.clip", 1). rejects_complex("Nx.clip", 2).
-rejects_complex("Nx.window_scatter_max", 0). rejects_complex("Nx.window_scatter_max", 1).
-rejects_complex("Nx.window_scatter_min", 0). rejects_complex("Nx.window_scatter_min", 1).
-rejects_complex("Nx.max", 0). rejects_complex("Nx.max", 1). rejects_complex("Nx.min", 0). rejects_complex("Nx.min", 1).
-rejects_complex("Nx.remainder", 0). rejects_complex("Nx.remainder", 1).
-rejects_complex("Nx.greater", 0). rejects_complex("Nx.greater", 1). rejects_complex("Nx.less", 0).
-rejects_complex("Nx.less", 1). rejects_complex("Nx.greater_equal", 0). rejects_complex("Nx.greater_equal", 1).
-rejects_complex("Nx.less_equal", 0). rejects_complex("Nx.less_equal", 1).
-rejects_complex("Nx.Defn.Kernel.max", 0). rejects_complex("Nx.Defn.Kernel.max", 1).
-rejects_complex("Nx.Defn.Kernel.min", 0). rejects_complex("Nx.Defn.Kernel.min", 1).
-rejects_complex("Nx.Defn.Kernel.rem", 0). rejects_complex("Nx.Defn.Kernel.rem", 1).
-rejects_complex("Nx.Defn.Kernel.__less_than__", 0). rejects_complex("Nx.Defn.Kernel.__less_than__", 1).
-rejects_complex("Nx.Defn.Kernel.__more_than__", 0). rejects_complex("Nx.Defn.Kernel.__more_than__", 1).
-rejects_complex("Nx.Defn.Kernel.__less_than_equal_to__", 0).
-rejects_complex("Nx.Defn.Kernel.__less_than_equal_to__", 1).
-rejects_complex("Nx.Defn.Kernel.__more_than_equal_to__", 0).
-rejects_complex("Nx.Defn.Kernel.__more_than_equal_to__", 1).
+nx_members("argument", "real", cat(
+  " Nx.reduce_max:0 Nx.reduce_min:0 Nx.argmax:0 Nx.argmin:0 Nx.window_max:0 Nx.window_min:0",
+  " Nx.cumulative_max:0 Nx.cumulative_min:0 Nx.sort:0 Nx.argsort:0 Nx.top_k:0 Nx.median:0",
+  " Nx.mode:0 Nx.logsumexp:0 Nx.erf:0 Nx.erfc:0 Nx.erf_inv:0 Nx.floor:0 Nx.ceil:0",
+  " Nx.round:0 Nx.rfft:0 Nx.LinAlg.svd:0 Nx.LinAlg.pinv:0 Nx.LinAlg.matrix_rank:0",
+  " Nx.LinAlg.least_squares:0 Nx.LinAlg.least_squares:1 Nx.clip:0 Nx.clip:1 Nx.clip:2",
+  " Nx.window_scatter_max:0 Nx.window_scatter_max:1 Nx.window_scatter_min:0",
+  " Nx.window_scatter_min:1 Nx.max:0 Nx.max:1 Nx.min:0 Nx.min:1 Nx.remainder:0",
+  " Nx.remainder:1 Nx.greater:0 Nx.greater:1 Nx.less:0 Nx.less:1 Nx.greater_equal:0",
+  " Nx.greater_equal:1 Nx.less_equal:0 Nx.less_equal:1 Nx.Defn.Kernel.max:0",
+  " Nx.Defn.Kernel.max:1 Nx.Defn.Kernel.min:0 Nx.Defn.Kernel.min:1 Nx.Defn.Kernel.rem:0",
+  " Nx.Defn.Kernel.rem:1 Nx.Defn.Kernel.__less_than__:0 Nx.Defn.Kernel.__less_than__:1",
+  " Nx.Defn.Kernel.__more_than__:0 Nx.Defn.Kernel.__more_than__:1",
+  " Nx.Defn.Kernel.__less_than_equal_to__:0 Nx.Defn.Kernel.__less_than_equal_to__:1",
+  " Nx.Defn.Kernel.__more_than_equal_to__:0 Nx.Defn.Kernel.__more_than_equal_to__:1 ")).
 
 // The class an operand of such a call can be of, asked only of a program
 // that can make a complex tensor.
