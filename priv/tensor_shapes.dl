@@ -6375,16 +6375,13 @@ conv_context(context, site, operands) :-
 
 // A window reduction slides a window over every axis: each becomes the
 // number of strided positions of the dilated window over the padded axis.
-.decl window_operation(operation: symbol, arity: number, dimensions: number)
-window_operation(cat("Nx.", name), arity, 1) :-
-  ( name = "window_sum" ; name = "window_mean" ; name = "window_max" ; name = "window_min" ; name = "window_product" ),
-  ( arity = 2 ; arity = 3 ).
-window_operation("Nx.window_reduce", 4, 2).
-window_operation("Nx.window_reduce", 5, 2).
-window_operation("Nx.window_scatter_max", 4, 3).
-window_operation("Nx.window_scatter_max", 5, 3).
-window_operation("Nx.window_scatter_min", 4, 3).
-window_operation("Nx.window_scatter_min", 5, 3).
+// Its argument "window_dimensions" gives the window.
+nx_members("argument", "window_dimensions", cat(
+  " Nx.window_sum/2:1 Nx.window_sum/3:1 Nx.window_mean/2:1 Nx.window_mean/3:1",
+  " Nx.window_max/2:1 Nx.window_max/3:1 Nx.window_min/2:1 Nx.window_min/3:1",
+  " Nx.window_product/2:1 Nx.window_product/3:1 Nx.window_reduce/4:2 Nx.window_reduce/5:2",
+  " Nx.window_scatter_max/4:3 Nx.window_scatter_max/5:3 Nx.window_scatter_min/4:3",
+  " Nx.window_scatter_min/5:3 ")).
 
 nx_members("argument", "first_operand", cat(
   " Nx.window_scatter_min/4:0 Nx.window_scatter_min/5:0 Nx.window_scatter_max/4:0",
@@ -6402,7 +6399,7 @@ nx_members("argument", "third_operand", cat(
 .decl window_dimensions(site: symbol, text: symbol, rank: number)
 window_dimensions(site, text, rank) :-
   operation_site(site, operation, arity),
-  window_operation(operation, arity, position),
+  nx_argument(operation, arity, position, "window_dimensions"),
   argument_literal(site, position, text),
   term_tuple(text, 0),
   term_length(text, 0, rank).
@@ -6410,7 +6407,7 @@ window_dimensions(site, text, rank) :-
 .decl window_instance(site: symbol, operands: Operands, rank: number)
 window_instance(site, [first, second, third], rank) :-
   site_instance(site, operation, arity, [first, second, third]),
-  window_operation(operation, arity, _),
+  nx_argument(operation, arity, _, "window_dimensions"),
   window_dimensions(site, _, rank),
   axes_sized(first),
   axes_rank(first, rank).
@@ -6503,7 +6500,7 @@ spelling_demand(windows) :-
 
 violation(context, site, "window", cat("invalid window dimensions, rank of shape (", to_string(rank), ") does not match rank of window (", to_string(window), ")")) :-
   site_instance(site, operation, arity, [first, second, third]),
-  window_operation(operation, arity, _),
+  nx_argument(operation, arity, _, "window_dimensions"),
   instance(context, site, [first, second, third], _),
   window_dimensions(site, _, window),
   axes_rank(first, rank),
@@ -8714,11 +8711,10 @@ partial_zero("index"). partial_zero("identity").
 .decl summed_past(site: symbol, position: number, cause: symbol)
 summed_past(site, position, cause) :-
   operation_site(site, operation, arity),
-  summed_operand(operation, arity, position),
+  nx_argument(operation, arity, position, "summed"),
   partial_zero(cause).
 
-.decl summed_operand(operation: symbol, arity: number, position: number)
-summed_operand("Nx.weighted_mean", 2, 1). summed_operand("Nx.weighted_mean", 3, 1).
+nx_members("argument", "summed", " Nx.weighted_mean/2:1 Nx.weighted_mean/3:1 ").
 
 // A value in a context can have the sign `sign`, "negative", "zero" or
 // "positive": some element, on some path. A value the rules do not follow
@@ -8947,21 +8943,19 @@ signed_call(context, site, function, class) :-
 slot_position(site, slot, slot - 1) :- sign_rule(site, _), slot = range(1, 4), !given_slot(site, _, _).
 slot_position(site, slot, position) :- given_slot(site, slot, position).
 
-// The operands a class reads where they are not its first arguments: a
-// select's branches, a fill's value, a dot product's operands where it is
-// given axes, and a splice's tensor and what it puts in.
+// The operands a class reads where they are not its first arguments
+// ("sign_first" and "sign_second", in slots 1 and 2): a select's
+// branches, a fill's value, a dot product's operands where it is given
+// axes, and a splice's tensor and what it puts in.
 .decl given_slot(site: symbol, slot: number, position: number)
-given_slot(site, 1, 1) :- sign_rule(site, "select").
-given_slot(site, 2, 2) :- sign_rule(site, "select").
-given_slot(site, 1, 1) :- sign_rule(site, "fill").
-given_slot(site, 1, 0) :- operation_site(site, "Nx.dot", 4), sign_rule(site, "dot").
-given_slot(site, 2, 2) :- operation_site(site, "Nx.dot", 4), sign_rule(site, "dot").
-given_slot(site, 1, 0) :- operation_site(site, "Nx.dot", 6), sign_rule(site, "dot").
-given_slot(site, 2, 3) :- operation_site(site, "Nx.dot", 6), sign_rule(site, "dot").
-given_slot(site, 1, 0) :- operation_site(site, "Nx.put_slice", _), sign_rule(site, "splice").
-given_slot(site, 2, 2) :- operation_site(site, "Nx.put_slice", _), sign_rule(site, "splice").
-given_slot(site, 1, 0) :- operation_site(site, "Nx.pad", _), sign_rule(site, "splice").
-given_slot(site, 2, 1) :- operation_site(site, "Nx.pad", _), sign_rule(site, "splice").
+given_slot(site, 1, position) :-
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "sign_first").
+given_slot(site, 2, position) :-
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "sign_second").
+nx_members("argument", "sign_first", " Nx.select:1 Nx.fill:1 Nx.dot/4:0 Nx.dot/6:0 Nx.put_slice:0 Nx.pad:0 ").
+nx_members("argument", "sign_second", " Nx.select:2 Nx.dot/4:2 Nx.dot/6:3 Nx.put_slice:2 Nx.pad:1 ").
 
 // The signs of the operand a call's class reads in a slot, in a context.
 .decl slot_sign(context: Context, site: symbol, slot: number, sign: symbol, origin: symbol, cause: symbol)
@@ -9865,16 +9859,19 @@ makes_unsupported_type(context, site, name) :-
 
 // ── Words ──────────────────────────────────────────────────────────
 
-// The operands of the Nx calls defined only on integers.
+// The operands of the Nx calls defined only on integers ("integer"): the
+// bitwise operations' and the integer quotient's, and indices.
 .decl integer_only(site: symbol, position: number)
 integer_only(site, position) :-
   operation_site(site, operation, arity),
-  integer_operand(operation, arity, position).
+  nx_argument(operation, arity, position, "integer").
 
-.decl integer_operand(operation: symbol, arity: number, position: number)
-integer_operand(operation, 2, position) :- nx_trait(operation, "integer_binary"), position = range(0, 2).
-integer_operand(operation, 1, 0) :- nx_trait(operation, "integer_unary").
-integer_operand(cat("Nx.", name), arity, 1) :- takes_indices(name, arity).
+nx_argument(operation, 2, position, "integer") :-
+  nx_trait(operation, "integer_binary"),
+  nx_named(operation, 2),
+  position = range(0, 2).
+nx_argument(operation, 1, 0, "integer") :- nx_trait(operation, "integer_unary"), nx_named(operation, 1).
+nx_argument(operation, arity, position, "integer") :- nx_argument(operation, arity, position, "indices").
 
 // The functions of two operands, and of one, defined only on integers:
 // the bitwise operations and the integer quotient, and the Kernel's
@@ -9884,13 +9881,11 @@ nx_members("trait", "integer_binary", cat(
   " Nx.Defn.Kernel.div Nx.Defn.Kernel.&&& Nx.Defn.Kernel.||| Nx.Defn.Kernel.<<< Nx.Defn.Kernel.>>> ")).
 nx_members("trait", "integer_unary", " Nx.bitwise_not Nx.population_count Nx.count_leading_zeros ").
 
-// The functions whose second operand is indices, by arity.
-.decl takes_indices(name: symbol, arity: number)
-takes_indices("take", 2). takes_indices("take", 3).
-takes_indices("take_along_axis", 2). takes_indices("take_along_axis", 3).
-takes_indices("gather", 2). takes_indices("gather", 3).
-takes_indices("indexed_add", 3). takes_indices("indexed_add", 4).
-takes_indices("indexed_put", 3). takes_indices("indexed_put", 4).
+// The functions whose second operand is indices ("indices"), by arity.
+nx_members("argument", "indices", cat(
+  " Nx.take/2:1 Nx.take/3:1 Nx.take_along_axis/2:1 Nx.take_along_axis/3:1 Nx.gather/2:1",
+  " Nx.gather/3:1 Nx.indexed_add/3:1 Nx.indexed_add/4:1 Nx.indexed_put/3:1",
+  " Nx.indexed_put/4:1 ")).
 
 // An argument of a call in a context can be of the class.
 .decl argument_class(context: Context, site: symbol, position: number, class: symbol, origin: symbol)
@@ -10030,14 +10025,16 @@ type_asked(context, site) :-
   type_given(site),
   site_active(context, site).
 
-// The position of a call's type argument.
+// The position of a call's type argument ("type"): the second of
+// `as_type`, `bitcast`, `from_binary` and `template`, and a constant's
+// first.
 .decl type_position(site: symbol, position: number)
-type_position(site, 1) :- operation_site(site, operation, _), typed_second(operation).
+type_position(site, position) :-
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "type").
 type_position(site, 0) :- remote_call(site, _, "Nx.Constants", _, arity), arity >= 1.
 
-.decl typed_second(operation: symbol)
-typed_second("Nx.as_type"). typed_second("Nx.bitcast"). typed_second("Nx.from_binary").
-typed_second("Nx.template").
+nx_members("argument", "type", " Nx.as_type:1 Nx.bitcast:1 Nx.from_binary:1 Nx.template:1 ").
 
 // How the code spells a type, as an atom of its name (`:f32`) or a tuple
 // of its family and size (`{:f, 32}`), and the type's name and class.

@@ -381,8 +381,7 @@ unsigned_logsumexp(context, site, type, origin) :-
 // type), "iota" (given a type), "cast", "pad", "clip", "determinant",
 // "sum", "logsumexp", "fill", "logarithm_base", "own_f32" (a call that
 // divides by or merges an f32 of its own); "rising" for what only rises
-// along its axis;
-// "operand" and "second_operand" for the operands a check reads.
+// along its axis.
 .decl dtype_call(site: symbol, role: symbol)
 dtype_call(site, role) :- operation_site(site, operation, _), nx_class(operation, "dtype_role", role).
 dtype_call(site, "subtract") :- operation_site(site, operation, 2), nx_class(operation, "sign", "subtract").
@@ -416,10 +415,7 @@ nx_members("dtype_role", "contract", " Nx.dot ").
 nx_members("dtype_role", "indexes", " Nx.argmax Nx.argmin Nx.argsort ").
 nx_members("dtype_role", "sum", " Nx.sum Nx.mean Nx.variance Nx.standard_deviation Nx.dot ").
 nx_members("dtype_role", "rising", " Nx.cumulative_sum Nx.cumulative_max Nx.iota Nx.sort ").
-nx_members("dtype_role", "operand", cat(
-  " Nx.as_type Nx.median Nx.diff Nx.outer Nx.weighted_mean Nx.all_close Nx.linspace",
-  " Nx.tensor ")).
-nx_members("dtype_role", "second_operand", " Nx.outer Nx.weighted_mean Nx.all_close Nx.linspace Nx.fill ").
+
 
 // What kind of number a type holds: "unsigned", "integer", "complex",
 // "floating" (a real float, the configured type among them), "byte" (an
@@ -1153,9 +1149,7 @@ typed_site(context, site) :- dtype_demand(context, _, "result", site), dtype_rul
 type_checked(site) :-
   dtype_call(site, role),
   role != "rising",
-  role != "indexes",
-  role != "operand",
-  role != "second_operand".
+  role != "indexes".
 type_checked(site) :- dtype_rule(site, class), in_set("dtype_checked", class).
 
 // The operands a typed call's type follows from, or a check reads.
@@ -1163,9 +1157,17 @@ type_checked(site) :- dtype_rule(site, class), in_set("dtype_checked", class).
 dtype_operand(site, first) :- merge_positions(site, first, _, _).
 dtype_operand(site, second) :- merge_positions(site, _, second, _).
 dtype_operand(site, 0) :- dtype_rule(site, class), in_set("dtype_unary", class).
-dtype_operand(site, 0) :- dtype_call(site, "operand").
-dtype_operand(site, 1) :- dtype_call(site, "second_operand").
+dtype_operand(site, position) :-
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "typed_operand").
 dtype_operand(site, position) :- dtype_rule(site, "clip"), position = range(0, 3).
+
+// The operands a check reads beside those a type rule does
+// ("typed_operand").
+nx_members("argument", "typed_operand", cat(
+  " Nx.as_type:0 Nx.median:0 Nx.diff:0 Nx.outer:0 Nx.weighted_mean:0 Nx.all_close:0",
+  " Nx.linspace:0 Nx.tensor:0 Nx.outer:1 Nx.weighted_mean:1 Nx.all_close:1 Nx.linspace:1",
+  " Nx.fill:1 ")).
 
 .decl typed_argument(context: Context, site: symbol, position: number, function: symbol, kind: symbol, source: symbol)
 typed_argument(context, site, position, function, kind, source) :-

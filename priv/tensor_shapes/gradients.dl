@@ -481,8 +481,8 @@ far_value_demand(function, kind, source) :-
   flow_argument(addition, function, _, kind, source).
 far_value_demand(function, kind, source) :-
   far_value_demand(function, "result", site),
-  operation_site(site, operation, _),
-  keeps_far_value(operation, position),
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "keeps_far_value"),
   flow_argument(site, function, position, kind, source).
 
 // A value can hold a written number far below or above zero
@@ -507,16 +507,22 @@ holds_far_value(function, "result", site, direction, cause) :-
   holds_far_value(function, kind, source, direction, cause),
   flow_argument(site, function, position, kind, source),
   far_value_demand(function, "result", site),
-  operation_site(site, operation, _),
-  keeps_far_value(operation, position).
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "keeps_far_value").
 
-// The operands whose far values a call's result keeps: a product's (by a
-// mask of zeros and ones), a move's, a select's branches.
-.decl keeps_far_value(operation: symbol, position: number)
-keeps_far_value(operation, position) :-
-  nx_class(operation, "sign", "multiply"), ( position = 0 ; position = 1 ).
-keeps_far_value(operation, 0) :- nx_trait(operation, "moves_elements").
-keeps_far_value("Nx.select", 1). keeps_far_value("Nx.select", 2).
+// The operands whose far values a call's result keeps
+// ("keeps_far_value"): a product's (by a mask of zeros and ones), a
+// move's, a select's branches.
+nx_members("argument", "keeps_far_value", " Nx.select:1 Nx.select:2 ").
+nx_argument(operation, arity, position, "keeps_far_value") :-
+  nx_class(operation, "sign", "multiply"),
+  nx_named(operation, arity),
+  position = range(0, 2),
+  position < arity.
+nx_argument(operation, arity, 0, "keeps_far_value") :-
+  nx_trait(operation, "moves_elements"),
+  nx_named(operation, arity),
+  arity >= 1.
 
 // ── Degenerate matrices ───────────────────────────────────────────────
 
@@ -579,19 +585,15 @@ fails_at_degenerate("Nx.LinAlg.solve", "low_rank", "raises").
 // position a gradient would flow back through carries one.
 .decl underivable_call(site: symbol)
 underivable_call(site) :-
-  operation_site(site, operation, _),
-  no_derivative(operation, position),
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "no_derivative"),
   differentiated_operand(site, position).
 
 // The Nx functions Nx has no derivative for, by the positions of their
-// tensor operands.
-.decl no_derivative(operation: symbol, position: number)
-no_derivative("Nx.reduce", 0). no_derivative("Nx.reduce", 1).
-no_derivative("Nx.window_reduce", 0). no_derivative("Nx.window_reduce", 1).
-no_derivative("Nx.window_product", 0).
-no_derivative("Nx.quotient", 0). no_derivative("Nx.quotient", 1).
-no_derivative("Nx.Defn.Kernel.div", 0). no_derivative("Nx.Defn.Kernel.div", 1).
-no_derivative("Nx.map", 0).
+// tensor operands ("no_derivative").
+nx_members("argument", "no_derivative", cat(
+  " Nx.reduce:0 Nx.reduce:1 Nx.window_reduce:0 Nx.window_reduce:1 Nx.window_product:0",
+  " Nx.quotient:0 Nx.quotient:1 Nx.Defn.Kernel.div:0 Nx.Defn.Kernel.div:1 Nx.map:0 ")).
 
 // Such a call whose result `stop_grad` is taken of, which no gradient
 // comes back through.

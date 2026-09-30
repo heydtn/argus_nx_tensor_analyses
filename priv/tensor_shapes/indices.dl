@@ -204,14 +204,14 @@ branch_nonnegative("greater", 1). branch_nonnegative("less_equal", 2).
 // indices are the second argument of a take, gather or indexed update.
 .decl negative_index(context: Context, site: symbol, origin: symbol, cause: symbol)
 negative_index(context, site, origin, cause) :-
-  operation_site(site, cat("Nx.", name), arity),
-  takes_indices(name, arity),
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, 1, "indices"),
   signed_argument(context, site, 1, function, kind, source),
   can_go_negative(context, function, kind, source, origin, cause).
 
 negative_asked(context, function, kind, source) :-
-  operation_site(site, cat("Nx.", name), arity),
-  takes_indices(name, arity),
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, 1, "indices"),
   site_active(context, site),
   flow_argument(site, function, 1, kind, source).
 

@@ -39,7 +39,7 @@ sliding(site, [first, second, third], rank - 2, "conv_options") :-
 .plan 1:(2,1,3), 2:(3,1,2)
 sliding(site, [first, second, third], rank, "window_options") :-
   site_instance(site, operation, arity, [first, second, third]),
-  window_operation(operation, arity, _),
+  nx_argument(operation, arity, _, "window_dimensions"),
   axes_rank(first, rank).
 .plan 1:(3,2,1)
 
@@ -162,13 +162,13 @@ operand_misfit(site, [first, second, nil], "conv_options", cat("size of kernel o
 // (`Nx.window_reduce/5` fails otherwise on those, in a function clause
 // or in its backend.)
 written_misfit(site, "window_options", cat("invalid window_dimensions. window_dimensions is a n-element tuple with the size of each dimension. Got: ", text)) :-
-  window_operation(operation, arity, position),
+  nx_argument(operation, arity, position, "window_dimensions"),
   operation != "Nx.window_reduce",
   operation_site(site, operation, arity),
   argument_literal(site, position, text),
   term_list(text, 0).
 written_misfit(site, "window_options", cat("invalid dimension in axis ", to_string(axis), " found in window_dimensions. Each dimension must be a positive integer, got ", to_string(size), " in shape ", text)) :-
-  window_operation(operation, arity, position),
+  nx_argument(operation, arity, position, "window_dimensions"),
   operation != "Nx.window_reduce",
   operation_site(site, operation, arity),
   argument_literal(site, position, text),

@@ -196,8 +196,8 @@ product_length(context, site, size) :-
 // sampler.
 
 nx_members("sign", "add", " Nx.Random.uniform_split Nx.Random.randint_split ").
-given_slot(site, 1, 1) :- operation_site(site, operation, _), range_sampler(operation).
-given_slot(site, 2, 2) :- operation_site(site, operation, _), range_sampler(operation).
+nx_members("argument", "sign_first", " Nx.Random.uniform_split:1 Nx.Random.randint_split:1 ").
+nx_members("argument", "sign_second", " Nx.Random.uniform_split:2 Nx.Random.randint_split:2 ").
 
 // A sample is exactly its minimum now and then: zero where the minimum
 // can be.
@@ -261,12 +261,16 @@ sign_rule(site, "add") :-
   operation_site(site, operation, arity),
   tuple_sampler(operation),
   arity >= 3.
-given_slot(site, 1, 1) :- operation_site(site, operation, arity), tuple_sampler(operation), arity >= 3.
-given_slot(site, 2, 2) :- operation_site(site, operation, arity), tuple_sampler(operation), arity >= 3.
+nx_members("argument", "sign_first", cat(
+  " Nx.Random.uniform/3:1 Nx.Random.uniform/4:1 Nx.Random.randint/3:1",
+  " Nx.Random.randint/4:1 ")).
+nx_members("argument", "sign_second", cat(
+  " Nx.Random.uniform/3:2 Nx.Random.uniform/4:2 Nx.Random.randint/3:2",
+  " Nx.Random.randint/4:2 ")).
 sign_rule(site, "preserve") :-
   operation_site(site, operation, _),
   tensor_sampler(operation).
-given_slot(site, 1, 1) :- operation_site(site, operation, _), tensor_sampler(operation).
+nx_members("argument", "sign_first", " Nx.Random.shuffle:1 Nx.Random.choice:1 ").
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -593,8 +597,8 @@ nx_members("sign", "preserve", " Nx.window_mean Nx.median ").
 nx_members("unit", "move", " Nx.window_mean Nx.median ").
 nx_members("type", "median", " Nx.median ").
 nx_members("sign", "subtract", " Nx.diff ").
-given_slot(site, 1, 0) :- operation_site(site, "Nx.diff", _).
-given_slot(site, 2, 0) :- operation_site(site, "Nx.diff", _).
+nx_members("argument", "sign_first", " Nx.diff:0 ").
+nx_members("argument", "sign_second", " Nx.diff:0 ").
 nx_members("sign", "divide", " Nx.weighted_mean ").
 
 // `Nx.weighted_mean/3` divides by the sum of its weights, which is zero

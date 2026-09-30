@@ -377,7 +377,7 @@ call_error(context, site, "closure_captures_tensor", "", "") :-
 
 // ── Words ──────────────────────────────────────────────────────────
 
-// A value a closure handed to a call in `scoped_fun` captures and
+// A value a closure handed to a call as its "scoped_fun" captures and
 // computes with, by its source where the closure is built: the closure
 // hands it to an Nx call that does more than ask about its shape or look
 // a key up, or gives it back.
@@ -400,14 +400,13 @@ captured_use(site, function, kind, source) :-
 .decl scoped_closure(site: symbol, function: symbol, closure: symbol)
 scoped_closure(site, function, closure) :-
   operation_site(site, operation, operation_arity),
-  scoped_fun(operation, operation_arity, position),
+  nx_argument(operation, operation_arity, position, "scoped_fun"),
   flow_argument(site, function, position, "object", closure),
   flow_closure(closure, _).
 
-.decl scoped_fun(operation: symbol, arity: number, position: number)
-scoped_fun("Nx.Defn.Kernel.__while__", 6, 4).
-scoped_fun("Nx.reduce", 3, 2). scoped_fun("Nx.reduce", 4, 3).
-scoped_fun("Nx.window_reduce", 4, 3). scoped_fun("Nx.window_reduce", 5, 4).
+nx_members("argument", "scoped_fun", cat(
+  " Nx.Defn.Kernel.__while__/6:4 Nx.reduce/3:2 Nx.reduce/4:3 Nx.window_reduce/4:3",
+  " Nx.window_reduce/5:4 ")).
 
 // ══ Values Nx makes no tensor of ════════════════════════════════════
 
@@ -497,12 +496,13 @@ integer_part(site, function, kind, source, "the shape") :-
   entry_body(function, _).
 integer_part(site, function, kind, source, "the window dimensions") :-
   operation_site(site, operation, arity),
-  window_operation(operation, arity, position),
+  nx_argument(operation, arity, position, "window_dimensions"),
   flow_argument(site, function, position, kind, source),
   entry_body(function, _).
 integer_part(site, function, kind, source, slot) :-
   operation_site(site, operation, arity),
-  integer_position(operation, arity, position, slot),
+  nx_argument(operation, arity, position, "integer_part"),
+  nx_class(operation, "integer_part", slot),
   flow_argument(site, function, position, kind, source),
   entry_body(function, _).
 integer_part(site, function, kind, source, cat("the :", key, " option")) :-
@@ -513,14 +513,18 @@ integer_part(site, function, kind, source, slot) :-
   integer_part(site, function, "object", object, slot),
   flow_field(function, object, _, kind, source).
 
-.decl integer_position(operation: symbol, arity: number, position: number, slot: symbol)
-integer_position("Nx.slice", arity, 2, "the slice lengths") :- arity = 3 ; arity = 4.
-integer_position("Nx.slice_along_axis", arity, 2, "the slice length") :- arity = 3 ; arity = 4.
-integer_position("Nx.tile", 2, 1, "the repetitions").
-integer_position("Nx.new_axis", arity, 1, "the axis") :- arity = 2 ; arity = 3.
-integer_position("Nx.pad", 3, 2, "the padding").
-integer_position("Nx.Defn.Kernel...", 2, position, "a range's bound") :- position = range(0, 2).
-integer_position("Nx.Defn.Kernel...//", 3, position, "a range's bound") :- position = range(0, 3).
+// The arguments Nx takes as integers ("integer_part"), and what a
+// finding calls each function's (its "integer_part" class).
+nx_members("argument", "integer_part", cat(
+  " Nx.slice/3:2 Nx.slice/4:2 Nx.slice_along_axis/3:2 Nx.slice_along_axis/4:2 Nx.tile/2:1",
+  " Nx.new_axis/2:1 Nx.new_axis/3:1 Nx.pad/3:2 Nx.Defn.Kernel.../2:0 Nx.Defn.Kernel.../2:1",
+  " Nx.Defn.Kernel...///3:0 Nx.Defn.Kernel...///3:1 Nx.Defn.Kernel...///3:2 ")).
+nx_members("integer_part", "the slice lengths", " Nx.slice ").
+nx_members("integer_part", "the slice length", " Nx.slice_along_axis ").
+nx_members("integer_part", "the repetitions", " Nx.tile ").
+nx_members("integer_part", "the axis", " Nx.new_axis ").
+nx_members("integer_part", "the padding", " Nx.pad ").
+nx_members("integer_part", "a range's bound", " Nx.Defn.Kernel... Nx.Defn.Kernel...// ").
 
 .decl integer_option(key: symbol)
 integer_option("axis"). integer_option("axes"). integer_option("k"). integer_option("length").
