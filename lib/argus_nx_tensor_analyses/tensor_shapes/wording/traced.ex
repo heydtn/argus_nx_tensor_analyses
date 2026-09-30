@@ -210,7 +210,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
 
   defp traced(_jit),
     do:
-      "This code runs in a function handed to Nx.Defn.jit/2 (or jit_apply/3 or compile/3), which Nx traces to compile it"
+      "This code runs in a function handed to Nx.Defn.jit/2 (or jit_apply/3 or compile/3, or EXLA's), which Nx traces to compile it"
 
   defp captured_raise("grad"),
     do:

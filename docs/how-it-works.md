@@ -52,9 +52,10 @@ values through the program to where they meet. The EMLX analysis,
   has none, and nothing is reported of it.
 - **Traced code is known.** The rules follow which code Nx traces rather
   than runs: `defn` bodies and what they reach, and funs handed to
-  `Nx.Defn.jit`, `compile`, `grad` and `value_and_grad`, or to
-  `EXLA.jit`. Reading a tensor's data there, or calling Elixir operators
-  on a tensor outside it, is reported.
+  `Nx.Defn.jit`, `jit_apply`, `compile`, `grad` and `value_and_grad`, or
+  to EXLA's `jit`, `jit_apply` and `compile`. Reading a tensor's data
+  there, or calling Elixir operators on a tensor outside it, is
+  reported.
 - **Gradients.** A function handed to a grad, and whatever it calls, is
   differentiated. Values made from the variable it differentiates are
   followed up to `stop_grad`, and a `custom_grad` replaces the gradient of
