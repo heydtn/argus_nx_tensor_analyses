@@ -357,7 +357,10 @@ is checked as one outside it is.
 | `batch_scalar_entry` | error | A scalar in `Nx.Batch.concatenate/2`. | `Nx.Batch.concatenate([Nx.tensor(1)])` |
 | `batch_empty` | error | A serving run on an empty batch. | `Nx.Serving.run(serving, Nx.Batch.new())` |
 | `serving_entry_shape_varies` | warning | A serving process whose preprocessing batches each request as it comes, so requests of different shapes crash the batch and the serving's supervisor. | `client_preprocessing(fn input -> {Nx.Batch.stack([input]), :ok} end)` |
-| `serving_run_input` | error | A tensor handed to a serving with no client preprocessing. | `Nx.Serving.run(serving, Nx.tensor([1, 2, 3]))` |
+| `serving_run_input` | error | A tensor, or a list of tensors, handed to a serving with no client preprocessing. | `Nx.Serving.run(serving, Nx.tensor([1, 2, 3]))` |
+| `serving_run_name` | error | `Nx.Serving.run/2` handed a name, where it takes the serving itself. | `Nx.Serving.run(MyServing, batch)` |
+| `serving_batched_run_struct` | error | `Nx.Serving.batched_run/2,3` handed a serving, where it takes a serving process's name. | `Nx.Serving.batched_run(Nx.Serving.jit(&Nx.exp/1), batch)` |
+| `serving_batch_size_conflict` | error | A serving process started with another `batch_size:` than the one `Nx.Serving.batch_size/2` sets on its serving. | `{Nx.Serving, serving: Nx.Serving.batch_size(serving, 4), name: MyServing, batch_size: 8}` |
 | `serving_preprocessing_result` | error | A client preprocessing that returns no `{batch, info}` pair. | `client_preprocessing(fn input -> Nx.Batch.stack([input]) end)` |
 | `serving_builder_result` | error | An `Nx.Serving.new/2` builder that returns no compiled function. | `Nx.Serving.new(fn x -> Nx.multiply(x, 2) end)` |
 | `serving_computation_arity` | error | A serving computation of more than one argument. | `Nx.Serving.jit(fn x, y -> Nx.add(x, y) end)` |

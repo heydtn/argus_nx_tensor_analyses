@@ -171,8 +171,10 @@ call_error(setting, "serving_entry_shape_varies", "its batch's entry is the requ
 
 // A call of `Nx.Serving`'s handed what it cannot take, which Nx raises
 // for when the serving runs or starts: "serving_run_input",
-// "serving_preprocessing_result", "serving_builder_result",
-// "serving_computation_arity", "serving_postprocessing_input".
+// "serving_run_name", "serving_batched_run_struct",
+// "serving_batch_size_conflict", "serving_preprocessing_result",
+// "serving_builder_result", "serving_computation_arity",
+// "serving_postprocessing_input".
 
 // A serving with the default preprocessing, which takes only batches, is
 // run on a tensor.
@@ -181,6 +183,40 @@ call_error(run, "serving_run_input", "it is handed a tensor, and the serving has
   run_argument(run, 1, _, "result", made),
   operation_site(made, _, _),
   active_site(run).
+
+// A serving with the default preprocessing, which takes a list for a
+// stream of batches, is run on a list whose first element is a tensor.
+call_error(run, "serving_run_input", "it is handed a list of tensors, which it takes for a stream of batches", made) :-
+  run_without_preprocessing(run, _),
+  run_argument(run, 1, _, "object", list),
+  list_element(list, 0, "result", made),
+  operation_site(made, _, _),
+  active_site(run).
+
+// `Nx.Serving.run/2`, which runs a serving itself, is handed a name:
+// reported wherever the call is, as a caller of a serving need not
+// compute with tensors itself.
+call_error(run, "serving_run_name", name, "") :-
+  run_argument(run, 0, _, "literal", name),
+  ( term_atom(name, 0, _) ; term_module(name, 0, _) ).
+
+// `Nx.Serving.batched_run/2,3`, which runs a serving process by its name,
+// is handed a serving, wherever the call is.
+call_error(run, "serving_batched_run_struct", "", serving) :-
+  remote_call(run, function, "Nx.Serving", "batched_run", _),
+  flow_argument(run, function, 0, kind, source),
+  on_its_way(function, kind, source, "serving", serving).
+
+// A serving process is started with another batch size than the one
+// `Nx.Serving.batch_size/2` sets on its serving (`detail`, that size,
+// then the start's), from `Nx.Serving.start_link/1`, or from a child
+// specification, which is no call to point at.
+call_error(setting, "serving_batch_size_conflict", cat(size, " ", given), origin) :-
+  started_with_batch_size(start, setting, size),
+  option(start, "batch_size", text, position),
+  term_spelling(text, position, given),
+  given != size,
+  ( remote_call(start, _, _, _, _), origin = start ; flow_object(_, start, "tuple", _), origin = "" ).
 
 // A preprocessing returns a batch, not a `{batch, info}` pair.
 call_error(setting, "serving_preprocessing_result", "the preprocessing returns a batch, not a {batch, info} pair", "") :-
@@ -221,7 +257,8 @@ call_error(site, "serving_postprocessing_input", "the postprocessing takes the o
 // serving ("serving"); hands back its first argument, the serving or
 // batch, with a setting changed ("hands_back"); sets a preprocessing
 // ("preprocessing"); adds entries to a batch ("entries"), sets its key
-// ("key") or pads it ("pad").
+// ("key") or pads it ("pad"); sets a serving's batch size
+// ("batch_size").
 .decl api_role(module: symbol, name: symbol, role: symbol)
 api_role("Nx.Serving", "new", "serving"). api_role("Nx.Serving", "jit", "serving").
 api_role("Nx.Serving", "client_preprocessing", "hands_back").
@@ -234,6 +271,7 @@ api_role("Nx.Batch", "pad", "hands_back"). api_role("Nx.Batch", "key", "hands_ba
 api_role("Nx.Batch", "stack", "hands_back"). api_role("Nx.Batch", "concatenate", "hands_back").
 api_role("Nx.Batch", "stack", "entries"). api_role("Nx.Batch", "concatenate", "entries").
 api_role("Nx.Batch", "key", "key"). api_role("Nx.Batch", "pad", "pad").
+api_role("Nx.Serving", "batch_size", "batch_size").
 
 // The value may be the result of `site`, a call of `Nx.Serving`'s or
 // `Nx.Batch`'s: directly, or through calls that hand back their first
@@ -267,6 +305,7 @@ on_its_way(function, kind, source, role, site) :-
 run_argument(run, position, function, kind, source) :-
   remote_call(run, function, "Nx.Serving", "run", 2),
   argument_source(run, function, position, kind, source).
+list_asked(list) :- run_argument(_, 1, _, "object", list).
 
 // A serving that is started as a process, by the `serving:` option of
 // the options it is started with at `start`.
@@ -274,6 +313,14 @@ run_argument(run, position, function, kind, source) :-
 started(start, serving) :-
   option_pair(start, "serving", function, kind, source),
   on_its_way(function, kind, source, "serving", serving).
+
+// A start of a serving process whose serving `Nx.Serving.batch_size/2`
+// sets a written batch size, `size`, on its way there.
+.decl started_with_batch_size(start: symbol, setting: symbol, size: symbol)
+started_with_batch_size(start, setting, size) :-
+  option_pair(start, "serving", function, kind, source),
+  on_its_way(function, kind, source, "batch_size", setting),
+  flow_argument(setting, _, 1, "literal", size).
 
 // The options a serving process is started with: those of the child
 // specification `{Nx.Serving, options}`, which Nx documents, and those
