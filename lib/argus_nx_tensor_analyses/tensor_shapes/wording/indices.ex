@@ -213,7 +213,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
       detail:
         "An operand can be complex, and #{complex_rejection(operation)}. Complex numbers have " <>
           "no order, so a maximum, a sort, a comparison or a rounding has no meaning for them.",
-      label: "gets a complex tensor here",
+      label: "gets a complex tensor",
       help:
         "take a real value first: Nx.abs/1 for a spectrum's magnitude, or Nx.real/1 and Nx.imag/1",
       frame: "makes it complex:"
@@ -227,7 +227,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
         "Its operand can be complex, and #{without_arity(operation)} squares each deviation as it is " <>
           "(x ** 2, not |x| ** 2): the result is complex and not a spread " <>
           "(Nx.variance of [1+i, 0] is 0.5i). Nx does not raise.",
-      label: "gets a complex tensor here",
+      label: "gets a complex tensor, whose squares are complex",
       help:
         "take the spread of the magnitudes, Nx.abs/1, or of the real and imaginary parts apart",
       frame: "makes it complex:",

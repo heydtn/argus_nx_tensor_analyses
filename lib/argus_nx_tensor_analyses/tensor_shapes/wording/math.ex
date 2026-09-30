@@ -144,7 +144,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
           "exponent can be negative, where an integer power has no integer value. Nx's binary " <>
           "backend raises ArithmeticError there, EXLA and EMLX on the GPU give 0, and EMLX on " <>
           "the CPU hangs.",
-      label: "raises to the power here",
+      label: "an integer power, where 2 ** -1 has no integer value",
       help:
         "make the base a float (Nx.as_type(base, :f32)) to get fractions, or keep the exponent from going below zero",
       frame: "because of this",
@@ -156,7 +156,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
     %{
       title: "is made in #{name}, which has no such value",
       detail: "#{constant_types(operation)} Nx raises for #{name}.",
-      label: "makes the constant here",
+      label: "makes #{constant_name(operation)} in #{name}",
       help: "make the constant in a type that has it, and convert the result if need be",
       frame: "because of this",
       severity: :error
@@ -165,6 +165,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
 
   def call_error("rounded_logarithm", rounding, _operation) do
     {title, taken} = rounding(rounding)
+    label = if rounding in ["floor", "ceil"], do: "takes the #{taken}", else: "truncates"
 
     %{
       title: title,
@@ -172,10 +173,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
         "A logarithm computed in floating point misses the whole number at an exact power by " <>
           "a rounding error: Nx.log2 of 8192 is just under 13, and Nx.log10 of 10^29 is " <>
           "29.000002. The #{taken} is off by one there.",
-      label: "rounds here",
+      label: "#{label}, off by one at an exact power",
       help:
         "count bits or digits with integer operations (for a power of two, 31 minus Nx.count_leading_zeros/1 of an s32), or correct the result where the power it gives misses the operand",
-      frame: "the logarithm is taken here",
+      frame: "takes the logarithm:",
       severity: :warning
     }
   end
@@ -189,12 +190,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Math do
   defp rounding(_truncation),
     do: {"converts a logarithm to base 2 or 10 to integers", "integer it truncates to"}
 
+  defp constant_name(operation) do
+    operation
+    |> without_arity()
+    |> String.replace_prefix("Nx.Constants.", "")
+  end
+
   # Which types have a constant, by the function that makes it.
   defp constant_types(operation) do
-    name =
-      operation
-      |> without_arity()
-      |> String.replace_prefix("Nx.Constants.", "")
+    name = constant_name(operation)
 
     cond do
       name in ~w(nan infinity neg_infinity) ->

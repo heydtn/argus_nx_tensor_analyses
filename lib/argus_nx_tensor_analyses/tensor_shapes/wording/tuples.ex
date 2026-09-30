@@ -63,7 +63,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Tuples do
       title: "takes one norm of the whole matrix, whatever :axes says",
       detail:
         "With ord: #{order}, #{operation} first reduces the matrix to a vector (its column sums, row sums or singular values) and applies :axes to that vector, or ignores :axes for :nuclear: it returns one norm of the whole matrix, not one for each row or column.",
-      label: "one norm of the whole matrix",
+      label: "ord: #{order} gives one norm of the whole matrix",
       help:
         "for a norm of each row or column take a vector norm along the axis, such as Nx.LinAlg.norm(t, axes: [1]) or Nx.sum(Nx.abs(t), axes: [1])",
       frame: "because of this",

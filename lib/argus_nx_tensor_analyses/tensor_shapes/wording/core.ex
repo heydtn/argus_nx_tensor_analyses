@@ -231,7 +231,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Core do
       title:
         "takes integers, and its #{ordinal(to_string(position), 4)} argument can be a #{class}",
       detail: "#{rejects} Nx raises for a #{class} tensor there.",
-      label: "gets a #{class} here",
+      label: "gets a #{class}, not an integer",
       help: help,
       frame: "makes it a #{class}:"
     }
@@ -244,7 +244,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Core do
         "The analysis is run with #{name} among the types the backend lacks (the " <>
           ":unsupported_types option). A backend without #{name} raises making it, or at the " <>
           "first operation over it.",
-      label: "makes #{name} here",
+      label: "makes #{name}, which :unsupported_types lists",
       help:
         "make it a type the backend supports, such as f32, or run this on a backend that has #{name}",
       frame: "",
