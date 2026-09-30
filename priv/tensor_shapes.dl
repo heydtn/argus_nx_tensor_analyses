@@ -1303,9 +1303,6 @@ argument_suffix(arguments, 0, arguments) :-
   arity > 6.
 argument_suffix(arguments, position + 1, rest) :- argument_suffix(arguments, position, [_, rest]).
 
-.decl argument_at(arguments: Arguments, position: number, value: Value)
-argument_at(arguments, position, value) :- argument_suffix(arguments, position, [value, _]).
-
 // ══ Values ══════════════════════════════════════════════════════════
 
 // What the source of a function may be in a context.
@@ -1362,7 +1359,7 @@ parameter_value($Canonical(function, arguments), function, 5, value) :-
   arguments = [_, [_, [_, [_, [_, [value, _]]]]]].
 parameter_value($Canonical(function, arguments), function, position, value) :-
   active($Canonical(function, arguments), function),
-  argument_at(arguments, position, value),
+  argument_suffix(arguments, position, [value, _rest]),
   position > 5.
 .plan 1:(2,1)
 parameter_value($Called(site, context), callee, position, value) :-
@@ -2445,7 +2442,7 @@ shape_argument(context, site, position, axes) :-
 shape_argument(context, site, position, axes) :-
   argument_value(context, site, position, $Object(object_context, tuple, mapping)),
   shape_position(site, position),
-  shape_tuple($Object(object_context, tuple, mapping), axes).
+  shape_tuple_from($Object(object_context, tuple, mapping), 0, axes).
 .plan 1:(3,1,2)
 shape_argument(context, site, position, axes) :-
   argument_value(context, site, position, $Tensor([nil, axes])),
@@ -2519,9 +2516,6 @@ shape_tuple_from(tuple, index, [size, "nil", rest]) :-
   index >= 0,
   shape_element(tuple, index, size).
 .plan 1:(2,1)
-
-.decl shape_tuple(tuple: Value, axes: Axes)
-shape_tuple(tuple, axes) :- shape_tuple_from(tuple, 0, axes).
 
 // ── Shapes not known ───────────────────────────────────────────────
 
@@ -3692,7 +3686,7 @@ unnamed([size, name, rest], [size, "nil", result]) :-
   unnamed(rest, result).
 .plan 1:(2,1)
 
-// The product of `length` axes from `from` on.
+// The product of the first `taken` of `length` axes from `from` on.
 .decl range_product_demand(axes: Axes, from: number, length: number)
 .decl range_product_upto(axes: Axes, from: number, length: number, taken: number, product: Size)
 range_product_upto(axes, from, length, 0, [1, nil]) :- range_product_demand(axes, from, length).
@@ -3707,9 +3701,6 @@ product_demand(partial, size) :-
   taken < length,
   axes_axis(axes, from + taken, size, _).
 .plan 1:(2,1)
-
-.decl range_product(axes: Axes, from: number, length: number, product: Size)
-range_product(axes, from, length, product) :- range_product_upto(axes, from, length, length, product).
 
 // Two names combined as broadcasting combines them: equal, or one nil.
 .decl name_pair(left: symbol, right: symbol)
@@ -4721,7 +4712,7 @@ build_axis(site, [first, second, third], axis, size, name) :-
 build_axis(site, [first, second, third], from, product, "nil") :-
   site_instance(site, "Nx.flatten", _, [first, second, third]),
   flatten_run(site, first, from, length),
-  range_product(first, from, length, product).
+  range_product_upto(first, from, length, length, product).
 .plan 1:(2,3,1), 2:(3,2,1)
 build_axis(site, [first, second, third], axis, size, name) :-
   site_instance(site, "Nx.flatten", _, [first, second, third]),
@@ -5761,11 +5752,10 @@ name_pair(name, later) :-
   axes_axis(axes, axis, _, name).
 .plan 1:(2,1,3), 2:(3,2,1)
 
-.decl list_output(site: symbol, tensors: Tensors, axes: Axes)
 result_tensor(context, site, [vectorized, axes]) :-
   list_instance(context, site, tensors),
   list_vectorized(site, tensors, tensors, vectorized),
-  list_output(site, tensors, axes).
+  list_build_from(site, tensors, 0, axes).
 .plan 1:(2,1,3), 2:(3,2,1)
 
 .decl list_build_rank(site: symbol, tensors: Tensors, rank: number)
@@ -5778,7 +5768,6 @@ list_build_from(site, tensors, axis, [size, name, rest]) :-
   axis >= 0,
   list_build_axis(site, tensors, axis, size, name).
 .plan 1:(2,1)
-list_output(site, tensors, axes) :- list_build_from(site, tensors, 0, axes).
 
 // Concatenating: every element agrees with the first but along the axis,
 // whose sizes add up.
