@@ -26,6 +26,22 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Consumption do
     }
   end
 
+  def call_error("reused_seed", detail, _operation) do
+    [seed, draws] = String.split(detail, " ", parts: 2)
+    {drawn, earlier} = split_draws(draws)
+
+    %{
+      title: "draws from a key made of the same seed as one drawn from earlier",
+      detail:
+        "#{drawn} draws from Nx.Random.key(#{seed}), and #{earlier} drew from another Nx.Random.key(#{seed}) earlier in this function. Keys made of one seed are equal. #{@same_bits}",
+      label: "draws from Nx.Random.key(#{seed}) again",
+      help:
+        "make one key and split it (Nx.Random.split(key, parts: 2)), or draw from the new key each sampler returns; give keys meant to differ different seeds",
+      frame: "another Nx.Random.key(#{seed}) was first drawn from by",
+      severity: :warning
+    }
+  end
+
   def call_error("captured_loop_key", drawn, _operation) do
     %{
       title: "draws from the same key on every pass of a loop",

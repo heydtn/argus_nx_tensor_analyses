@@ -3222,6 +3222,17 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "reused_key", "Nx.Random.uniform after Nx.Random.split"},
       :finite},
      "key = Nx.Random.key(42)\nkeys = Nx.Random.split(key)\n{a, _} = Nx.Random.uniform(key)\n{a, keys}"},
+    # two keys made of one written seed, and of two
+    {{:finds,
+      {"tensor_call_error", "reused_seed", "42 Nx.Random.uniform after Nx.Random.uniform"},
+      :finite},
+     "first = Nx.Random.key(42)\nsecond = Nx.Random.key(42)\n{a, _} = Nx.Random.uniform(first)\n{b, _} = Nx.Random.uniform(second)\nNx.subtract(a, b)"},
+    {{:finds_none, :finite},
+     "first = Nx.Random.key(42)\nsecond = Nx.Random.key(43)\n{a, _} = Nx.Random.uniform(first)\n{b, _} = Nx.Random.uniform(second)\nNx.subtract(a, b)"},
+    {{:finds, {"tensor_call_error", "reused_seed", :any}, :finite},
+     "{a, _} = Nx.Random.uniform(Nx.Random.key(7), shape: {4})\n{b, _} = Nx.Random.normal(Nx.Random.key(7), shape: {4})\nNx.add(a, b)"},
+    {{:finds_none, :finite},
+     "if config.heads > 0, do: elem(Nx.Random.uniform(Nx.Random.key(42)), 0), else: elem(Nx.Random.normal(Nx.Random.key(42)), 0)"},
     # draws on two branches draw once on any path
     {{:finds_none, :finite},
      "key = Nx.Random.key(42)\nif config.heads > 0, do: elem(Nx.Random.uniform(key), 0), else: elem(Nx.Random.normal(key), 0)"},

@@ -330,6 +330,7 @@ it as a literal.
 | Kind | Severity | Catches | Example |
 |---|---|---|---|
 | `reused_key` | warning | Two draws from one key in a function, one after the other on some path: one variable, field or split part, or a helper handed the key twice. | `{a, _} = Nx.Random.uniform(key); {b, _} = Nx.Random.uniform(key)` |
+| `reused_seed` | warning | Two keys `Nx.Random.key/1` makes of one written seed, each drawn from in a function, one after the other on some path. | `a = Nx.Random.key(42); b = Nx.Random.key(42); {x, _} = Nx.Random.uniform(a); {y, _} = Nx.Random.uniform(b)` |
 | `captured_loop_key` | warning | A loop's function (`for`, `Enum`, `Stream`, a `defn`'s `while`) that draws from a key captured from outside. | `for _ <- 1..3, do: elem(Nx.Random.uniform(key), 0)` |
 | `passed_back_key` | warning | A loop's function that draws from its key and hands that same key to the next pass. | `Enum.map_reduce(1..3, key, fn _, key -> {elem(Nx.Random.uniform(key), 0), key} end)` |
 | `spent_key_returned` | warning | A function that returns a key it drew from: alone, in a term, or in the state it read it from. | `{sample, _} = Nx.Random.uniform(key); {sample, key}` |
@@ -338,10 +339,10 @@ it as a literal.
 | `used_after_deallocation` | error for a read by an Nx call; warning when handed on or returned | A tensor used after `Nx.backend_deallocate/1`. | `Nx.backend_deallocate(t); Nx.sum(t)` |
 | `used_after_donation` | warning | A tensor marked with `Nx.donatable/1` read, handed on or returned after the jitted call it was donated to. | `_ = doubled.(Nx.donatable(t)); Nx.add(t, 1)` |
 
-`Nx.Random.fold_in/2` is no draw, draws on two branches are one draw on
-either path, and two keys from one written seed are not reported. EMLX and
-EXLA raise reading a freed tensor; the BinaryBackend frees nothing, so
-tests there pass. A draw inside a `defn` is checked as one outside it is.
+`Nx.Random.fold_in/2` is no draw, and draws on two branches are one draw
+on either path. EMLX and EXLA raise reading a freed tensor; the
+BinaryBackend frees nothing, so tests there pass. A draw inside a `defn`
+is checked as one outside it is.
 
 ### Servings and batches
 

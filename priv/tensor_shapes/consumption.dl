@@ -162,6 +162,24 @@ reused_key(first, second, function) :-
   key_drawn(second, function, key),
   runs_later(first, second).
 
+// Two keys made of one written seed, each drawn from, one draw after the
+// other on some path: `Nx.Random.key/1` makes equal keys of equal seeds,
+// so the draws get the same bits.
+.decl keys_of_one_seed(first: symbol, second: symbol, function: symbol, seed: symbol)
+keys_of_one_seed(first, second, function, seed) :-
+  draws_seeded_key(first, function, first_key, seed),
+  draws_seeded_key(second, function, second_key, seed),
+  first_key != second_key,
+  runs_later(first, second).
+
+// A call that draws from a key `Nx.Random.key/1` made at `key` of a
+// written seed.
+.decl draws_seeded_key(draw: symbol, function: symbol, key: symbol, seed: symbol)
+draws_seeded_key(draw, function, key, seed) :-
+  consumes_key(draw, function, "result", key, _),
+  operation_site(key, "Nx.Random.key", 1),
+  argument_literal(key, 0, seed).
+
 // A function that draws from a key and runs on each pass of a loop: the
 // code of a closure handed to a call that runs it once for each element
 // or pass, an `Enum`, `Stream` or `:lists` function or a `defn`'s `while`
@@ -391,6 +409,10 @@ freed_tensor_used(use, freed, origin, function, kind, how) :-
 
 call_error(second, "reused_key", cat(shown, " after ", first_shown), first) :-
   reused_key(first, second, function),
+  consumes_key(second, function, _, _, shown),
+  consumes_key(first, function, _, _, first_shown).
+call_error(second, "reused_seed", cat(seed, " ", shown, " after ", first_shown), first) :-
+  keys_of_one_seed(first, second, function, seed),
   consumes_key(second, function, _, _, shown),
   consumes_key(first, function, _, _, first_shown).
 call_error(draw, "captured_loop_key", shown, loop) :-
