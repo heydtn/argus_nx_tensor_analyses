@@ -242,18 +242,22 @@ jitted_struct_result(context, call, caller, struct) :-
 
 call_error(read, "dropped_field_read", detail, "") :-
   dropped_field_read(_, read, struct, field),
-  dropped_field(struct, field, default),
-  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
+  dropped_field_spelled(struct, field, detail).
 // The call that returns the struct is the finding's origin where it is a
 // remote call, which a finding can name.
 call_error(read, "dropped_field_returned", detail, call) :-
   dropped_field_returned(_, read, struct, field, call),
   remote_call(call, _, _, _, _),
-  dropped_field(struct, field, default),
-  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
+  dropped_field_spelled(struct, field, detail).
 call_error(read, "dropped_field_returned", detail, "") :-
   dropped_field_returned(_, read, struct, field, call),
   !remote_call(call, _, _, _, _),
+  dropped_field_spelled(struct, field, detail).
+
+// A dropped field as a finding says it: the struct, the field and the
+// default it reads as, `Model.cache=nil`.
+.decl dropped_field_spelled(struct: symbol, field: symbol, detail: symbol) inline
+dropped_field_spelled(struct, field, detail) :-
   dropped_field(struct, field, default),
   detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
 

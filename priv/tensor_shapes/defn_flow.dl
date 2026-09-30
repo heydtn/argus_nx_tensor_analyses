@@ -94,12 +94,11 @@ declared_key("*") :-
 
 // Two branches of a `cond` or `if` give tensors whose shapes do not
 // broadcast together, and Nx raises merging them.
-call_error(pair, "branch_shapes", cat("cannot broadcast tensor of dimensions ", later_spelled, " to ", earlier_spelled), "") :-
+call_error(pair, "branch_shapes", message, "") :-
   branch_meeting(_, pair, earlier, later),
   broadcast_axis(later, earlier, _, later_size, _, earlier_size, _),
   broadcast_conflict(later_size, earlier_size),
-  sizes_spelled(later, later_spelled),
-  sizes_spelled(earlier, earlier_spelled).
+  broadcast_refused(later, earlier, message).
 
 // Two branches give tensors of known shapes that broadcast to one neither
 // has, which Nx gives without a word: `{3}` and `{3, 1}` make `{3, 3}`.

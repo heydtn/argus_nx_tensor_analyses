@@ -512,13 +512,12 @@ contract_demand(product, mask, keep, 0) :-
   reduction_axes(site, first, mask, keep).
 .plan 1:(2,1,3,4), 2:(3,1,2,4), 3:(4,1,2,3)
 
-operand_misfit(site, [first, second, third], "weighted_mean", cat("cannot broadcast tensor of dimensions ", shape, " to ", weights)) :-
+operand_misfit(site, [first, second, third], "weighted_mean", message) :-
   weights_arranging(site, [first, second, third], _, _),
   built(cat("weights ", site), [first, second, third], arranged),
   broadcast_axis(first, arranged, _, size, _, weight_size, _),
   broadcast_conflict(size, weight_size),
-  sizes_spelled(first, shape),
-  sizes_spelled(arranged, weights).
+  broadcast_refused(first, arranged, message).
 
 // Weights over two or more axes that Nx takes: arranged to broadcast,
 // they are transposed from the axes the code lines them up with.

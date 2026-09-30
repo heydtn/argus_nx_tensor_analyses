@@ -4143,6 +4143,14 @@ names_spelled(axes, cat("[", inner, "]")) :-
   spelling_demand(axes),
   names_after(axes, inner).
 
+// What Nx raises for a tensor of the axes `shape` that does not broadcast
+// to `target`.
+.decl broadcast_refused(shape: Axes, target: Axes, message: symbol) inline
+broadcast_refused(shape, target, message) :-
+  sizes_spelled(shape, shape_spelled),
+  sizes_spelled(target, target_spelled),
+  message = cat("cannot broadcast tensor of dimensions ", shape_spelled, " to ", target_spelled).
+
 // ══ Operations: element-wise ════════════════════════════════════════
 
 // Applied to each element: the result has the operand's shape and names.
@@ -4206,12 +4214,11 @@ violation(context, site, "rank", cat(substr(operation, 3, strlen(operation) - 3)
 
 // `Nx.fill/3` broadcasts the value to the tensor's shape.
 fits_demand(second, first) :- site_instance(_, "Nx.fill", _, [first, second, _]).
-violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions ", value, " to ", target)) :-
+violation(context, site, "broadcast", message) :-
   site_instance(site, "Nx.fill", _, [first, second, _]),
   instance(context, site, [first, second, _], _),
   fit_conflict(second, first),
-  sizes_spelled(second, value),
-  sizes_spelled(first, target).
+  broadcast_refused(second, first, message).
 
 // `Nx.clip/3` takes its bounds as scalars.
 violation(context, site, "scalar", cat(bound, " value must be a non-vectorized scalar shape, got shape ", spelled)) :-
@@ -4300,14 +4307,13 @@ result_axes(site, operands, axes) :-
   broadcast(first, second, axes).
 .plan 1:(3,1,2)
 
-violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions ", left, " to ", right)) :-
+violation(context, site, "broadcast", message) :-
   site_instance(site, operation, 2, [first, second, _]),
   nx_trait(operation, "broadcasts"),
   instance(context, site, [first, second, _], _),
   broadcast_axis(first, second, _, left_size, _, right_size, _),
   broadcast_conflict(left_size, right_size),
-  sizes_spelled(first, left),
-  sizes_spelled(second, right).
+  broadcast_refused(first, second, message).
 
 violation(context, site, "names", cat("cannot merge name ", left_name, " on axis ", to_string(axis), " with name ", right_name, " on axis ", to_string(axis))) :-
   site_instance(site, operation, 2, [first, second, _]),
@@ -4327,13 +4333,12 @@ result_axes(site, operands, nil) :-
   broadcast(first, second, _).
 .plan 1:(2,1)
 
-violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions ", left, " to ", right)) :-
+violation(context, site, "broadcast", message) :-
   site_instance(site, "Nx.all_close", _, [first, second, third]),
   instance(context, site, [first, second, third], _),
   broadcast_axis(first, second, _, left_size, _, right_size, _),
   broadcast_conflict(left_size, right_size),
-  sizes_spelled(first, left),
-  sizes_spelled(second, right).
+  broadcast_refused(first, second, message).
 
 violation(context, site, "vectorized_axes", detail) :-
   slot_value(context, site, 1, first, _),
@@ -4379,20 +4384,18 @@ result_axes(site, [first, second, third], axes) :-
   fits(third, axes).
 .plan 1:(2,1,3), 2:(3,1,2)
 
-violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions ", left, " to ", right)) :-
+violation(context, site, "broadcast", message) :-
   site_instance(site, "Nx.select", 3, [nil, second, third]),
   instance(context, site, [nil, second, third], _),
   broadcast_axis(second, third, _, left_size, _, right_size, _),
   broadcast_conflict(left_size, right_size),
-  sizes_spelled(second, left),
-  sizes_spelled(third, right).
-violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions ", choice_shape, " to ", target)) :-
+  broadcast_refused(second, third, message).
+violation(context, site, "broadcast", message) :-
   select_output(site, [first, second, third], axes),
   instance(context, site, [first, second, third], _),
   ( source = second ; source = third ),
   fit_conflict(source, axes),
-  sizes_spelled(source, choice_shape),
-  sizes_spelled(axes, target).
+  broadcast_refused(source, axes, message).
 
 // ══ Operations: reductions ══════════════════════════════════════════
 
@@ -4986,7 +4989,7 @@ result_axes(site, operands, axes) :-
   built(site, operands, axes).
 .plan 1:(2,1)
 
-violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions ", source, " to ", target)) :-
+violation(context, site, "broadcast", message) :-
   site_instance(site, "Nx.broadcast", _, [first, second, third]),
   instance(context, site, [first, second, third], _),
   axes_sized(first),
@@ -4994,8 +4997,7 @@ violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions
   !broadcast_fit_from(site, [first, second, third], 0),
   ( option_absent(site, "axes")
   ; option(site, "axes", text, start), term_length(text, start, rank), axes_rank(first, rank) ),
-  sizes_spelled(first, source),
-  sizes_spelled(second, target).
+  broadcast_refused(first, second, message).
 violation(context, site, "broadcast", cat("expected length of axes (", to_string(length), ") to match rank of shape (", to_string(rank), ")")) :-
   site_instance(site, "Nx.broadcast", _, [first, second, third]),
   instance(context, site, [first, second, third], _),

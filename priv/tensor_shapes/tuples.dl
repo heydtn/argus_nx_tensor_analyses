@@ -193,21 +193,19 @@ tuple_element(context, site, "{0}", [vectorized, sample]) :-
 
 // A standard deviation that does not broadcast with the draw, or a mean
 // that does not broadcast with the draw scaled, as Nx names the two.
-violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", deviation_spelled, " to ", draw_spelled)) :-
+violation(context, site, "sampler_parameters", message) :-
   normal_draw(site, [mean_axes, deviation, third], draw),
   instance(context, site, [mean_axes, deviation, third], _),
   broadcast_axis(deviation, draw, _, deviation_size, _, draw_size, _),
   broadcast_conflict(deviation_size, draw_size),
-  sizes_spelled(deviation, deviation_spelled),
-  sizes_spelled(draw, draw_spelled).
-violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", scaled_spelled, " to ", mean_spelled)) :-
+  broadcast_refused(deviation, draw, message).
+violation(context, site, "sampler_parameters", message) :-
   normal_draw(site, [mean_axes, deviation, third], draw),
   instance(context, site, [mean_axes, deviation, third], _),
   broadcast(deviation, draw, scaled),
   broadcast_axis(scaled, mean_axes, _, scaled_size, _, mean_size, _),
   broadcast_conflict(scaled_size, mean_size),
-  sizes_spelled(scaled, scaled_spelled),
-  sizes_spelled(mean_axes, mean_spelled).
+  broadcast_refused(scaled, mean_axes, message).
 
 // A sample of more elements than the draw: a mean or standard deviation
 // that adds axes the draw repeats along, so the elements along them share
@@ -256,12 +254,11 @@ spelling_demand(grown) :- sampler_bound(_, _, "uniform", bound, shape), broadcas
 // A bound that does not fit the shape, and what Nx raises: `uniform`'s
 // bound that does not broadcast with the draw, or broadcasts it to more
 // elements; `randint`'s bound that does not broadcast to the shape.
-violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", shape_spelled, " to ", bound_spelled)) :-
+violation(context, site, "sampler_parameters", message) :-
   sampler_bound(context, site, "uniform", bound, shape),
   broadcast_axis(shape, bound, _, shape_size, _, bound_size, _),
   broadcast_conflict(shape_size, bound_size),
-  sizes_spelled(shape, shape_spelled),
-  sizes_spelled(bound, bound_spelled).
+  broadcast_refused(shape, bound, message).
 violation(context, site, "sampler_parameters", cat("cannot reshape, current shape ", grown_spelled, " is not compatible with new shape ", shape_spelled)) :-
   sampler_bound(context, site, "uniform", bound, shape),
   broadcast(shape, bound, grown),
@@ -269,15 +266,14 @@ violation(context, site, "sampler_parameters", cat("cannot reshape, current shap
   bound_size > 1,
   sizes_spelled(grown, grown_spelled),
   sizes_spelled(shape, shape_spelled).
-violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of dimensions ", bound_spelled, " to ", shape_spelled)) :-
+violation(context, site, "sampler_parameters", message) :-
   sampler_bound(context, site, "randint", bound, shape),
   axes_rank(bound, bound_rank),
   axes_rank(shape, shape_rank),
   broadcast_axis(shape, bound, _, [shape_size, shape_factors], _, [bound_size, nil], _),
   ( bound_rank > shape_rank
   ; bound_size > 1, shape_factors = nil, shape_size > 0, shape_size != bound_size ),
-  sizes_spelled(bound, bound_spelled),
-  sizes_spelled(shape, shape_spelled).
+  broadcast_refused(bound, shape, message).
 
 // ── Shuffling and choosing ─────────────────────────────────────────
 
