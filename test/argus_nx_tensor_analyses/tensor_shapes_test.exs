@@ -2065,8 +2065,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "indices must be an integer tensor, got a float type", :raises},
     {"Nx.iota({4, 5})[Nx.divide(Nx.tensor(2), 2)]", "access_float_index_tensor",
      "index must be integer type, got a float type for axis 0", :raises},
-    {"Nx.iota({4, 5})[[Nx.iota({2})]]", "access_tensor_in_list",
-     "tensor must be a scalar when accessing a list/keyword of dimensions", :raises},
+    {"Nx.iota({4, 5})[[Nx.iota({2})]]", "access_tensor_in_list", "a {2} tensor for axis 0",
+     :raises},
     {"x = Nx.iota({4, 5})\nput_in(x[0], Nx.iota({5}))", "access_update",
      "Access.get_and_update/3 is not supported. Please use Nx.put_slice/3 instead", :message},
     {"x = Nx.iota({4, 5})\nupdate_in(x[0], &Nx.add(&1, 1))", "access_update",
@@ -2083,7 +2083,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {"Nx.tensor([Nx.sum(Nx.iota({2})), Nx.sum(Nx.iota({3}))])", "tensors_in_tensor_data",
      "invalid value given to Nx.tensor/1", :raises},
     {"Nx.tensor([Nx.sum(Nx.iota({2})), 1], type: :f32)", "tensors_in_tensor_data",
-     "invalid value given to Nx.tensor/1", :raises}
+     "invalid value given to Nx.tensor/1", :raises},
+    {"Nx.iota({4, 5})[[Nx.iota({2}), Nx.iota({3})]]", "access_tensor_in_list",
+     "a {3} tensor for axis 1", :raises}
   ]
 
   # Bodies whose slice the analysis must shape as Nx does (`:nx`), or as

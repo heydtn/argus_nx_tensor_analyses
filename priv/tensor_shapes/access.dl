@@ -143,10 +143,17 @@ call_error(site, "access_float_index_tensor", detail, origin) :-
   only_wrong_class(context, site, 1, "integer_key"),
   detail = cat("indices must be an integer tensor, got a ", class, " type").
 
-// A tensor with axes where a list indexes one axis.
-call_error(site, "access_tensor_in_list", "tensor must be a scalar when accessing a list/keyword of dimensions", "") :-
+// A tensor with axes where a list indexes one axis, with its shape: the
+// one on the last axis, which Nx meets first as it walks the axes from
+// the last.
+call_error(site, "access_tensor_in_list", cat("a ", spelled, " tensor for axis ", to_string(axis)), "") :-
   tensor_indexed_by(_, site, axes, key),
-  axis_entry(key, axes, _, "tensor", _, _, _).
+  axis_entry(key, axes, _, "tensor", _, _, _),
+  axis = max indexed : { axis_entry(key, axes, indexed, "tensor", _, _, _) },
+  entry_axis(key, axes, slot, axis),
+  key_entry(key, slot, _, $Tensor([_, index_axes])),
+  sizes_spelled(index_axes, spelled).
+spelling_demand(axes) :- key_entry(_, _, _, $Tensor([_, axes])), axes != nil.
 
 // `put_in/2`, `update_in/2`, `get_and_update_in/2` and `pop_in/1` on a
 // tensor's index, and the functions they compile to: `Nx.Tensor`

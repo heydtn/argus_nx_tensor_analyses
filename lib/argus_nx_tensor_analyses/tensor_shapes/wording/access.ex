@@ -126,12 +126,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Access do
   end
 
   def call_error("access_tensor_in_list", detail, _operation) do
+    [_detail, shape, axis] = Regex.run(~r/^a (.+) tensor for axis (\d+)$/, detail)
+
     %{
       title: "gets a tensor with axes among its indices",
       detail:
         "Each entry of a list indexes one axis: an integer, a scalar tensor or a range. " <>
-          "Nx raises: #{detail}.",
-      label: "indexes one axis with a tensor that has axes",
+          "Nx raises: tensor must be a scalar when accessing a list/keyword of dimensions, " <>
+          "got: #Nx.Tensor<...>.",
+      label: "indexes axis #{axis} with a #{shape} tensor",
       help: "take along an axis with Nx.take/3, or index with a scalar tensor",
       frame: "makes the index:"
     }
