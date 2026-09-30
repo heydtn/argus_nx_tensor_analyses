@@ -46,10 +46,10 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
       title: "makes an f64 tensor, which EMLX keeps as f32",
       detail:
         "EMLX has no 64-bit float: on either device it stores an f64 tensor as f32, while the " <>
-          "tensor still says f64, so what is computed from it is computed at f32 precision " <>
-          "(0.1 reads back as 0.10000000149011612, and 1 + 1.0e-10 as 1.0). BinaryBackend and " <>
-          "EXLA compute in f64.",
-      label: "makes f64 here",
+          "tensor still says f64, so what is computed from it is computed at f32 precision. " <>
+          "0.1 reads back as 0.10000000149011612 on EMLX and 0.1 on BinaryBackend and EXLA, " <>
+          "and 1 + 1.0e-10 as 1.0 and 1.0000000001.",
+      label: "makes f64, which EMLX stores as f32",
       help:
         "compute it where f64 exists (Nx.Defn.jit(fun, compiler: EXLA), or backend: EXLA.Backend) and move the result to EMLX as f32, or make it f32",
       frame: ""
@@ -63,8 +63,8 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
         "EMLX has no 128-bit complex type: it stores #{article(type)} #{type} tensor as c64, " <>
           "while the tensor still says #{type}, computes at c64 precision, and raises reading " <>
           "it back (Nx.to_number/1, Nx.to_list/1: no function clause matching in " <>
-          "EMLX.Backend.maybe_modify_binary/3).",
-      label: "makes #{type} here",
+          "EMLX.Backend.maybe_modify_binary/3). BinaryBackend and EXLA compute in #{type}.",
+      label: "makes #{type}, which EMLX stores as c64",
       help: "make it c64, or compute it on a backend that has #{type}",
       frame: ""
     }
@@ -75,11 +75,12 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
       title: "moves a c128 tensor onto EMLX, which raises",
       detail:
         "EMLX has no 128-bit complex type, and it raises taking a c128 tensor in: no " <>
-          "function clause matching in EMLX.Backend.maybe_modify_binary/3.",
-      label: "moves c128 onto EMLX here",
+          "function clause matching in EMLX.Backend.maybe_modify_binary/3. BinaryBackend and " <>
+          "EXLA take c128.",
+      label: "moves c128 onto EMLX, which raises taking it in",
       help:
         "make it c64 before it moves, as in Nx.backend_transfer(Nx.as_type(t, :c64), EMLX.Backend)",
-      frame: "makes it c128:"
+      frame: "makes the tensor c128:"
     }
   end
 
@@ -88,12 +89,13 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
       title: "moves #{article(type)} #{type} tensor onto EMLX, which keeps it as f32",
       detail:
         "EMLX has no 64-bit float: the tensor it takes in still says #{type}, but EMLX holds " <>
-          "it as f32 from here on, and computes with it at f32 precision (0.1 reads back as " <>
-          "0.10000000149011612, and 1 + 1.0e-10 as 1.0).",
-      label: "moves #{type} onto EMLX here",
+          "it as f32 from here on, and computes with it at f32 precision: 0.1 reads back as " <>
+          "0.10000000149011612 after the move, where BinaryBackend and EXLA keep 0.1, and " <>
+          "1 + 1.0e-10 is 1.0 rather than 1.0000000001.",
+      label: "moves #{type} onto EMLX, which holds it as f32",
       help:
         "make it f32 before it moves, as in Nx.backend_transfer(Nx.as_type(t, :f32), EMLX.Backend), so its type says what EMLX holds",
-      frame: "makes it #{type}:"
+      frame: "makes the tensor #{type}:"
     }
   end
 
