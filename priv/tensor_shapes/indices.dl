@@ -235,7 +235,7 @@ negative_slice_start(context, site, origin, cause) :-
   slice_start(context, site, function, kind, source),
   can_go_negative(context, function, kind, source, origin, cause).
 negative_slice_start(context, site, "", "written") :-
-  start_literal(site, _, _, text),
+  handed_literal(site, 1, _, _, text),
   term_element_integer(text, 0, _, value),
   value < 0,
   site_active(context, site).
@@ -305,51 +305,24 @@ slice_start(context, site, function, kind, source) :-
   site_active(context, site),
   argument_source(site, function, 1, kind, source).
 slice_start(context, site, function, kind, source) :-
-  start_cell(site, function, _, cell),
-  flow_field(function, cell, "head", kind, source),
+  handed_element(site, 1, function, _, kind, source),
   site_active(context, site).
 
 negative_asked(context, function, kind, source) :- slice_start(context, _, function, kind, source).
 
-// The cells of a start list the call's function builds, head first: the
-// cell at `index` holds the start at that axis.
-.decl start_cell(site: symbol, function: symbol, index: number, cell: symbol)
-start_cell(site, function, index, cell) :-
-  slices_from(site, operation),
-  operation != "Nx.slice_along_axis",
-  argument_source(site, function, 1, "object", list),
-  list_cell(list, index, cell).
-list_asked(list) :-
-  slices_from(site, operation),
-  operation != "Nx.slice_along_axis",
-  argument_source(site, _, 1, "object", list).
-
-// A list of starts written as a literal, at the call or as the constant
-// tail of a list after `offset` elements the code builds: its element at
-// `index` is the start at axis `offset + index`.
-.decl start_literal(site: symbol, function: symbol, offset: number, text: symbol)
-start_literal(site, function, 0, text) :-
-  slices_from(site, operation),
-  operation != "Nx.slice_along_axis",
-  argument_source(site, function, 1, "literal", text),
-  term_list(text, 0).
-start_literal(site, function, offset, text) :-
-  slices_from(site, operation),
-  operation != "Nx.slice_along_axis",
-  argument_source(site, function, 1, "object", list),
-  list_rest(list, offset, text),
-  term_list(text, 0).
+// A list of starts, one per axis: the start at an axis is the list's
+// element at its index (`handed_element`, `handed_literal`).
+list_handed(site, 1) :- slices_from(site, operation), operation != "Nx.slice_along_axis".
 
 // A start at `axis` past 0 that the code writes, or the rules know.
 .decl known_start(context: Context, site: symbol, axis: number, begin: number)
 known_start(context, site, offset + element, begin) :-
-  start_literal(site, _, offset, text),
+  handed_literal(site, 1, _, offset, text),
   term_element_integer(text, 0, element, begin),
   begin > 0,
   site_active(context, site).
 known_start(context, site, axis, begin) :-
-  start_cell(site, function, axis, cell),
-  flow_field(function, cell, "head", kind, source),
+  handed_element(site, 1, function, axis, kind, source),
   site_active(context, site),
   value_of(context, function, kind, source, $Integer([begin, nil])),
   begin > 0.
@@ -377,7 +350,7 @@ start_value(context, site, function, kind, source) :-
   argument_source(site, function, 1, kind, source),
   kind != "object".
 start_value(context, site, function, "literal", text) :-
-  start_literal(site, function, offset, text),
+  handed_literal(site, 1, function, offset, text),
   offset > 0,
   site_active(context, site).
 

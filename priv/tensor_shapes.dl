@@ -236,6 +236,33 @@ list_rest(list, index + 1, text) :-
   list_cell(list, index, cell),
   flow_field(_, cell, "tail", "literal", text).
 
+// A list a call is handed whose elements a rule reads one by one: the
+// call, and the position of the argument.
+.decl list_handed(site: symbol, position: number)
+list_asked(list) :- list_handed(site, position), flow_argument(site, _, position, "object", list).
+
+// An element of such a list the call's function builds, by its index and
+// its source there.
+.decl handed_element(site: symbol, position: number, function: symbol, index: number, kind: symbol, source: symbol)
+handed_element(site, position, function, index, kind, source) :-
+  list_handed(site, position),
+  flow_argument(site, function, position, "object", list),
+  list_element(list, index, kind, source).
+
+// Such a list written as a literal, at the call or as the literal a list
+// its function builds ends in after `offset` elements: the literal's
+// element at `index` is the list's at `offset + index`.
+.decl handed_literal(site: symbol, position: number, function: symbol, offset: number, text: symbol)
+handed_literal(site, position, function, 0, text) :-
+  list_handed(site, position),
+  flow_argument(site, function, position, "literal", text),
+  term_list(text, 0).
+handed_literal(site, position, function, offset, text) :-
+  list_handed(site, position),
+  flow_argument(site, function, position, "object", list),
+  list_rest(list, offset, text),
+  term_list(text, 0).
+
 // ══ Calls and the functions they run ═════════════════════════════════
 
 .decl nx_module(module: symbol)
