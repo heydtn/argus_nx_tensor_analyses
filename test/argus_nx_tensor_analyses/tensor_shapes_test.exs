@@ -2790,6 +2790,22 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "literal_underflow", "2.98e-8 f16"}, :finite},
      "Nx.add(Nx.f16([0.0]), 2.98e-8)"},
     {{:finds_none, :finite}, "Nx.add(Nx.f16([0.0]), 3.0e-8)"},
+    # outside traced code Nx makes a float an f32 before it meets an f64 or
+    # c128 tensor, so past or below f32's range it is infinite or zero there
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64"}, :nonfinite},
+     "Nx.add(Nx.f64([1.0]), 1.0e39)"},
+    {{:finds_none, :finite}, "Nx.add(Nx.f64([1.0]), Nx.f64(1.0e39))"},
+    {{:finds_none, :finite}, "Nx.Defn.jit(&Nx.add(&1, 1.0e39)).(Nx.f64([1.0]))"},
+    {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-50 f64"}, :finite},
+     "Nx.multiply(Nx.f64([1.0]), 1.0e-50)"},
+    {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-46 f64"}, :finite},
+     "Nx.add(Nx.f64([0.0]), 1.0e-46)"},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "c128"}, :nonfinite},
+     "Nx.add(Nx.c128([0.0]), 1.0e39)"},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64"}, :nonfinite},
+     "Nx.fill(Nx.f64([0.0]), 1.0e39)"},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f64"}, :nonfinite},
+     "Nx.fill(Nx.s32([0]), 1.0e39, type: :f64)"},
     # lower-precision floats made f32 by a fixed f32
     {{:finds, {"tensor_type_error", "upcast", "bf16 f32"}, :accepted},
      "Nx.clip(Nx.bf16([1]), -1.0, 1.0)"},

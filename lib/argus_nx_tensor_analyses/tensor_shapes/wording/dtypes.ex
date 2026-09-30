@@ -28,6 +28,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   # Each low-range float type's largest finite value, as written.
   @largest %{"f16" => "65504", "f8" => "57344"}
 
+  # The types that hold more than f32, whose tensors a float number meets
+  # as the f32 Nx makes it outside traced code.
+  @wider_than_f32 ~w(f64 c128)
+
   @impl true
   def call_error("unsigned_wraparound", type, operation) do
     %{
@@ -165,19 +169,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
 
   def call_error("literal_underflow", detail, _operation) do
     [number, types] = String.split(detail, " ")
-    type = types |> String.split("/") |> join("or")
+    names = String.split(types, "/")
+    type = join(names, "or")
 
-    %{
-      title: "adds a number #{type} rounds to zero",
-      detail:
-        "The number #{number} is below the smallest magnitude #{type} holds, and the tensor " <>
-          "it meets is #{type}, which keeps its type: the number is 0 there, and an epsilon " <>
-          "meant to keep a value from zero does not.",
-      label: "#{number} is 0 in #{type} here",
-      help: "use an epsilon the type holds (1.0e-4 or larger for f16), or compute in f32",
-      frame: "",
-      severity: :warning
-    }
+    if Enum.all?(names, &(&1 in @wider_than_f32)),
+      do: underflow_before_meeting(number, names, type),
+      else: underflow_in_type(number, type)
   end
 
   def call_error("pad_type_mismatch", detail, _operation) do
@@ -227,7 +224,56 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
 
   def call_error(_kind, _detail, _operation), do: nil
 
+  # A number the tensor's own type rounds to zero.
+  defp underflow_in_type(number, type) do
+    %{
+      title: "adds a number #{type} rounds to zero",
+      detail:
+        "The number #{number} is below the smallest magnitude #{type} holds, and the tensor " <>
+          "it meets is #{type}, which keeps its type: the number is 0 there, and an epsilon " <>
+          "meant to keep a value from zero does not.",
+      label: "#{number} is 0 in #{type} here",
+      help: "use an epsilon the type holds (1.0e-4 or larger for f16), or compute in f32",
+      frame: "",
+      severity: :warning
+    }
+  end
+
+  # A number Nx makes an f32, which rounds it to zero, before it meets a
+  # tensor of a type that would have held it.
+  defp underflow_before_meeting(number, [name | _rest], type) do
+    %{
+      title: "rounds a number to zero in f32 before it meets #{type}",
+      detail:
+        "Outside traced code Nx makes a float number an f32 tensor before it meets another " <>
+          "tensor, whatever that tensor's type: #{number} is below the smallest magnitude f32 " <>
+          "holds, so it is 0 before it meets the #{type} tensor, which would have held it, and " <>
+          "an epsilon meant to keep a value from zero does not.",
+      label: "#{number} is 0 in f32 here",
+      help:
+        "make the number a tensor of the other's type first, as in Nx.tensor(#{number}, type: :#{name}), or compute it in a defn, where it keeps the merged type",
+      frame: "",
+      severity: :warning
+    }
+  end
+
   @impl true
+  def hazard("literal_overflow", type, _operation) when type in @wider_than_f32 do
+    %{
+      title: "makes a number infinite in f32 before it meets #{type}",
+      detail:
+        "Outside traced code Nx makes a float number an f32 tensor before it meets another " <>
+          "tensor, whatever that tensor's type: a number the code writes here is past f32's " <>
+          "largest finite value, so it is infinite before it meets the #{type} tensor, which " <>
+          "would have held it.",
+      label: "infinite in f32 here",
+      help:
+        "make the number a tensor of the other's type first, as in Nx.tensor(1.0e39, type: :#{type}), or compute it in a defn, where it keeps the merged type",
+      frame: "",
+      severity: :warning
+    }
+  end
+
   def hazard("literal_overflow", type, _operation) do
     %{
       title: "makes a number infinite in #{type}",

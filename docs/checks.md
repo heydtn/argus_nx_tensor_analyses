@@ -166,8 +166,8 @@ definite finding gets no unchecked one. A sample of `Nx.Random.uniform` or
 | `cast_wraparound` | warning | A cast to an unsigned type of a value the code's math makes negative, or a written number outside an integer type. | `Nx.as_type(Nx.subtract(Nx.iota({3}), 1), :u8)` |
 | `complex_to_real` | warning | A cast from complex to real, which drops the imaginary part. | `Nx.as_type(Nx.c64([1]), :f32)` |
 | `float_truncation` | info | A cast from float to integer with no rounding first. | `Nx.as_type(Nx.divide(Nx.iota({3}), 2), :s32)` |
-| `literal_overflow` | warning | A written number past the tensor's float range where the tensor keeps its type (a `-1.0e9` mask on f16). | `Nx.add(Nx.f16([1, 2]), -1.0e9)` |
-| `literal_underflow` | warning | A written number the tensor's float type rounds to zero (an epsilon of `1.0e-12` on f16). | `Nx.add(Nx.as_type(t, :f16), 1.0e-12)` |
+| `literal_overflow` | warning | A written number past the tensor's float range where the tensor keeps its type (a `-1.0e9` mask on f16), or past f32's where Nx makes it an f32 before it meets an f64 or c128 tensor, outside traced code. | `Nx.add(Nx.f16([1, 2]), -1.0e9)` |
+| `literal_underflow` | warning | A written number the tensor's float type rounds to zero (an epsilon of `1.0e-12` on f16), or f32 does where Nx makes it an f32 before it meets an f64 or c128 tensor, outside traced code. | `Nx.add(Nx.as_type(t, :f16), 1.0e-12)` |
 | `cast_overflow` | warning | A cast to f16 or f8 of a value holding a number past the type's range. | `Nx.as_type(Nx.tensor(-1.0e9), :f16)` |
 | `float_sum_overflow` | warning; info for a length the code does not write | A sum, mean, variance or `dot` of f16 or f8 over 65520 or more elements. | `Nx.sum(Nx.broadcast(Nx.f16(1.0), {70000}))` |
 | `unsigned_logsumexp` | warning | `logsumexp` of an unsigned tensor, which wraps around subtracting the maximum. | `Nx.logsumexp(Nx.u8([1, 2, 3]))` |

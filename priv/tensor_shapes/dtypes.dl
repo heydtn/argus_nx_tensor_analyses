@@ -16,7 +16,10 @@
 //     a whole number keeps an integer tensor's type where it fits and widens
 //     it where it does not (a negative one makes an unsigned tensor signed),
 //     any number keeps a float tensor's type, and a float number makes an
-//     integer tensor f32. Where Nx makes numbers tensors first
+//     integer tensor f32. Outside traced code the number is a tensor of the
+//     type `Nx.Type.infer/1` gives it before it meets the other, so a float
+//     f32 cannot hold is infinite or zero before it meets an f64 or c128
+//     tensor. Where Nx makes numbers tensors first
 //     (`Nx.select/3`, `Nx.clip/3`, `Nx.dot`, `Nx.put_slice/3`, a list it
 //     joins), a number is s32 or f32 and meets as a tensor does;
 //   * division and the transcendental functions make a float
@@ -352,6 +355,10 @@ literal_overflow(context, site, concrete) :-
   casts_written_number(context, site, type, number),
   type_instance(type, concrete),
   number_misfit(number, concrete, "overflows").
+// ... or past f32's, made an f32 before it meets a wider tensor.
+literal_overflow(context, site, type) :-
+  made_f32_first(context, site, type, number),
+  number_misfit(number, "f32", "overflows").
 
 // A written number too small for the float type it is made, which rounds
 // it to zero (an epsilon of 1.0e-12 in f16): whatever it was to keep away
@@ -361,6 +368,10 @@ literal_underflow(context, site, number, concrete) :-
   casts_written_number(context, site, type, number),
   type_instance(type, concrete),
   number_misfit(number, concrete, "flushes").
+// ... or too small for f32, made an f32 before it meets a wider tensor.
+literal_underflow(context, site, number, type) :-
+  made_f32_first(context, site, type, number),
+  number_misfit(number, "f32", "flushes").
 
 // A value holding a number beyond a float type's range made that type: a
 // number written where it is made (-1.0e9), or a constant at the edge of a
@@ -780,6 +791,20 @@ casts_written_number(context, site, type, number) :-
   argument_number(context, site, position, number),
   position <= 1,
   call_type(context, site, type, _).
+
+// A float the code writes that a call makes an f32 before it meets a
+// tensor of a type that holds more (f64, c128), in a context: outside
+// traced code Nx makes a number a tensor of the type `Nx.Type.infer/1`
+// gives it before the types merge (`Nx.to_tensor/1`), where in traced
+// code it is a constant of the merged type.
+.decl made_f32_first(context: Context, site: symbol, type: symbol, number: symbol)
+made_f32_first(context, site, concrete, number) :-
+  casts_written_number(context, site, type, number),
+  type_instance(type, concrete),
+  narrows(concrete, "f32"),
+  written_number(number, "kind", "float"),
+  site_function(site, function),
+  !runs_in_trace(function).
 
 // A whole number an integer type does not hold: past its largest value,
 // or below its smallest (0, or one below minus the largest).
