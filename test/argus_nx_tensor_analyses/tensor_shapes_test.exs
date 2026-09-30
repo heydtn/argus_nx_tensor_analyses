@@ -817,6 +817,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {:quiet, "Nx.iota(Nx.shape(Nx.template({2}, :s32)))"},
     {{:finds, {"tensor_call_error", "template_computed", "0"}, :raises},
      "Nx.serialize(Nx.template({2}, :f32))"},
+    {{:finds_none, :accepted}, "Nx.shape(Nx.donatable(Nx.template({2}, :f32)))"},
     {{:finds, {"tensor_call_error", "template_computed", "0"}, :raises},
      "Nx.Defn.jit(&Nx.exp/1).(Nx.template({2}, :f32))"},
     {{:finds, {"tensor_call_error", "template_computed", "0"}, :raises},

@@ -632,14 +632,11 @@ computes_on(site, function, position, kind, source) :-
   flow_field(function, cell, "head", kind, source).
 
 // The calls a template can be handed: those that answer about a tensor's
-// shape or give a template; `Nx.type`, `Nx.byte_size` and
-// `Nx.compatible?`; those that rename a tensor but `Nx.donatable`; and
-// those that make a tensor of one or reshape it.
+// shape or struct, give a template or rename a tensor, and those that
+// make a tensor of one or reshape it.
 nx_trait(operation, "takes_template") :- nx_class(operation, "gives", gives), in_set("takes_template", gives).
-nx_members("set", "takes_template", " shape template ").
-nx_members("trait", "takes_template", cat(
-  " Nx.type Nx.byte_size Nx.compatible? Nx.rename Nx.vectorize Nx.devectorize Nx.tensor",
-  " Nx.transpose Nx.flatten Nx.fill Nx.iota Nx.eye ")).
+nx_members("set", "takes_template", " shape struct template renamed ").
+nx_members("trait", "takes_template", " Nx.tensor Nx.transpose Nx.flatten Nx.fill Nx.iota Nx.eye ").
 
 // The cells of the written list a compile takes its templates in, or
 // `jit_apply` its arguments, by index.
