@@ -111,7 +111,7 @@ moved_to_emlx(context, site, function, kind, source) :-
   transfers_backend(site),
   places_on(site, "EMLX.Backend", site),
   site_active(context, site),
-  flow_argument(site, function, 0, kind, source).
+  argument_source(site, function, 0, kind, source).
 dtype_demand(context, function, kind, source) :- moved_to_emlx(context, _, function, kind, source).
 
 // The tensor shapes analysis reports every call that makes a type the

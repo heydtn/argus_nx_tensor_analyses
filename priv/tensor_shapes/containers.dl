@@ -534,8 +534,8 @@ sole_part(site, inner) :-
 // ... or a literal the call is handed as the only value of an argument.
 sole_part(site, text) :-
   defn_call(site, caller),
-  flow_argument(site, caller, position, "literal", text),
-  1 = count : { flow_argument(site, caller, position, _, _) }.
+  argument_source(site, caller, position, "literal", text),
+  1 = count : { argument_source(site, caller, position, _, _) }.
 
 // A cell of the list a call hands `defn` the entries of, which every path
 // to the call hands it.
