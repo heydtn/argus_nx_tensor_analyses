@@ -597,7 +597,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:unsupported, "f64"}, "Nx.as_type(t, :f64)"},
     {{:unsupported, "f64"}, "Nx.iota({2}, type: {:f, 64})"},
     {{:unsupported, "f64"}, "Nx.Constants.pi({:f, 64})"},
-    {:quiet, "Nx.iota({2}, type: :f32)"}
+    {:quiet, "Nx.iota({2}, type: :f32)"},
+    # a jit's options are its compiler's, and name no tensor's type
+    {:quiet, "Nx.add(Nx.Defn.jit(fn x -> x end, type: :f64).(t), 1)"}
   ]
 
   # ── Options: priv/tensor_shapes/options.dl ──

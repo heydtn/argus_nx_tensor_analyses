@@ -332,13 +332,3 @@ type_term(context, site, -1, text, start) :-
   takes_type_option(site),
   handed_options(context, site, text, list),
   term_keyword(text, list, "type", start).
-
-// The calls whose `:type` option is a tensor type and whose options the
-// options above read.
-.decl takes_type_option(site: symbol)
-takes_type_option(site) :- operation_site(site, operation, _), nx_trait(operation, "takes_type_option").
-
-nx_members("trait", "takes_type_option", cat(
-  " Nx.tensor Nx.iota Nx.eye Nx.argmax Nx.argmin Nx.argsort Nx.fill Nx.linspace Nx.reduce",
-  " Nx.Random.randint Nx.Random.randint_split Nx.Random.uniform Nx.Random.uniform_split",
-  " Nx.Random.normal Nx.Random.normal_split Nx.Random.gumbel Nx.Random.gumbel_split ")).

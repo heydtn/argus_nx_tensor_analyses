@@ -35,6 +35,8 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     {:quiet, "Nx.iota({3}, type: :f32)"},
     {:quiet, "Nx.iota({3}, type: :f64, backend: EXLA.Backend)"},
     {:quiet, "Nx.Defn.jit(&f64_table/1, compiler: EXLA).(t)"},
+    # a jit's options are its compiler's, and name no tensor's type
+    {:quiet, "Nx.add(Nx.Defn.jit(fn x -> x end, type: :f64).(t), 1)"},
     {:quiet, "Nx.as_type(Nx.backend_transfer(t, EXLA.Backend), :f64)"},
     # listed as unsupported, so the tensor shapes analysis reports it
     {:quiet, "Nx.tensor([1.0], type: :c128)"},

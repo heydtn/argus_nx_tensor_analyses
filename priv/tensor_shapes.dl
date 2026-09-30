@@ -10041,10 +10041,21 @@ type_default(site, "float") :-
 nx_members("default", "integer", " Nx.iota Nx.eye Nx.Random.randint ").
 nx_members("default", "float", " Nx.Random.uniform Nx.Random.normal ").
 
-// A call given a type, by option or argument, known or not.
+// A call given a type, by its `type:` option where it takes one or by
+// its type argument, known or not.
 .decl type_given(site: symbol)
-type_given(site) :- option_given(site, "type").
+type_given(site) :- option_given(site, "type"), takes_type_option(site).
 type_given(site) :- type_position(site, position), flow_argument(site, _, position, _, _).
+
+// The calls whose `:type` option is a tensor type: the options of others,
+// such as the compiler's a jit is handed, name no type of a tensor.
+.decl takes_type_option(site: symbol)
+takes_type_option(site) :- operation_site(site, operation, _), nx_trait(operation, "takes_type_option").
+
+nx_members("trait", "takes_type_option", cat(
+  " Nx.tensor Nx.iota Nx.eye Nx.argmax Nx.argmin Nx.argsort Nx.fill Nx.linspace Nx.reduce",
+  " Nx.Random.randint Nx.Random.randint_split Nx.Random.uniform Nx.Random.uniform_split",
+  " Nx.Random.normal Nx.Random.normal_split Nx.Random.gumbel Nx.Random.gumbel_split ")).
 
 // The type a call in a context is given, by name (`f32`), and its class:
 // its `type:` option, or its type argument, where it is written or a value
