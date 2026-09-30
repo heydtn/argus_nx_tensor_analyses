@@ -70,15 +70,6 @@ predicate_origin(pair, origin) :-
   source_origin(function, kind, source, origin).
 predicate_origin(site, "") :- loop_run(site, site, ":body").
 
-// The call a finding about a source of a function points back to: the
-// remote call whose result it is, and none ("") for any other source, a
-// parameter, a field, a literal, a local call's or a fun's result, which
-// no call names.
-.decl source_origin(function: symbol, kind: symbol, source: symbol, origin: symbol) inline
-source_origin(function, kind, source, source) :- kind = "result", remote_call(source, function, _, _, _).
-source_origin(function, kind, source, "") :- kind = "result", !remote_call(source, function, _, _, _).
-source_origin(_function, kind, _source, "") :- kind != "result".
-
 // A lookup of a key that the keyword list the code writes lacks, and no
 // `keyword!/2` or `assert_keys/2` names, which gives nil.
 .decl misses_key(context: Context, function: symbol, kind: symbol, source: symbol)

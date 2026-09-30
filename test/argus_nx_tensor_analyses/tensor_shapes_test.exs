@@ -4257,8 +4257,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
                "Nx.Container.#{@containers_prefix}.MisorderedPair:traverse/3",
                "container_order"
              ) == [
-               "#{@containers_prefix}.MisorderedPair.first",
-               "#{@containers_prefix}.MisorderedPair.second"
+               "#{@containers_prefix}.MisorderedPair.first 0 1",
+               "#{@containers_prefix}.MisorderedPair.second 1 0"
              ]
 
       assert containers_findings(

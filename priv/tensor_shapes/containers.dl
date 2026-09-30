@@ -157,16 +157,16 @@ struct_from_outside(object, struct) :-
 
 // A `defn` reads a field of a struct handed in from outside, which the
 // struct's container drops on the way in: the read gets the field's
-// default, not what the caller set.
-.decl dropped_field_read(context: Context, read: symbol, struct: symbol, field: symbol)
-dropped_field_read(context, read, struct, field) :-
+// default, not what the caller set. `object` is where the struct is built.
+.decl dropped_field_read(context: Context, read: symbol, struct: symbol, field: symbol, object: symbol)
+dropped_field_read(context, read, struct, field, object) :-
   dropped_field(struct, field, _),
   struct_from_outside(object, struct),
   reads_field(context, function, read, field, object),
   in_defn(function).
 // ... or a function `jit` runs reads it of a struct its call hands it.
-dropped_field_read(context, read, struct, field) :-
-  hands_jitted_struct(context, function, position, struct),
+dropped_field_read(context, read, struct, field, object) :-
+  hands_jitted_struct(context, function, position, struct, object),
   dropped_field(struct, field, _),
   reads_source_field(function, "param", to_string(position), field, read).
 
@@ -209,10 +209,10 @@ defn_result(function, "load", load, call) :-
   defn_result(function, kind, source, call),
   flow_load(function, load, _, kind, source).
 
-// A struct built outside `defn` that a call of what `jit` returns hands
-// the function it runs, as its parameter at `position`.
-.decl hands_jitted_struct(context: Context, function: symbol, position: number, struct: symbol)
-hands_jitted_struct(context, function, position, struct) :-
+// A struct built outside `defn`, at `object`, that a call of what `jit`
+// returns hands the function it runs, as its parameter at `position`.
+.decl hands_jitted_struct(context: Context, function: symbol, position: number, struct: symbol, object: symbol)
+hands_jitted_struct(context, function, position, struct, object) :-
   jitted_call(site, _, function),
   argument_value(context, site, position, $Object(_, object, _)),
   struct_from_outside(object, struct).
@@ -222,7 +222,7 @@ hands_jitted_struct(context, function, position, struct) :-
 // the result of such a call, which may return one.
 .decl reads_source_field(function: symbol, kind: symbol, source: symbol, field: symbol, read: symbol)
 reads_source_field(function, "param", source, field, substr(load, 0, strlen(load) - strlen(field) - 1)) :-
-  hands_jitted_struct(_, function, position, _),
+  hands_jitted_struct(_, function, position, _, _),
   source = to_string(position),
   flow_load(function, load, field, "param", source).
 reads_source_field(caller, "result", call, field, substr(load, 0, strlen(load) - strlen(field) - 1)) :-
@@ -247,8 +247,9 @@ jitted_struct_result(context, call, caller, struct) :-
   path = cat("$", to_string(position)),
   struct_built(object, struct).
 
-call_error(read, "dropped_field_read", detail, "") :-
-  dropped_field_read(_, read, struct, field),
+// Where the struct is built is the finding's origin.
+call_error(read, "dropped_field_read", detail, object) :-
+  dropped_field_read(_, read, struct, field, object),
   dropped_field_spelled(struct, field, detail).
 // The call that returns the struct is the finding's origin.
 call_error(read, "dropped_field_returned", detail, call) :-
@@ -568,14 +569,17 @@ call_error(site, "container_leaf", cat("possibly ", leaf, " at ", root, path), "
 // captures: the function reads the captured value, a constant to the
 // gradient, where it means the one it is handed, and the gradient through
 // what it reads so is zero. `path` is where the captured value is in the
-// value differentiated ("" for the whole).
-.decl captured_gradient(site: symbol, path: symbol)
-captured_gradient(site, path) :-
+// value differentiated ("" for the whole), and `origin` the call that
+// makes it, where a remote call does.
+.decl captured_gradient(site: symbol, path: symbol, origin: symbol)
+captured_gradient(site, path, origin) :-
   trace_call(site, caller, 1, "grad"),
   captures(site, caller, kind, source),
-  differentiates(site, caller, kind, source, path).
+  differentiates(site, caller, kind, source, path),
+  source_origin(caller, kind, source, origin).
 
-// A value the closure the call differentiates through captures.
+// A value the closure the call differentiates through captures, by its
+// source in the caller.
 .decl captures(site: symbol, caller: symbol, kind: symbol, source: symbol)
 captures(site, caller, kind, source) :-
   trace_call(site, caller, 1, "grad"),
@@ -606,17 +610,18 @@ differentiates(site, caller, "load", load, cat(path, suffix)) :-
   flow_load(caller, load, selector, kind, source),
   selector_suffix(selector, suffix).
 
-call_error(site, "captured_gradient", path, "") :- captured_gradient(site, path).
+call_error(site, "captured_gradient", path, origin) :- captured_gradient(site, path, origin).
 
 // ══ Fields visited in two orders ════════════════════════════════════
 
 // An implementation's `traverse/3` and `reduce/3` visit a field at
-// different places in their order: Nx flattens a container with `reduce`
-// and rebuilds it with `traverse`, so tensors land in each other's fields.
-.decl misordered_field(visit: symbol, struct: symbol, field: symbol)
-misordered_field(visit, struct, field) :-
+// different places in their order, `order` and `other`, at `visit` and
+// `reduced`: Nx flattens a container with `reduce` and rebuilds it with
+// `traverse`, so tensors land in each other's fields.
+.decl misordered_field(visit: symbol, struct: symbol, field: symbol, order: number, reduced: symbol, other: number)
+misordered_field(visit, struct, field, order, reduced, other) :-
   visits(struct, "traverse", field, visit, order),
-  visits(struct, "reduce", field, _, other),
+  visits(struct, "reduce", field, reduced, other),
   order != other.
 
 // The field `traverse/3` or `reduce/3` of the struct's implementation
@@ -642,6 +647,8 @@ visit_call(function, field, visit, index) :-
   flow_load(function, load, field, "param", "0"),
   instruction(visit, function, index, _).
 
-call_error(visit, "container_order", detail, "") :-
-  misordered_field(visit, struct, field),
-  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1)).
+// The detail is the field, `Struct.field`, then its place in each order,
+// counted from 0; the origin is the visit `reduce/3` makes.
+call_error(visit, "container_order", detail, reduced) :-
+  misordered_field(visit, struct, field, order, reduced, other),
+  detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), " ", to_string(order), " ", to_string(other)).
