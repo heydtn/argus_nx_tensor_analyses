@@ -131,22 +131,23 @@ operand_misfit(site, operands, "conv_options", cat("bad argument in arithmetic e
 
 // Group sizes Nx rejects, by the first of its checks they fail: one of
 // them must be 1, the batch groups must divide the batch, and both the
-// kernel's output channels.
+// kernel's output channels, of the input and kernel as the conv reads
+// them.
 operand_misfit(site, operands, "conv_options", cat("either batch groups or feature groups must be 1, got batch_groups = ", to_string(batch_groups), " and feature_groups = ", to_string(feature_groups))) :-
-  conv_instance(site, operands, _),
+  sliding(site, operands, _, "conv_options"),
   option_number(site, "feature_group_size", 1, feature_groups),
   option_number(site, "batch_group_size", 1, batch_groups),
   feature_groups != 1,
   batch_groups != 1.
-operand_misfit(site, [first, second, nil], "conv_options", cat("batch groups must evenly divide input batch size got rem(", to_string(batch_groups), ", ", to_string(batch), ") != 0")) :-
-  conv_instance(site, [first, second, nil], _),
+violation(context, site, "conv_options", cat("batch groups must evenly divide input batch size got rem(", to_string(batch_groups), ", ", to_string(batch), ") != 0")) :-
+  conv_context(context, site, [first, _, _]),
   option_number(site, "feature_group_size", 1, 1),
   option_number(site, "batch_group_size", 1, batch_groups),
   batch_groups > 1,
   axes_axis(first, 0, [batch, nil], _),
   batch % max(batch_groups, 1) != 0.
-operand_misfit(site, [first, second, nil], "conv_options", cat("size of kernel output channels must be evenly divisible by ", named, " got rem(", to_string(filters), ", ", to_string(groups), ") != 0 for kernel with shape ", kernel)) :-
-  conv_instance(site, [first, second, nil], _),
+violation(context, site, "conv_options", cat("size of kernel output channels must be evenly divisible by ", named, " got rem(", to_string(filters), ", ", to_string(groups), ") != 0 for kernel with shape ", kernel)) :-
+  conv_context(context, site, [first, second, _]),
   option_number(site, "feature_group_size", 1, feature_groups),
   option_number(site, "batch_group_size", 1, batch_groups),
   ( feature_groups = 1, groups = batch_groups, named = "batch groups"
