@@ -117,7 +117,7 @@ negative_remainder(context, site, operand, certain, origin) :-
 // ── Words ──────────────────────────────────────────────────────────
 
 .decl takes_remainder(site: symbol)
-takes_remainder(site) :- operation_site(site, operation, 2), sign_class(operation, "remainder").
+takes_remainder(site) :- operation_site(site, operation, 2), nx_class(operation, "sign", "remainder").
 
 // An argument asked about that can be negative: because of the code's
 // own math (`certain` 1), with the call whose math makes it so
@@ -199,7 +199,7 @@ hanging_integer_power(context, site, certain, origin) :-
 // ── Words ──────────────────────────────────────────────────────────
 
 .decl takes_power(site: symbol)
-takes_power(site) :- operation_site(site, operation, 2), sign_class(operation, "power").
+takes_power(site) :- operation_site(site, operation, 2), nx_class(operation, "sign", "power").
 
 // The power's base and exponent can both be integers, which makes its
 // result one.

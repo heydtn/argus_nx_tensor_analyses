@@ -659,16 +659,14 @@ sign_demand(context, function, kind, source) :-
 // the complex types written in its literals. With none, no operand can be
 // complex, and no class is asked for it.
 .decl makes_complex()
-makes_complex() :- operation_site(_, operation, _), type_class(operation, "complex").
+makes_complex() :- operation_site(_, operation, _), nx_class(operation, "type", "complex").
 makes_complex() :- remote_call(_, _, "Nx.Constants", "i", _).
 makes_complex() :- literal_source(_, text), match(".*(c64|c128|\\{:c, ).*", text).
 
 // The calls that make a complex tensor of any operand: the Fourier
 // transforms, `Nx.complex/2`, and `Nx.conjugate/1`, which makes even a
 // real tensor complex; and `Nx.Constants.i`.
-type_class("Nx.fft", "complex"). type_class("Nx.ifft", "complex"). type_class("Nx.rfft", "complex").
-type_class("Nx.fft2", "complex"). type_class("Nx.ifft2", "complex"). type_class("Nx.complex", "complex").
-type_class("Nx.conjugate", "complex").
+nx_members("type", "complex", " Nx.fft Nx.ifft Nx.rfft Nx.fft2 Nx.ifft2 Nx.complex Nx.conjugate ").
 
 value_class(context, function, "result", site, "complex", site) :-
   type_call(context, site, function, "complex").
@@ -678,7 +676,7 @@ value_class(context, function, "result", site, "complex", site) :-
 
 // `Nx.abs` keeps an integer or float operand's class, and makes a complex
 // one's magnitude a float.
-type_class("Nx.abs", "magnitude").
+nx_members("type", "magnitude", " Nx.abs ").
 value_class(context, function, "result", site, class, origin) :-
   argument_class(context, site, 0, class, origin),
   class != "complex",

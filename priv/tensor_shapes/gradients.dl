@@ -205,7 +205,7 @@ carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
   flow_argument(site, function, _, kind, source),
   operation_site(site, operation, _),
-  !blocks_gradient(operation).
+  !nx_trait(operation, "blocks_gradient").
 carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
   flow_argument(site, function, _, kind, source),
@@ -246,16 +246,19 @@ carries_gradient(closure, "param", to_string(position)) :-
   !gradient_function_object(object).
 
 // The Nx functions whose derivative Nx takes as zero, and `stop_grad`.
-.decl blocks_gradient(operation: symbol)
-blocks_gradient(operation) :- sign_class(operation, "compare").
-blocks_gradient(operation) :- sign_class(operation, "round").
-blocks_gradient(operation) :- sign_class(operation, "index").
-blocks_gradient(operation) :- shape_query(operation).
-blocks_gradient(cat("Nx.", name)) :- integer_binary(name), name != "quotient".
-blocks_gradient(cat("Nx.", name)) :- integer_unary(name).
-blocks_gradient(cat("Nx.Defn.Kernel.", name)) :- kernel_integer_binary(name), name != "div".
-blocks_gradient("Nx.Defn.Kernel.stop_grad"). blocks_gradient("Nx.eye"). blocks_gradient("Nx.sign").
-blocks_gradient("Nx.all"). blocks_gradient("Nx.any").
+nx_members("trait", "blocks_gradient", " Nx.Defn.Kernel.stop_grad Nx.eye Nx.sign Nx.all Nx.any ").
+nx_trait(operation, "blocks_gradient") :-
+  nx_class(operation, "sign", class),
+  in_set("blocks_gradient_from_sign", class).
+nx_trait(operation, "blocks_gradient") :- nx_named(operation, _), shape_query(operation).
+nx_trait(operation, "blocks_gradient") :-
+  nx_trait(operation, "integer_binary"),
+  operation != "Nx.quotient",
+  operation != "Nx.Defn.Kernel.div".
+nx_trait(operation, "blocks_gradient") :- nx_trait(operation, "integer_unary").
+
+// The sign classes whose functions' derivative Nx takes as zero.
+nx_members("set", "blocks_gradient_from_sign", " compare round index ").
 
 // The operand at `position` of a call carries a gradient back.
 .decl differentiated_operand(site: symbol, position: number)
@@ -344,12 +347,12 @@ computes_branch(select, branch, site) :-
   kept_away_from_zero(select, function, branch, _, _),
   flow_argument(select, function, branch, "result", site),
   operation_site(site, operation, _),
-  !blocks_gradient(operation).
+  !nx_trait(operation, "blocks_gradient").
 computes_branch(select, branch, site) :-
   computes_branch(select, branch, later),
   flow_argument(later, _, _, "result", site),
   operation_site(site, operation, _),
-  !blocks_gradient(operation).
+  !nx_trait(operation, "blocks_gradient").
 
 // A call whose derivative is infinite where the value it takes is zero:
 // a logarithm, a root (`singular_derivative`), a division by it (`cause`
@@ -375,7 +378,7 @@ singular_where_zero(site, function, kind, source, "division") :-
 .decl differentiated_exponent(site: symbol)
 differentiated_exponent(site) :-
   operation_site(site, operation, 2),
-  sign_class(operation, "power"),
+  nx_class(operation, "sign", "power"),
   differentiated_operand(site, 1).
 
 // Their bases' signs are asked.
@@ -395,7 +398,7 @@ negative_base_written(site) :-
 .decl held_exponent(site: symbol, spelled: symbol)
 held_exponent(site, spelled) :-
   operation_site(site, operation, 2),
-  sign_class(operation, "power"),
+  nx_class(operation, "sign", "power"),
   flow_argument(site, function, 1, kind, source),
   kind != "literal",
   site_active(context, site),
@@ -407,7 +410,7 @@ held_exponent(site, spelled) :-
 .decl exponent_quotient(site: symbol, numerator: symbol, denominator: symbol)
 exponent_quotient(site, numerator, denominator) :-
   operation_site(site, operation, 2),
-  sign_class(operation, "power"),
+  nx_class(operation, "sign", "power"),
   flow_argument(site, function, 1, "result", quotient),
   sign_rule(quotient, "divide"),
   flow_argument(quotient, function, 0, "literal", numerator),
@@ -511,8 +514,8 @@ holds_far_value(function, "result", site, direction, cause) :-
 // mask of zeros and ones), a move's, a select's branches.
 .decl keeps_far_value(operation: symbol, position: number)
 keeps_far_value(operation, position) :-
-  sign_class(operation, "multiply"), ( position = 0 ; position = 1 ).
-keeps_far_value(cat("Nx.", name), 0) :- moves_elements(name).
+  nx_class(operation, "sign", "multiply"), ( position = 0 ; position = 1 ).
+keeps_far_value(operation, 0) :- nx_trait(operation, "moves_elements").
 keeps_far_value("Nx.select", 1). keeps_far_value("Nx.select", 2).
 
 // ── Degenerate matrices ───────────────────────────────────────────────
@@ -692,7 +695,7 @@ custom_gradient_reaches(site, function, kind, source) :-
 custom_gradient_reaches(site, function, kind, source) :-
   custom_gradient_reaches(site, function, "result", later),
   operation_site(later, operation, _),
-  !blocks_gradient(operation),
+  !nx_trait(operation, "blocks_gradient"),
   flow_argument(later, function, _, kind, source),
   !custom_gradient_input(site, function, kind, source).
 

@@ -40,8 +40,8 @@
 //
 // Souffle's compile time grows with relations times clauses, and a
 // disjunction is a clause for each of its branches, so kinds of call and
-// of rule are fact tables (`dtype_role`, `class_trait`) rather than a
-// relation or a disjunction each.
+// of rule are classes and sets of them (`nx_class`, `in_set`) rather than
+// a relation or a disjunction each.
 
 // The float types the code may run at, as the analysis is run with them
 // (`f16`, `bf16`, `f32`).
@@ -384,8 +384,8 @@ unsigned_logsumexp(context, site, type, origin) :-
 // along its axis;
 // "operand" and "second_operand" for the operands a check reads.
 .decl dtype_call(site: symbol, role: symbol)
-dtype_call(site, role) :- operation_site(site, operation, _), dtype_role(operation, role).
-dtype_call(site, "subtract") :- operation_site(site, operation, 2), sign_class(operation, "subtract").
+dtype_call(site, role) :- operation_site(site, operation, _), nx_class(operation, "dtype_role", role).
+dtype_call(site, "subtract") :- operation_site(site, operation, 2), nx_class(operation, "sign", "subtract").
 dtype_call(site, "negate") :- sign_rule(site, "negate").
 dtype_call(site, "negate") :- operation_site(site, "Nx.Defn.Kernel.-", 1).
 dtype_call(site, "subtracts") :- dtype_call(site, "subtract").
@@ -396,32 +396,30 @@ dtype_call(site, "iota") :- operation_site(site, "Nx.iota", _), option_given(sit
 dtype_call(site, "logarithm_base") :- operation_site(site, "Nx.log", 2).
 dtype_call(site, "own_f32") :- dtype_rule(site, "floating_with_f32").
 
-.decl dtype_role(operation: symbol, role: symbol)
-dtype_role("Nx.diff", "difference"). dtype_role("Nx.all_close", "closeness").
-dtype_role("Nx.linspace", "linspace"). dtype_role("Nx.as_type", "cast"). dtype_role("Nx.pad", "pad").
-dtype_role("Nx.clip", "clip"). dtype_role("Nx.LinAlg.determinant", "determinant").
-dtype_role("Nx.logsumexp", "logsumexp"). dtype_role("Nx.fill", "fill").
-dtype_role("Nx.log2", "logarithm_base"). dtype_role("Nx.log10", "logarithm_base").
-dtype_role("Nx.cumulative_sum", "count"). dtype_role("Nx.window_sum", "count").
-dtype_role("Nx.window_mean", "count"). dtype_role("Nx.dot", "count").
-dtype_role("Nx.cumulative_sum", "accumulate"). dtype_role("Nx.window_sum", "accumulate").
-dtype_role("Nx.window_mean", "accumulate"). dtype_role("Nx.dot", "accumulate").
-dtype_role("Nx.cumulative_product", "accumulate"). dtype_role("Nx.window_product", "accumulate").
-dtype_role("Nx.outer", "accumulate"). dtype_role("Nx.weighted_mean", "accumulate").
-dtype_role("Nx.cumulative_sum", "running"). dtype_role("Nx.cumulative_product", "running").
-dtype_role("Nx.outer", "pairwise"). dtype_role("Nx.weighted_mean", "pairwise").
-dtype_role("Nx.dot", "contract").
-dtype_role("Nx.argmax", "indexes"). dtype_role("Nx.argmin", "indexes"). dtype_role("Nx.argsort", "indexes").
-dtype_role("Nx.sum", "sum"). dtype_role("Nx.mean", "sum"). dtype_role("Nx.variance", "sum").
-dtype_role("Nx.standard_deviation", "sum"). dtype_role("Nx.dot", "sum").
-dtype_role("Nx.cumulative_sum", "rising"). dtype_role("Nx.cumulative_max", "rising").
-dtype_role("Nx.iota", "rising"). dtype_role("Nx.sort", "rising").
-dtype_role("Nx.as_type", "operand"). dtype_role("Nx.median", "operand"). dtype_role("Nx.diff", "operand").
-dtype_role("Nx.outer", "operand"). dtype_role("Nx.weighted_mean", "operand").
-dtype_role("Nx.all_close", "operand"). dtype_role("Nx.linspace", "operand"). dtype_role("Nx.tensor", "operand").
-dtype_role("Nx.outer", "second_operand"). dtype_role("Nx.weighted_mean", "second_operand").
-dtype_role("Nx.all_close", "second_operand"). dtype_role("Nx.linspace", "second_operand").
-dtype_role("Nx.fill", "second_operand").
+nx_members("dtype_role", "difference", " Nx.diff ").
+nx_members("dtype_role", "closeness", " Nx.all_close ").
+nx_members("dtype_role", "linspace", " Nx.linspace ").
+nx_members("dtype_role", "cast", " Nx.as_type ").
+nx_members("dtype_role", "pad", " Nx.pad ").
+nx_members("dtype_role", "clip", " Nx.clip ").
+nx_members("dtype_role", "determinant", " Nx.LinAlg.determinant ").
+nx_members("dtype_role", "logsumexp", " Nx.logsumexp ").
+nx_members("dtype_role", "fill", " Nx.fill ").
+nx_members("dtype_role", "logarithm_base", " Nx.log2 Nx.log10 ").
+nx_members("dtype_role", "count", " Nx.cumulative_sum Nx.window_sum Nx.window_mean Nx.dot ").
+nx_members("dtype_role", "accumulate", cat(
+  " Nx.cumulative_sum Nx.window_sum Nx.window_mean Nx.dot Nx.cumulative_product",
+  " Nx.window_product Nx.outer Nx.weighted_mean ")).
+nx_members("dtype_role", "running", " Nx.cumulative_sum Nx.cumulative_product ").
+nx_members("dtype_role", "pairwise", " Nx.outer Nx.weighted_mean ").
+nx_members("dtype_role", "contract", " Nx.dot ").
+nx_members("dtype_role", "indexes", " Nx.argmax Nx.argmin Nx.argsort ").
+nx_members("dtype_role", "sum", " Nx.sum Nx.mean Nx.variance Nx.standard_deviation Nx.dot ").
+nx_members("dtype_role", "rising", " Nx.cumulative_sum Nx.cumulative_max Nx.iota Nx.sort ").
+nx_members("dtype_role", "operand", cat(
+  " Nx.as_type Nx.median Nx.diff Nx.outer Nx.weighted_mean Nx.all_close Nx.linspace",
+  " Nx.tensor ")).
+nx_members("dtype_role", "second_operand", " Nx.outer Nx.weighted_mean Nx.all_close Nx.linspace Nx.fill ").
 
 // What kind of number a type holds: "unsigned", "integer", "complex",
 // "floating" (a real float, the configured type among them), "byte" (an
@@ -1158,13 +1156,13 @@ type_checked(site) :-
   role != "indexes",
   role != "operand",
   role != "second_operand".
-type_checked(site) :- dtype_rule(site, class), class_trait(class, "checked").
+type_checked(site) :- dtype_rule(site, class), in_set("dtype_checked", class).
 
 // The operands a typed call's type follows from, or a check reads.
 .decl dtype_operand(site: symbol, position: number)
 dtype_operand(site, first) :- merge_positions(site, first, _, _).
 dtype_operand(site, second) :- merge_positions(site, _, second, _).
-dtype_operand(site, 0) :- dtype_rule(site, class), class_trait(class, "unary").
+dtype_operand(site, 0) :- dtype_rule(site, class), in_set("dtype_unary", class).
 dtype_operand(site, 0) :- dtype_call(site, "operand").
 dtype_operand(site, 1) :- dtype_call(site, "second_operand").
 dtype_operand(site, position) :- dtype_rule(site, "clip"), position = range(0, 3).
@@ -1216,22 +1214,19 @@ argument_strict_type(context, site, position, type, site) :-
 // The type the Nx call at `site` returns in a context.
 .decl call_type(context: Context, site: symbol, type: symbol, origin: symbol)
 
-// The Nx call at `site` has type rule `class`.
+// The Nx call at `site` has type rule `class`: its function's, or its
+// function's at its arity where that is another.
 .decl dtype_rule(site: symbol, class: symbol)
 dtype_rule(site, class) :-
   operation_site(site, operation, arity),
-  dtype_class(operation, class),
-  !arity_class(operation, arity, _).
-dtype_rule(site, class) :- operation_site(site, operation, arity), arity_class(operation, arity, class).
+  nx_class(operation, "dtype", class),
+  !nx_class(cat(operation, "/", to_string(arity)), "dtype", _).
+dtype_rule(site, class) :-
+  operation_site(site, operation, arity),
+  nx_class(cat(operation, "/", to_string(arity)), "dtype", class).
 dtype_rule(site, "typed") :- remote_call(site, _, "Nx.Constants", _, _).
 dtype_rule(site, "typed") :- dtype_call(site, "fill"), option_given(site, "type").
 dtype_rule(site, "merge") :- dtype_call(site, "fill"), option_absent(site, "type").
-
-// The rule of a function at an arity other than its usual one: a
-// logarithm to a base, a unary minus or plus.
-.decl arity_class(operation: symbol, arity: number, class: symbol)
-arity_class("Nx.log", 2, "floating_with_f32").
-arity_class("Nx.Defn.Kernel.-", 1, "move"). arity_class("Nx.Defn.Kernel.+", 1, "move").
 
 // Each Nx function's type rule: `merge` for a weak merge of two operands,
 // `strict_merge` where Nx makes numbers tensors first, `floating_merge`
@@ -1239,62 +1234,54 @@ arity_class("Nx.Defn.Kernel.-", 1, "move"). arity_class("Nx.Defn.Kernel.+", 1, "
 // `aggregate`, `compare` and `typed` as `Nx.Type` has them, `clip` and
 // `join` for their operands, and `floating_with_f32` for the calls that
 // divide by or merge an f32 of their own. A function with none gives a
-// value of no known type.
-.decl dtype_class(operation: symbol, class: symbol)
-dtype_class(cat("Nx.", name), "merge") :- integer_binary(name).
-dtype_class(cat("Nx.Defn.Kernel.", name), "merge") :- kernel_integer_binary(name).
-dtype_class(cat("Nx.", name), "floating") :-
-  floating_function(name),
-  name != "divide", name != "atan2", name != "log2", name != "log10".
-dtype_class(operation, "move") :-
-  type_class(operation, "move"),
+// value of no known type. A logarithm to a base, a unary minus and a
+// unary plus have a rule of their own at that arity.
+nx_members("dtype", "merge", cat(
+  " Nx.add Nx.subtract Nx.multiply Nx.max Nx.min Nx.remainder Nx.pow Nx.quotient Nx.pad",
+  " Nx.Defn.Kernel.+ Nx.Defn.Kernel.- Nx.Defn.Kernel.* Nx.Defn.Kernel.max Nx.Defn.Kernel.min",
+  " Nx.Defn.Kernel.rem Nx.Defn.Kernel.** Nx.Defn.Kernel.div ")).
+nx_members("dtype", "strict_merge", " Nx.dot Nx.outer Nx.select Nx.put_slice ").
+nx_members("dtype", "floating_merge", " Nx.divide Nx.Defn.Kernel./ Nx.atan2 ").
+nx_members("dtype", "floating", " Nx.window_mean Nx.LinAlg.norm Nx.LinAlg.determinant ").
+nx_members("dtype", "floating_with_f32", " Nx.log2 Nx.log10 Nx.LinAlg.invert Nx.log/2 ").
+nx_members("dtype", "move", cat(
+  " Nx.window_sum Nx.window_product Nx.window_max Nx.window_min Nx.diff Nx.type Nx.tril",
+  " Nx.triu Nx.conjugate Nx.Defn.Kernel.-/1 Nx.Defn.Kernel.+/1 ")).
+nx_members("dtype", "aggregate", " Nx.sum Nx.product ").
+nx_members("dtype", "compare", " Nx.all Nx.any Nx.all_close ").
+nx_members("dtype", "typed", " Nx.linspace Nx.argmax Nx.argmin Nx.argsort ").
+nx_members("dtype", "clip", " Nx.clip ").
+nx_members("dtype", "join", " Nx.concatenate Nx.stack ").
+nx_class(operation, "dtype", "merge") :- nx_trait(operation, "integer_binary").
+nx_class(operation, "dtype", "floating") :-
+  nx_trait(operation, "floating"),
+  operation != "Nx.divide", operation != "Nx.atan2", operation != "Nx.log2", operation != "Nx.log10".
+nx_class(operation, "dtype", "move") :-
+  nx_class(operation, "type", "move"),
   operation != "Nx.sum",
   operation != "Nx.product".
-dtype_class(operation, "compare") :- sign_class(operation, "compare").
-dtype_class(cat("Nx.", name), "typed") :- typed_function(name), !match("Random\\..*", name).
-dtype_class(cat("Nx.", name), "typed") :- type_shorthand(name).
-dtype_class("Nx.add", "merge"). dtype_class("Nx.subtract", "merge"). dtype_class("Nx.multiply", "merge").
-dtype_class("Nx.max", "merge"). dtype_class("Nx.min", "merge"). dtype_class("Nx.remainder", "merge").
-dtype_class("Nx.pow", "merge"). dtype_class("Nx.quotient", "merge"). dtype_class("Nx.pad", "merge").
-dtype_class("Nx.Defn.Kernel.+", "merge"). dtype_class("Nx.Defn.Kernel.-", "merge").
-dtype_class("Nx.Defn.Kernel.*", "merge"). dtype_class("Nx.Defn.Kernel.max", "merge").
-dtype_class("Nx.Defn.Kernel.min", "merge"). dtype_class("Nx.Defn.Kernel.rem", "merge").
-dtype_class("Nx.Defn.Kernel.**", "merge"). dtype_class("Nx.Defn.Kernel.div", "merge").
-dtype_class("Nx.dot", "strict_merge"). dtype_class("Nx.outer", "strict_merge").
-dtype_class("Nx.select", "strict_merge"). dtype_class("Nx.put_slice", "strict_merge").
-dtype_class("Nx.divide", "floating_merge"). dtype_class("Nx.Defn.Kernel./", "floating_merge").
-dtype_class("Nx.atan2", "floating_merge").
-dtype_class("Nx.window_mean", "floating"). dtype_class("Nx.LinAlg.norm", "floating").
-dtype_class("Nx.LinAlg.determinant", "floating").
-dtype_class("Nx.log2", "floating_with_f32"). dtype_class("Nx.log10", "floating_with_f32").
-dtype_class("Nx.LinAlg.invert", "floating_with_f32").
-dtype_class("Nx.window_sum", "move"). dtype_class("Nx.window_product", "move").
-dtype_class("Nx.window_max", "move"). dtype_class("Nx.window_min", "move"). dtype_class("Nx.diff", "move").
-dtype_class("Nx.type", "move"). dtype_class("Nx.tril", "move"). dtype_class("Nx.triu", "move").
-dtype_class("Nx.conjugate", "move").
-dtype_class("Nx.sum", "aggregate"). dtype_class("Nx.product", "aggregate").
-dtype_class("Nx.all", "compare"). dtype_class("Nx.any", "compare"). dtype_class("Nx.all_close", "compare").
-dtype_class("Nx.linspace", "typed"). dtype_class("Nx.argmax", "typed"). dtype_class("Nx.argmin", "typed").
-dtype_class("Nx.argsort", "typed").
-dtype_class("Nx.clip", "clip").
-dtype_class("Nx.concatenate", "join"). dtype_class("Nx.stack", "join").
+nx_class(operation, "dtype", "compare") :- nx_class(operation, "sign", "compare").
+nx_class(operation, "dtype", "typed") :-
+  nx_trait(operation, "takes_type"),
+  !match("Nx\\.Random\\..*", operation).
+nx_class(operation, "dtype", "typed") :-
+  type_shorthand(name),
+  operation = cat("Nx.", name),
+  nx_named(operation, _).
 
-// What a class of type rule does: "weak" merges with weak numbers, "keeps"
-// the type it merges to, is "checked" by the checks, or reads one operand
-// ("unary").
-.decl class_trait(class: symbol, trait: symbol)
-class_trait("merge", "weak"). class_trait("floating_merge", "weak").
-class_trait("merge", "keeps"). class_trait("strict_merge", "keeps"). class_trait("clip", "keeps").
-class_trait("merge", "checked"). class_trait("strict_merge", "checked").
-class_trait("floating_merge", "checked"). class_trait("clip", "checked"). class_trait("join", "checked").
-class_trait("floating_with_f32", "checked").
-class_trait("move", "unary"). class_trait("floating", "unary"). class_trait("floating_with_f32", "unary").
-class_trait("aggregate", "unary").
+// What classes of type rule do: merge with weak numbers
+// (`dtype_weak`), keep the type they merge to (`dtype_keeps`), are
+// checked by the checks (`dtype_checked`), read one operand
+// (`dtype_unary`).
+nx_members("set", "dtype_weak", " merge floating_merge ").
+nx_members("set", "dtype_keeps", " merge strict_merge clip ").
+nx_members("set", "dtype_checked", " merge strict_merge floating_merge clip join floating_with_f32 ").
+nx_members("set", "dtype_unary", " move floating floating_with_f32 aggregate ").
 
 // The two operands a merging call merges, and whether a number there is
 // weak (1) or made a tensor first (0).
 .decl merge_positions(site: symbol, first: number, second: number, weak: number)
-merge_positions(site, 0, 1, 1) :- dtype_rule(site, class), class_trait(class, "weak").
+merge_positions(site, 0, 1, 1) :- dtype_rule(site, class), in_set("dtype_weak", class).
 merge_positions(site, first, second, 0) :-
   dtype_rule(site, "strict_merge"),
   slot_position(site, 1, first),
@@ -1346,7 +1333,7 @@ call_type(context, site, merged, site) :-
   merged != left,
   merged != right,
   dtype_rule(site, class),
-  class_trait(class, "keeps").
+  in_set("dtype_keeps", class).
 call_type(context, site, floating, site) :-
   operands_meet(context, site, _, _, merged),
   dtype_rule(site, "floating_merge"),
@@ -1356,11 +1343,11 @@ call_type(context, site, floating, site) :-
 .decl meeting_position(site: symbol, position: number)
 meeting_position(site, first) :-
   dtype_rule(site, class),
-  class_trait(class, "keeps"),
+  in_set("dtype_keeps", class),
   merge_positions(site, first, _, _).
 meeting_position(site, second) :-
   dtype_rule(site, class),
-  class_trait(class, "keeps"),
+  in_set("dtype_keeps", class),
   merge_positions(site, _, second, _).
 meeting_position(site, 0) :- dtype_rule(site, "clip").
 
@@ -1425,7 +1412,7 @@ call_type(context, site, "configured", site) :-
 call_type(context, site, type, site) :-
   typed_site(context, site),
   operation_site(site, operation, _),
-  default_dtype(operation, type),
+  nx_class(operation, "default_dtype", type),
   option_absent(site, "type").
 call_type(context, site, name, site) :-
   typed_site(context, site),
@@ -1454,9 +1441,8 @@ list_dtype(spelled, "f32") :- list_class(spelled, "float").
 list_dtype(spelled, "s32") :- list_class(spelled, "integer").
 
 // The type a typed call makes where it is given none.
-.decl default_dtype(operation: symbol, type: symbol)
-default_dtype("Nx.iota", "s32"). default_dtype("Nx.eye", "s32"). default_dtype("Nx.linspace", "f32").
-default_dtype("Nx.argmax", "s32"). default_dtype("Nx.argmin", "s32"). default_dtype("Nx.argsort", "s32").
+nx_members("default_dtype", "s32", " Nx.iota Nx.eye Nx.argmax Nx.argmin Nx.argsort ").
+nx_members("default_dtype", "f32", " Nx.linspace ").
 
 // `join`: the elements of a list the joining function builds, merged from
 // the last, as `Enum.reduce/2` of `Nx.Type.merge/2` over the types
@@ -1470,7 +1456,7 @@ joined_cell(site, function, cell) :-
 // call has (`dtype_rule`) reads its options, which read the lists asked.
 list_asked(list) :-
   operation_site(site, operation, _),
-  dtype_class(operation, "join"),
+  nx_class(operation, "dtype", "join"),
   flow_argument(site, _, 0, "object", list).
 
 // A cell of such a list: its element, and the cell after it, "" for the

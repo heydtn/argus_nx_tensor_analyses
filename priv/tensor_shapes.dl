@@ -489,6 +489,63 @@ read_site(site) :- function_capture(site).
 function_capture(site) :- remote_call(site, _, "Function", "capture", 3).
 function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 
+// ══ Nx's functions ══════════════════════════════════════════════════
+//
+// What the rules know of each Nx function is written as member strings:
+// a fact names a facet and a value in it, and spells its members between
+// spaces. The facet "trait" holds the functions that have a trait
+// (`moves_elements`); a class facet, one per analysis ("sign", "type",
+// ...), the functions of each class. A member is a function as a call
+// names it (`Nx.add`, `Nx.Defn.Kernel.+`, the Kernel operators as the
+// compiler spells them), or, where a class holds for one arity only, the
+// function at that arity (`Nx.log/2`). The facet "set" holds classes
+// rather than functions, for the rules that treat several classes alike.
+//
+// Views read the members for the functions the program names only
+// (`nx_named`): `nx_trait` and `nx_class`. A trait or class that follows
+// from others is a rule over the views, whose exceptions are conditions
+// on the function's name rather than negations: the views derive each
+// other and the rules negate them, so a negation among them would not
+// stratify.
+//
+// Souffle's front end costs grow with facts and clauses, and it minimizes
+// each relation's clauses pairwise, so the members of a value are one
+// string rather than a fact each.
+.decl nx_members(facet: symbol, value: symbol, members: symbol)
+
+// The Nx functions the program names, by arity: those it calls. Read from
+// the code alone, so that rules may negate what the views derive from it.
+.decl nx_named(operation: symbol, arity: number)
+nx_named(operation, arity) :- called_name(_, operation, arity).
+
+// A function the program names has the trait.
+.decl nx_trait(operation: symbol, trait: symbol)
+nx_trait(operation, trait) :-
+  nx_named(operation, _),
+  nx_members("trait", trait, members),
+  contains(cat(" ", operation, " "), members).
+
+// A function the program names is of the class in the facet: `operation`
+// is the function, or the function at an arity (`Nx.log/2`) where the
+// members name it so.
+.decl nx_class(operation: symbol, facet: symbol, class: symbol)
+nx_class(operation, facet, class) :-
+  nx_named(operation, _),
+  nx_members(facet, class, members),
+  facet != "trait",
+  facet != "set",
+  contains(cat(" ", operation, " "), members).
+nx_class(cat(operation, "/", to_string(arity)), facet, class) :-
+  nx_named(operation, arity),
+  nx_members(facet, class, members),
+  facet != "trait",
+  facet != "set",
+  contains(cat(" ", operation, "/", to_string(arity), " "), members).
+
+// The class is one of the set's, as a disjunction of classes would say.
+.decl in_set(set: symbol, class: symbol) inline
+in_set(set, class) :- nx_members("set", set, classes), contains(cat(" ", class, " "), classes).
+
 // ══ Contexts ════════════════════════════════════════════════════════
 
 // The function is analyzed in the context: every function that handles
@@ -8470,16 +8527,13 @@ divides_by(site, 0) :- negative_power(site).
 .decl negative_power(site: symbol)
 negative_power(site) :-
   operation_site(site, operation, 2),
-  sign_class(operation, "power"),
+  nx_class(operation, "sign", "power"),
   flow_argument(site, _, 1, "literal", text),
   written_number(text, "sign", "negative").
 
 // The operand an Nx call takes the logarithm of.
 .decl takes_logarithm(site: symbol, position: number)
-takes_logarithm(site, 0) :- operation_site(site, operation, 1), logarithm_function(operation).
-
-.decl logarithm_function(operation: symbol)
-logarithm_function("Nx.log"). logarithm_function("Nx.log2"). logarithm_function("Nx.log10").
+takes_logarithm(site, 0) :- operation_site(site, operation, 1), nx_class(operation, "sign", "logarithm").
 
 // The operand an Nx call takes a root or logarithm of, which is NaN below
 // zero, and what the finding calls that.
@@ -8494,7 +8548,7 @@ takes_root(site, 0, "root_of_negative") :- fractional_power(site).
 .decl fractional_power(site: symbol)
 fractional_power(site) :-
   operation_site(site, operation, 2),
-  sign_class(operation, "power"),
+  nx_class(operation, "sign", "power"),
   flow_argument(site, _, 1, "literal", text),
   written_number(text, "fraction", "nonzero").
 
@@ -8547,12 +8601,12 @@ stopped_gradient(site) :-
 // acos on [-1, 1] (`closed_unit`), atanh and erf_inv inside it, infinite
 // at ±1 (`open_unit`), log1p above -1, infinite at -1, and acosh from 1.
 .decl takes_domain(site: symbol, domain: symbol)
-takes_domain(site, domain) :- operation_site(site, operation, 1), domain_function(operation, domain).
+takes_domain(site, domain) :- operation_site(site, operation, 1), nx_class(operation, "domain", domain).
 
-.decl domain_function(operation: symbol, domain: symbol)
-domain_function("Nx.asin", "closed_unit"). domain_function("Nx.acos", "closed_unit").
-domain_function("Nx.atanh", "open_unit"). domain_function("Nx.erf_inv", "open_unit").
-domain_function("Nx.log1p", "above_minus_one"). domain_function("Nx.acosh", "at_least_one").
+nx_members("domain", "closed_unit", " Nx.asin Nx.acos ").
+nx_members("domain", "open_unit", " Nx.atanh Nx.erf_inv ").
+nx_members("domain", "above_minus_one", " Nx.log1p ").
+nx_members("domain", "at_least_one", " Nx.acosh ").
 
 // The regions a domain leaves out: where the function is NaN, where it is
 // infinite, and both.
@@ -8874,7 +8928,7 @@ defn_wrapper(wrapper, body) :-
 
 // ── What an Nx call's signs are ─────────────────────────────────────
 //
-// Each Nx function has a class (`sign_class`), and a class's rules give
+// Each Nx function has a class (its "sign" class), and a class's rules give
 // the result's signs from its operands' (`slot_sign`: the operands the
 // class reads, in slots 1, 2 and 3). An operation that makes a
 // value non-negative and so lets it be zero where its operand could be
@@ -8885,7 +8939,7 @@ defn_wrapper(wrapper, body) :-
 .decl sign_rule(site: symbol, class: symbol)
 sign_rule(site, class) :-
   operation_site(site, operation, _),
-  sign_class(operation, class).
+  nx_class(operation, "sign", class).
 
 // The Nx call a value in a context is the result of, and its class.
 .decl signed_call(context: Context, site: symbol, function: symbol, class: symbol)
@@ -9188,11 +9242,10 @@ sign_image("sum", 1, "positive", 1, "negative", "zero", "cancel").
 .decl whole_sum_past(site: symbol, cause: symbol)
 whole_sum_past(site, cause) :-
   operation_site(site, operation, _),
-  whole_sum(operation),
+  nx_trait(operation, "whole_sum"),
   partial_zero(cause).
 
-.decl whole_sum(operation: symbol)
-whole_sum("Nx.sum"). whole_sum("Nx.mean").
+nx_members("trait", "whole_sum", " Nx.sum Nx.mean ").
 
 // `product`: positive from positives, or from negatives paired; negative
 // where an element is; zero where one is.
@@ -9268,7 +9321,7 @@ branch_ensures("less", 1, "nonzero"). branch_ensures("greater_equal", 2, "nonzer
 compares_with_zero(comparison, function, kind, source, relation) :-
   select_demand(_, function, comparison),
   operation_site(comparison, operation, 2),
-  comparison_relation(operation, relation, _),
+  nx_class(operation, "relation", relation),
   flow_argument(comparison, function, 0, kind, source),
   kind != "literal",
   flow_argument(comparison, function, 1, "literal", zero),
@@ -9276,102 +9329,83 @@ compares_with_zero(comparison, function, kind, source, relation) :-
 compares_with_zero(comparison, function, kind, source, relation) :-
   select_demand(_, function, comparison),
   operation_site(comparison, operation, 2),
-  comparison_relation(operation, _, relation),
+  nx_class(operation, "reversed_relation", relation),
   flow_argument(comparison, function, 1, kind, source),
   kind != "literal",
   flow_argument(comparison, function, 0, "literal", zero),
   written_number(zero, "sign", "zero").
 
-// A comparison's relation of its first operand to its second, and of its
-// second to its first.
-.decl comparison_relation(operation: symbol, relation: symbol, reversed: symbol)
-comparison_relation("Nx.equal", "equal", "equal").
-comparison_relation("Nx.Defn.Kernel.__equal__", "equal", "equal").
-comparison_relation("Nx.not_equal", "not_equal", "not_equal").
-comparison_relation("Nx.Defn.Kernel.__not_equal__", "not_equal", "not_equal").
-comparison_relation("Nx.greater", "greater", "less").
-comparison_relation("Nx.Defn.Kernel.__more_than__", "greater", "less").
-comparison_relation("Nx.less", "less", "greater").
-comparison_relation("Nx.Defn.Kernel.__less_than__", "less", "greater").
-comparison_relation("Nx.greater_equal", "greater_equal", "less_equal").
-comparison_relation("Nx.Defn.Kernel.__more_than_equal_to__", "greater_equal", "less_equal").
-comparison_relation("Nx.less_equal", "less_equal", "greater_equal").
-comparison_relation("Nx.Defn.Kernel.__less_than_equal_to__", "less_equal", "greater_equal").
+// A comparison's relation of its first operand to its second
+// ("relation"), and of its second to its first ("reversed_relation").
+nx_members("relation", "equal", " Nx.equal Nx.Defn.Kernel.__equal__ ").
+nx_members("relation", "not_equal", " Nx.not_equal Nx.Defn.Kernel.__not_equal__ ").
+nx_members("relation", "greater", " Nx.greater Nx.Defn.Kernel.__more_than__ ").
+nx_members("relation", "less", " Nx.less Nx.Defn.Kernel.__less_than__ ").
+nx_members("relation", "greater_equal", " Nx.greater_equal Nx.Defn.Kernel.__more_than_equal_to__ ").
+nx_members("relation", "less_equal", " Nx.less_equal Nx.Defn.Kernel.__less_than_equal_to__ ").
+nx_members("reversed_relation", "equal", " Nx.equal Nx.Defn.Kernel.__equal__ ").
+nx_members("reversed_relation", "not_equal", " Nx.not_equal Nx.Defn.Kernel.__not_equal__ ").
+nx_members("reversed_relation", "less", " Nx.greater Nx.Defn.Kernel.__more_than__ ").
+nx_members("reversed_relation", "greater", " Nx.less Nx.Defn.Kernel.__less_than__ ").
+nx_members("reversed_relation", "less_equal", " Nx.greater_equal Nx.Defn.Kernel.__more_than_equal_to__ ").
+nx_members("reversed_relation", "greater_equal", " Nx.less_equal Nx.Defn.Kernel.__less_than_equal_to__ ").
 
 // Each Nx function's sign class. A function with none can return any
 // sign.
-.decl sign_class(operation: symbol, class: symbol)
-sign_class("Nx.exp", "positive"). sign_class("Nx.sigmoid", "positive"). sign_class("Nx.cosh", "positive").
-sign_class(cat("Nx.", name), "preserve") :- sign_preserving(name).
-sign_class("Nx.Defn.Kernel.__unary_plus__", "preserve").
-sign_class("Nx.Defn.Kernel.stop_grad", "preserve").
-sign_class("Nx.Defn.Kernel.print_value", "preserve").
-sign_class("Nx.negate", "negate"). sign_class("Nx.Defn.Kernel.__unary_minus__", "negate").
-sign_class("Nx.abs", "absolute").
-sign_class("Nx.LinAlg.norm", "norm").
-sign_class("Nx.sqrt", "root").
-sign_class("Nx.rsqrt", "reciprocal_root").
-sign_class("Nx.log", "logarithm"). sign_class("Nx.log2", "logarithm"). sign_class("Nx.log10", "logarithm").
-sign_class("Nx.floor", "round"). sign_class("Nx.ceil", "round"). sign_class("Nx.round", "round").
-sign_class("Nx.add", "add"). sign_class("Nx.Defn.Kernel.+", "add").
-sign_class("Nx.subtract", "subtract"). sign_class("Nx.Defn.Kernel.-", "subtract").
-sign_class("Nx.multiply", "multiply"). sign_class("Nx.Defn.Kernel.*", "multiply").
-sign_class("Nx.dot", "dot"). sign_class("Nx.outer", "dot").
-sign_class("Nx.divide", "divide"). sign_class("Nx.Defn.Kernel./", "divide").
-sign_class("Nx.quotient", "quotient"). sign_class("Nx.Defn.Kernel.div", "quotient").
-sign_class("Nx.remainder", "remainder"). sign_class("Nx.Defn.Kernel.rem", "remainder").
-sign_class("Nx.max", "maximum"). sign_class("Nx.Defn.Kernel.max", "maximum").
-sign_class("Nx.min", "minimum"). sign_class("Nx.Defn.Kernel.min", "minimum").
-sign_class("Nx.clip", "clip").
-sign_class("Nx.pow", "power"). sign_class("Nx.Defn.Kernel.**", "power").
-sign_class(cat("Nx.", name), "compare") :- comparison(name).
-sign_class(cat("Nx.Defn.Kernel.", name), "compare") :- kernel_comparison(name).
-sign_class("Nx.sum", "sum"). sign_class("Nx.mean", "sum"). sign_class("Nx.cumulative_sum", "sum").
-sign_class("Nx.product", "product"). sign_class("Nx.cumulative_product", "product").
-sign_class("Nx.argmax", "index"). sign_class("Nx.argmin", "index"). sign_class("Nx.argsort", "index").
-sign_class("Nx.iota", "index").
-sign_class("Nx.eye", "identity").
-sign_class("Nx.variance", "spread"). sign_class("Nx.standard_deviation", "spread").
-sign_class("Nx.select", "select").
-sign_class("Nx.fill", "fill").
-sign_class("Nx.put_slice", "splice").
-sign_class("Nx.pad", "splice").
+nx_members("sign", "positive", " Nx.exp Nx.sigmoid Nx.cosh ").
+nx_members("sign", "negate", " Nx.negate Nx.Defn.Kernel.__unary_minus__ ").
+nx_members("sign", "absolute", " Nx.abs ").
+nx_members("sign", "norm", " Nx.LinAlg.norm ").
+nx_members("sign", "root", " Nx.sqrt ").
+nx_members("sign", "reciprocal_root", " Nx.rsqrt ").
+nx_members("sign", "logarithm", " Nx.log Nx.log2 Nx.log10 ").
+nx_members("sign", "round", " Nx.floor Nx.ceil Nx.round ").
+nx_members("sign", "add", " Nx.add Nx.Defn.Kernel.+ ").
+nx_members("sign", "subtract", " Nx.subtract Nx.Defn.Kernel.- ").
+nx_members("sign", "multiply", " Nx.multiply Nx.Defn.Kernel.* ").
+nx_members("sign", "dot", " Nx.dot Nx.outer ").
+nx_members("sign", "divide", " Nx.divide Nx.Defn.Kernel./ ").
+nx_members("sign", "quotient", " Nx.quotient Nx.Defn.Kernel.div ").
+nx_members("sign", "remainder", " Nx.remainder Nx.Defn.Kernel.rem ").
+nx_members("sign", "maximum", " Nx.max Nx.Defn.Kernel.max ").
+nx_members("sign", "minimum", " Nx.min Nx.Defn.Kernel.min ").
+nx_members("sign", "clip", " Nx.clip ").
+nx_members("sign", "power", " Nx.pow Nx.Defn.Kernel.** ").
+nx_members("sign", "sum", " Nx.sum Nx.mean Nx.cumulative_sum ").
+nx_members("sign", "product", " Nx.product Nx.cumulative_product ").
+nx_members("sign", "index", " Nx.argmax Nx.argmin Nx.argsort Nx.iota ").
+nx_members("sign", "identity", " Nx.eye ").
+nx_members("sign", "spread", " Nx.variance Nx.standard_deviation ").
+nx_members("sign", "select", " Nx.select ").
+nx_members("sign", "fill", " Nx.fill ").
+nx_members("sign", "splice", " Nx.put_slice Nx.pad ").
 
-// The functions whose result has the signs of their first operand: the
-// ones that move, pick or convert elements, and odd functions through zero.
-.decl sign_preserving(name: symbol)
-sign_preserving(name) :- moves_elements(name).
-sign_preserving("tanh"). sign_preserving("sinh"). sign_preserving("asinh").
-sign_preserving("atan"). sign_preserving("erf"). sign_preserving("erf_inv").
-sign_preserving("cbrt"). sign_preserving("expm1"). sign_preserving("log1p").
-sign_preserving("sign").
+// `preserve`: the functions whose result has the signs of their first
+// operand: the ones that move, pick or convert elements, odd functions
+// through zero, and the Kernel's that hand their operand back.
+nx_members("sign", "preserve", cat(
+  " Nx.tanh Nx.sinh Nx.asinh Nx.atan Nx.erf Nx.erf_inv Nx.cbrt Nx.expm1 Nx.log1p Nx.sign",
+  " Nx.Defn.Kernel.__unary_plus__ Nx.Defn.Kernel.stop_grad Nx.Defn.Kernel.print_value ")).
+nx_class(operation, "sign", "preserve") :- nx_trait(operation, "moves_elements").
+
+// `compare`: the comparisons and logical operations, which give 0 or 1,
+// and the Kernel's as a `defn` compiles them: `==` to `__equal__`, `and`
+// to `__and__`, and so on.
+nx_members("sign", "compare", cat(
+  " Nx.equal Nx.not_equal Nx.greater Nx.less Nx.greater_equal Nx.less_equal Nx.logical_and",
+  " Nx.logical_or Nx.logical_xor Nx.logical_not Nx.is_nan Nx.is_infinity",
+  " Nx.Defn.Kernel.__equal__ Nx.Defn.Kernel.__not_equal__ Nx.Defn.Kernel.__less_than__",
+  " Nx.Defn.Kernel.__more_than__ Nx.Defn.Kernel.__less_than_equal_to__",
+  " Nx.Defn.Kernel.__more_than_equal_to__ Nx.Defn.Kernel.__and__ Nx.Defn.Kernel.__or__",
+  " Nx.Defn.Kernel.__not__ ")).
 
 // The functions whose result's elements are some of their first
 // operand's: they move, pick or convert them.
-.decl moves_elements(name: symbol)
-moves_elements("reshape"). moves_elements("transpose"). moves_elements("squeeze").
-moves_elements("new_axis"). moves_elements("broadcast"). moves_elements("slice").
-moves_elements("slice_along_axis"). moves_elements("reverse"). moves_elements("rename").
-moves_elements("as_type"). moves_elements("vectorize"). moves_elements("devectorize").
-moves_elements("revectorize"). moves_elements("take"). moves_elements("gather").
-moves_elements("take_along_axis"). moves_elements("sort"). moves_elements("flatten").
-moves_elements("tile"). moves_elements("tensor"). moves_elements("reduce_max").
-moves_elements("reduce_min"). moves_elements("cumulative_max"). moves_elements("cumulative_min").
-
-// The comparisons and logical operations, which give 0 or 1.
-.decl comparison(name: symbol)
-comparison("equal"). comparison("not_equal"). comparison("greater"). comparison("less").
-comparison("greater_equal"). comparison("less_equal"). comparison("logical_and").
-comparison("logical_or"). comparison("logical_xor"). comparison("logical_not").
-comparison("is_nan"). comparison("is_infinity").
-
-// The comparisons and logical operators a `defn` writes, as it compiles
-// them: `==` to `__equal__`, `and` to `__and__`, and so on.
-.decl kernel_comparison(name: symbol)
-kernel_comparison("__equal__"). kernel_comparison("__not_equal__").
-kernel_comparison("__less_than__"). kernel_comparison("__more_than__").
-kernel_comparison("__less_than_equal_to__"). kernel_comparison("__more_than_equal_to__").
-kernel_comparison("__and__"). kernel_comparison("__or__"). kernel_comparison("__not__").
+nx_members("trait", "moves_elements", cat(
+  " Nx.reshape Nx.transpose Nx.squeeze Nx.new_axis Nx.broadcast Nx.slice Nx.slice_along_axis",
+  " Nx.reverse Nx.rename Nx.as_type Nx.vectorize Nx.devectorize Nx.revectorize Nx.take",
+  " Nx.gather Nx.take_along_axis Nx.sort Nx.flatten Nx.tile Nx.tensor Nx.reduce_max",
+  " Nx.reduce_min Nx.cumulative_max Nx.cumulative_min ")).
 
 // ── Where a value lies against ±1 ─────────────────────────────────
 //
@@ -9468,7 +9502,7 @@ in_region(context, function, kind, source, region, origin, cause) :-
 .decl unit_rule(site: symbol, class: symbol)
 unit_rule(site, class) :-
   operation_site(site, operation, _),
-  unit_class(operation, class).
+  nx_class(operation, "unit", class).
 
 .decl unit_call(context: Context, site: symbol, function: symbol, class: symbol)
 unit_call(context, site, function, class) :-
@@ -9787,23 +9821,22 @@ norm_demand(operand, function) :-
 
 // Each Nx function's region class. A function with none can return
 // anything.
-.decl unit_class(operation: symbol, class: symbol)
-unit_class(cat("Nx.", name), "move") :- moves_elements(name).
-unit_class("Nx.mean", "move"). unit_class("Nx.Defn.Kernel.stop_grad", "move").
-unit_class("Nx.Defn.Kernel.print_value", "move"). unit_class("Nx.Defn.Kernel.__unary_plus__", "move").
-unit_class("Nx.negate", "negate"). unit_class("Nx.Defn.Kernel.__unary_minus__", "negate").
-unit_class("Nx.abs", "absolute").
-unit_class("Nx.tanh", "saturating"). unit_class("Nx.erf", "saturating").
-unit_class("Nx.sigmoid", "logistic").
-unit_class("Nx.sin", "trigonometric"). unit_class("Nx.cos", "trigonometric").
-unit_class("Nx.sign", "sign").
-unit_class("Nx.cosh", "cosh").
-unit_class("Nx.divide", "ratio"). unit_class("Nx.Defn.Kernel./", "ratio").
-unit_class("Nx.dot", "ratio"). unit_class("Nx.sum", "ratio").
-unit_class(operation, class) :-
-  sign_class(operation, class),
-  ( class = "compare" ; class = "index" ; class = "identity" ; class = "select" ;
-    class = "clip" ; class = "maximum" ; class = "minimum" ; class = "multiply" ).
+nx_members("unit", "move", cat(
+  " Nx.mean Nx.Defn.Kernel.stop_grad Nx.Defn.Kernel.print_value",
+  " Nx.Defn.Kernel.__unary_plus__ ")).
+nx_members("unit", "negate", " Nx.negate Nx.Defn.Kernel.__unary_minus__ ").
+nx_members("unit", "absolute", " Nx.abs ").
+nx_members("unit", "saturating", " Nx.tanh Nx.erf ").
+nx_members("unit", "logistic", " Nx.sigmoid ").
+nx_members("unit", "trigonometric", " Nx.sin Nx.cos ").
+nx_members("unit", "sign", " Nx.sign ").
+nx_members("unit", "cosh", " Nx.cosh ").
+nx_members("unit", "ratio", " Nx.divide Nx.Defn.Kernel./ Nx.dot Nx.sum ").
+nx_class(operation, "unit", "move") :- nx_trait(operation, "moves_elements").
+nx_class(operation, "unit", class) :- nx_class(operation, "sign", class), in_set("unit_from_sign", class).
+
+// The sign classes that are region classes too, of the same functions.
+nx_members("set", "unit_from_sign", " compare index identity select clip maximum minimum multiply ").
 
 // ══ Tensor types ════════════════════════════════════════════════════
 //
@@ -9847,23 +9880,17 @@ integer_only(site, position) :-
   integer_operand(operation, arity, position).
 
 .decl integer_operand(operation: symbol, arity: number, position: number)
-integer_operand(cat("Nx.", name), 2, 0) :- integer_binary(name).
-integer_operand(cat("Nx.", name), 2, 1) :- integer_binary(name).
-integer_operand(cat("Nx.Defn.Kernel.", name), 2, 0) :- kernel_integer_binary(name).
-integer_operand(cat("Nx.Defn.Kernel.", name), 2, 1) :- kernel_integer_binary(name).
-integer_operand(cat("Nx.", name), 1, 0) :- integer_unary(name).
+integer_operand(operation, 2, position) :- nx_trait(operation, "integer_binary"), position = range(0, 2).
+integer_operand(operation, 1, 0) :- nx_trait(operation, "integer_unary").
 integer_operand(cat("Nx.", name), arity, 1) :- takes_indices(name, arity).
 
-.decl integer_binary(name: symbol)
-integer_binary("bitwise_and"). integer_binary("bitwise_or"). integer_binary("bitwise_xor").
-integer_binary("left_shift"). integer_binary("right_shift"). integer_binary("quotient").
-
-.decl kernel_integer_binary(name: symbol)
-kernel_integer_binary("div"). kernel_integer_binary("&&&"). kernel_integer_binary("|||").
-kernel_integer_binary("<<<"). kernel_integer_binary(">>>").
-
-.decl integer_unary(name: symbol)
-integer_unary("bitwise_not"). integer_unary("population_count"). integer_unary("count_leading_zeros").
+// The functions of two operands, and of one, defined only on integers:
+// the bitwise operations and the integer quotient, and the Kernel's
+// operators for them.
+nx_members("trait", "integer_binary", cat(
+  " Nx.bitwise_and Nx.bitwise_or Nx.bitwise_xor Nx.left_shift Nx.right_shift Nx.quotient",
+  " Nx.Defn.Kernel.div Nx.Defn.Kernel.&&& Nx.Defn.Kernel.||| Nx.Defn.Kernel.<<< Nx.Defn.Kernel.>>> ")).
+nx_members("trait", "integer_unary", " Nx.bitwise_not Nx.population_count Nx.count_leading_zeros ").
 
 // The functions whose second operand is indices, by arity.
 .decl takes_indices(name: symbol, arity: number)
@@ -9922,7 +9949,7 @@ value_class(context, function, kind, source, class, origin) :-
 .decl type_rule(site: symbol, class: symbol)
 type_rule(site, class) :-
   operation_site(site, operation, _),
-  type_class(operation, class).
+  nx_class(operation, "type", class).
 type_rule(site, "typed") :-
   remote_call(site, _, "Nx.Constants", _, _).
 
@@ -9966,14 +9993,12 @@ value_class(context, function, "result", site, class, origin) :-
 .decl type_default(site: symbol, class: symbol)
 type_default(site, class) :-
   operation_site(site, operation, _),
-  default_class(operation, class).
+  nx_class(operation, "default", class).
 type_default(site, "float") :-
   remote_call(site, _, "Nx.Constants", _, _).
 
-.decl default_class(operation: symbol, class: symbol)
-default_class("Nx.iota", "integer"). default_class("Nx.eye", "integer").
-default_class("Nx.Random.uniform", "float"). default_class("Nx.Random.normal", "float").
-default_class("Nx.Random.randint", "integer").
+nx_members("default", "integer", " Nx.iota Nx.eye Nx.Random.randint ").
+nx_members("default", "float", " Nx.Random.uniform Nx.Random.normal ").
 
 // A call given a type, by option or argument, known or not.
 .decl type_given(site: symbol)
@@ -10059,47 +10084,45 @@ exact_limit(name, 1 bshl precision) :- float_format(name, _, _, _, _, precision)
 
 // Each Nx function's type class. A function with none gives a value of
 // no known class.
-.decl type_class(operation: symbol, class: symbol)
-type_class(cat("Nx.", name), "move") :- moves_elements(name), name != "as_type", name != "tensor".
-type_class(operation, "move") :-
-  sign_class(operation, class),
-  operation != "Nx.mean",
-  ( class = "negate" ; class = "round" ; class = "sum" ; class = "product" ).
-type_class("Nx.sign", "move").
-type_class("Nx.Defn.Kernel.stop_grad", "move"). type_class("Nx.Defn.Kernel.print_value", "move").
-type_class("Nx.Defn.Kernel.__unary_plus__", "move").
-type_class(operation, "merge") :-
-  sign_class(operation, class),
-  ( class = "add" ; class = "subtract" ; class = "multiply" ; class = "dot" ; class = "maximum" ;
-    class = "minimum" ; class = "remainder" ; class = "power" ; class = "select" ; class = "clip" ;
-    class = "splice" ).
-type_class(cat("Nx.", name), "float") :- floating_function(name).
-type_class("Nx.Defn.Kernel./", "float"). type_class("Nx.LinAlg.norm", "float").
-type_class(operation, "integer") :- sign_class(operation, "compare").
-type_class(operation, "integer") :- integer_operand(operation, _, 0).
-type_class("Nx.argmax", "integer"). type_class("Nx.argmin", "integer").
-type_class(cat("Nx.", name), "typed") :- typed_function(name).
+nx_members("type", "move", cat(
+  " Nx.sign Nx.Defn.Kernel.stop_grad Nx.Defn.Kernel.print_value",
+  " Nx.Defn.Kernel.__unary_plus__ ")).
+nx_members("type", "float", " Nx.Defn.Kernel./ Nx.LinAlg.norm ").
+nx_members("type", "integer", " Nx.argmax Nx.argmin ").
+nx_class(operation, "type", "move") :-
+  nx_trait(operation, "moves_elements"),
+  operation != "Nx.as_type",
+  operation != "Nx.tensor".
+nx_class(operation, "type", "move") :-
+  nx_class(operation, "sign", class),
+  in_set("type_move_from_sign", class),
+  operation != "Nx.mean".
+nx_class(operation, "type", "merge") :- nx_class(operation, "sign", class), in_set("type_merge_from_sign", class).
+nx_class(operation, "type", "float") :- nx_trait(operation, "floating").
+nx_class(operation, "type", "integer") :- nx_class(operation, "sign", "compare").
+nx_class(operation, "type", "integer") :- nx_trait(operation, "integer_binary").
+nx_class(operation, "type", "integer") :- nx_trait(operation, "integer_unary").
+nx_class(operation, "type", "typed") :- nx_trait(operation, "takes_type").
+
+// The sign classes whose functions keep their first operand's type class,
+// and those that merge their operands'.
+nx_members("set", "type_move_from_sign", " negate round sum product ").
+nx_members("set", "type_merge_from_sign", cat(
+  " add subtract multiply dot maximum minimum remainder power select clip",
+  " splice ")).
 
 // The functions whose result is a float: division and the transcendental
 // functions, and the means and spreads.
-.decl floating_function(name: symbol)
-floating_function("divide"). floating_function("exp"). floating_function("expm1").
-floating_function("log"). floating_function("log1p"). floating_function("log2").
-floating_function("log10"). floating_function("sqrt"). floating_function("rsqrt").
-floating_function("cbrt"). floating_function("sin"). floating_function("cos").
-floating_function("tan"). floating_function("asin"). floating_function("acos").
-floating_function("atan"). floating_function("sinh"). floating_function("cosh").
-floating_function("tanh"). floating_function("asinh"). floating_function("acosh").
-floating_function("atanh"). floating_function("sigmoid"). floating_function("erf").
-floating_function("erfc"). floating_function("erf_inv"). floating_function("atan2").
-floating_function("mean"). floating_function("variance"). floating_function("standard_deviation").
-floating_function("logsumexp").
+nx_members("trait", "floating", cat(
+  " Nx.divide Nx.exp Nx.expm1 Nx.log Nx.log1p Nx.log2 Nx.log10 Nx.sqrt Nx.rsqrt Nx.cbrt",
+  " Nx.sin Nx.cos Nx.tan Nx.asin Nx.acos Nx.atan Nx.sinh Nx.cosh Nx.tanh Nx.asinh Nx.acosh",
+  " Nx.atanh Nx.sigmoid Nx.erf Nx.erfc Nx.erf_inv Nx.atan2 Nx.mean Nx.variance",
+  " Nx.standard_deviation Nx.logsumexp ")).
 
 // The functions a type can be given to.
-.decl typed_function(name: symbol)
-typed_function("iota"). typed_function("eye"). typed_function("tensor"). typed_function("as_type").
-typed_function("bitcast"). typed_function("from_binary"). typed_function("template").
-typed_function("Random.uniform"). typed_function("Random.normal"). typed_function("Random.randint").
+nx_members("trait", "takes_type", cat(
+  " Nx.iota Nx.eye Nx.tensor Nx.as_type Nx.bitcast Nx.from_binary Nx.template",
+  " Nx.Random.uniform Nx.Random.normal Nx.Random.randint ")).
 
 // ══ Findings ════════════════════════════════════════════════════════
 

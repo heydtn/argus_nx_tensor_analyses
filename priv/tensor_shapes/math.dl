@@ -195,8 +195,7 @@ product_length(context, site, size) :-
 // `Nx.Defn.Compiler.__remote__/4`, which these rules do not read as a
 // sampler.
 
-sign_class("Nx.Random.uniform_split", "add").
-sign_class("Nx.Random.randint_split", "add").
+nx_members("sign", "add", " Nx.Random.uniform_split Nx.Random.randint_split ").
 given_slot(site, 1, 1) :- operation_site(site, operation, _), range_sampler(operation).
 given_slot(site, 2, 2) :- operation_site(site, operation, _), range_sampler(operation).
 
@@ -338,10 +337,11 @@ samples_from_nonnegative(site) :-
 
 // A sample is a float, or an integer for randint, unless the sampler is
 // given a type.
-type_class("Nx.Random.uniform_split", "typed"). default_class("Nx.Random.uniform_split", "float").
-type_class("Nx.Random.normal_split", "typed"). default_class("Nx.Random.normal_split", "float").
-type_class("Nx.Random.gumbel_split", "typed"). default_class("Nx.Random.gumbel_split", "float").
-type_class("Nx.Random.randint_split", "typed"). default_class("Nx.Random.randint_split", "integer").
+nx_members("type", "typed", cat(
+  " Nx.Random.uniform_split Nx.Random.normal_split Nx.Random.gumbel_split",
+  " Nx.Random.randint_split ")).
+nx_members("default", "float", " Nx.Random.uniform_split Nx.Random.normal_split Nx.Random.gumbel_split ").
+nx_members("default", "integer", " Nx.Random.randint_split ").
 
 // ══ Logarithms to a base ═══════════════════════════════════════════
 
@@ -465,7 +465,7 @@ call_error(context, site, "rounded_logarithm", rounding, logarithm) :-
 .decl compares(site: symbol, relation: symbol)
 compares(site, relation) :-
   operation_site(site, operation, 2),
-  comparison_relation(operation, relation, _).
+  nx_class(operation, "relation", relation).
 
 // An operand of a comparison that is NaN, and the call that makes it (""
 // for `:nan` written as the operand).
@@ -586,30 +586,31 @@ natural_logarithm(site) :- remote_call(site, _, ":math", "log", 1).
 // and so is the median of an even number of them), so their sign classes
 // are ones that set no type, and they take a type class of their own.
 
-sign_class("Nx.window_sum", "sum").
-sign_class("Nx.window_product", "product").
-moves_elements("window_max"). moves_elements("window_min"). moves_elements("mode").
-sign_class("Nx.window_mean", "preserve"). unit_class("Nx.window_mean", "move").
-type_class("Nx.window_mean", "float").
-sign_class("Nx.median", "preserve"). unit_class("Nx.median", "move").
-type_class("Nx.median", "median").
-sign_class("Nx.diff", "subtract").
+nx_members("sign", "sum", " Nx.window_sum ").
+nx_members("sign", "product", " Nx.window_product ").
+nx_members("trait", "moves_elements", " Nx.window_max Nx.window_min Nx.mode ").
+nx_members("sign", "preserve", " Nx.window_mean Nx.median ").
+nx_members("unit", "move", " Nx.window_mean Nx.median ").
+nx_members("type", "median", " Nx.median ").
+nx_members("sign", "subtract", " Nx.diff ").
 given_slot(site, 1, 0) :- operation_site(site, "Nx.diff", _).
 given_slot(site, 2, 0) :- operation_site(site, "Nx.diff", _).
-sign_class("Nx.weighted_mean", "divide"). type_class("Nx.weighted_mean", "float").
+nx_members("sign", "divide", " Nx.weighted_mean ").
 
 // `Nx.weighted_mean/3` divides by the sum of its weights, which is zero
 // where they all are.
 divisor_position("Nx.weighted_mean", 2, 1). divisor_position("Nx.weighted_mean", 3, 1).
 
-// Floats whatever the operands: a covariance is a mean, a convolution is
-// computed in floating point, an inverse real transform is real.
-type_class("Nx.covariance", "float"). type_class("Nx.conv", "float"). type_class("Nx.irfft", "float").
+// Floats whatever the operands: a window's or weighted mean, a covariance
+// (a mean), a convolution (computed in floating point), an inverse real
+// transform (real).
+nx_members("type", "float", " Nx.window_mean Nx.weighted_mean Nx.covariance Nx.conv Nx.irfft ").
 
 // `linspace` makes f32 unless given a type, and `argsort` s32 unless
 // given one.
-type_class("Nx.linspace", "typed"). default_class("Nx.linspace", "float").
-type_class("Nx.argsort", "typed"). default_class("Nx.argsort", "integer").
+nx_members("type", "typed", " Nx.linspace Nx.argsort ").
+nx_members("default", "float", " Nx.linspace ").
+nx_members("default", "integer", " Nx.argsort ").
 
 // `median`: a float or complex operand's class, and an integer operand's
 // where the median takes an odd number of elements, the middle one of
