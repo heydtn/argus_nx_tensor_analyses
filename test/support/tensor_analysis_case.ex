@@ -120,13 +120,13 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
         do: project(finding, fields)
   end
 
-  # A row of an output relation of either analysis by its fields' names.
+  # A row of an output relation of either engine by its fields' names.
   defp named(row, names, relation),
     do: names |> Enum.zip(row) |> Map.new() |> Map.put(:relation, relation)
 
   defp field_names do
-    for analysis <- ArgusNxTensorAnalyses.analyses(),
-        %{name: name, fields: fields} <- analysis.output_relations(),
+    for engine <- [ArgusNxTensorAnalyses.TensorShapes, ArgusNxTensorAnalyses.EMLX],
+        %{name: name, fields: fields} <- engine.output_relations(),
         into: %{},
         do: {Atom.to_string(name), Enum.map(fields, &elem(&1, 0))}
   end

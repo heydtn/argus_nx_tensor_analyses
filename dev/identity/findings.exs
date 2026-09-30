@@ -1,11 +1,12 @@
 # mix run dev/identity/findings.exs NAME
 #
-# Runs both analyses of the checkout it runs in (`TensorShapes.run/2` and
-# `EMLX.run/2`) over every set of beams under the data directory's
-# `beams/`, and keeps every finding they place, one per line with every
-# field of the placed finding and of the finding itself (severity, title,
-# detail, help, label, frames, file and line), sorted, under
-# `findings/NAME`. Compare two runs with compare_findings.sh: a change to
+# Runs every category of the checkout it runs in
+# (`ArgusNxTensorAnalyses.run/3` of `:all`) over every set of beams under
+# the data directory's `beams/`, and keeps every finding it places, one
+# per line with every field of the placed finding and of the finding
+# itself (category, severity, title, detail, help, label, frames, file and
+# line), sorted, under `findings/NAME`: a file for each set and category
+# that finds any. Compare two runs with compare_findings.sh: a change to
 # how findings are built or worded that should change none must change no
 # line.
 #
@@ -25,11 +26,6 @@
 root =
   System.get_env("ARGUS_NX_IDENTITY_DIR") ||
     common |> String.trim() |> Path.dirname() |> Path.join("_build/identity")
-
-analyses = [
-  {"shapes", ArgusNxTensorAnalyses.TensorShapes},
-  {"emlx", ArgusNxTensorAnalyses.EMLX}
-]
 
 # The test suite's fixtures, run with the options their tests use; any
 # other directory of beams is a set of its own, run with the defaults.
@@ -53,11 +49,6 @@ directory = Path.join([root, "findings", name])
 File.rm_rf!(directory)
 File.mkdir_p!(directory)
 
-runs =
-  for {set, beams, options} <- sets,
-      {label, analysis} <- analyses,
-      do: {"#{set}_#{label}", beams, analysis, options}
-
 # A placed finding as one line: every field, maps written with their keys
 # in order, so two runs that place the same finding write the same line.
 spell = fn located ->
@@ -71,13 +62,25 @@ spell = fn located ->
   )
 end
 
-runs
+sets
 |> Task.async_stream(
-  fn {label, beams, analysis, options} ->
-    {microseconds, {:ok, placed}} = :timer.tc(fn -> analysis.run(beams, options) end)
-    lines = placed |> Enum.map(spell) |> Enum.sort()
-    File.write!(Path.join(directory, "#{label}.txt"), Enum.map(lines, &[&1, "\n"]))
-    "#{label}: #{Float.round(microseconds / 1_000_000, 1)}s, #{length(lines)} findings"
+  fn {set, beams, options} ->
+    {microseconds, {:ok, placed}} =
+      :timer.tc(fn -> ArgusNxTensorAnalyses.run(beams, [:all], options) end)
+
+    counts =
+      for category <- ArgusNxTensorAnalyses.analyses(),
+          found = Map.fetch!(placed, category),
+          found != [] do
+        lines = found |> Enum.map(spell) |> Enum.sort()
+        File.write!(Path.join(directory, "#{set}_#{category}.txt"), Enum.map(lines, &[&1, "\n"]))
+        "#{category} #{length(lines)}"
+      end
+
+    total = placed |> Map.values() |> Enum.map(&length/1) |> Enum.sum()
+
+    "#{set}: #{Float.round(microseconds / 1_000_000, 1)}s, #{total} findings " <>
+      "(#{Enum.join(counts, ", ")})"
   end,
   max_concurrency: 4,
   timeout: :infinity

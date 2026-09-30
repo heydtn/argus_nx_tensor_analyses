@@ -6,7 +6,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
   shapes, types or options Nx rejects, calls Nx accepts where the code
   does not line its axes up, math that can give an infinity or a NaN, and
   misuse of traced code, gradients, random keys, containers and servings.
-  `docs/checks.md` lists what it reports.
+  It is the engine of the Nx categories (`nx_shapes`, `nx_math`, ...;
+  `ArgusNxTensorAnalyses.analyses/0`): each finding is reported under its
+  kind's category, not under this analysis's name. `docs/checks.md` lists
+  what each category reports.
 
   The program reads what `ArgusNxTensorAnalyses.TensorShapes.ShapeFlow`
   extracts besides Argus's own facts, and Argus's analyses run only the

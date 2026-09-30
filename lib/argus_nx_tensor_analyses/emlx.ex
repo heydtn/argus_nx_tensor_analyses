@@ -3,19 +3,22 @@ defmodule ArgusNxTensorAnalyses.EMLX do
   What [EMLX](https://github.com/elixir-nx/emlx) computes differently from
   Nx's BinaryBackend and EXLA, and tensors of two backends that meet,
   found in compiled code by the Datalog program in `priv/emlx.dl`. That
-  program includes the tensor shapes analysis's (`priv/tensor_shapes.dl`)
-  and reads its words: the values it follows and the contexts it follows
-  them in, the signs a value can have, and the types tensors are made in.
+  program includes the Nx engine's (`ArgusNxTensorAnalyses.TensorShapes`,
+  `priv/tensor_shapes.dl`) and reads its words: the values it follows and
+  the contexts it follows them in, the signs a value can have, and the
+  types tensors are made in.
 
-  The checks are EMLX's, so they run in their own analysis, `tensor_emlx`:
-  a project on EMLX runs it (`mix argus tensor_emlx`, or `mix argus
-  --all`), and a project on EXLA leaves it out.
+  The checks are EMLX's, so their findings are a category of their own,
+  `emlx`, reported under it rather than under this analysis's name: a
+  project on EMLX runs it (`mix argus emlx`, or `mix argus --all`), and a
+  project on EXLA leaves it out.
 
     * A tensor made in f64 or c128, which EMLX keeps as f32 and c64 on
       either device while the tensor still says f64 or c128. Reported
-      without the tensor shapes analysis's `unsupported_types` option;
-      where the project lists the type there, the tensor shapes analysis
-      reports it and this one does not, so no call is reported twice.
+      without the Nx engine's `unsupported_types` option; where the
+      project lists the type there, `nx_types` reports it
+      (`unsupported_type`) and `emlx` does not, so no call is reported
+      twice.
     * A tensor of either type made off EMLX that `Nx.backend_transfer/2`
       or `Nx.backend_copy/2` moves onto it: EMLX keeps an f64 as f32 while
       it still says f64, and raises taking a c128 in.
@@ -33,8 +36,8 @@ defmodule ArgusNxTensorAnalyses.EMLX do
       as the result of a function compiled with EXLA and a tensor made on
       EMLX: Nx raises `Nx.Defn.IncompatibleBackendsError`.
 
-  Which way it errs: as the tensor shapes analysis, quiet where it cannot
-  follow a value. An operand negative only as an input may be is reported
+  Which way it errs: as the Nx engine, quiet where it cannot follow a
+  value. An operand negative only as an input may be is reported
   as info rather than a warning. A function a compiler or
   `Nx.with_default_backend/2` runs on another backend is taken to run
   there wherever it is called, so an f64 tensor it makes is not reported

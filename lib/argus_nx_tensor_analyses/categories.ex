@@ -63,7 +63,8 @@ defmodule ArgusNxTensorAnalyses.Categories do
         random_range_outside_type random_type_not_integer random_bound_truncated)
     },
     nx_traced: %{
-      description: "tensor data read while Nx traces, and Elixir control flow on tensors",
+      description:
+        "tensor data read while Nx traces, Elixir operators on tensors, and defn control flow",
       default: true,
       kinds: ~w(data_read_in_trace jit_in_trace compiled_template template_computed
         captured_tensor tensor_arithmetic tensor_boolean tensor_comparison tensor_truth
@@ -87,19 +88,21 @@ defmodule ArgusNxTensorAnalyses.Categories do
         container_order)
     },
     nx_random: %{
-      description: "random keys and seeds drawn from twice, captured or returned spent",
+      description:
+        "random keys and seeds drawn from twice, captured or returned spent, and repeated draws",
       default: true,
       kinds: ~w(reused_key reused_seed captured_loop_key passed_back_key spent_key_returned
         shared_draw)
     },
     nx_freed: %{
-      description: "tensors used after a transfer, deallocation or donation frees them",
+      description:
+        "tensors read or handed on after a transfer, deallocation or donation frees them",
       default: true,
       kinds: ~w(used_after_transfer used_after_deallocation used_after_donation)
     },
     nx_serving: %{
       description:
-        "servings that mix or drop the batch, templates that do not fit it, misused APIs",
+        "servings that mix or drop the batch, templates that do not fit it, and API misuse",
       default: true,
       kinds: ~w(serving_scalar_output serving_output_batch_axis serving_mixes_batch
         serving_template_batch_size serving_template_type batch_incompatible_entries

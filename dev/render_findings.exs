@@ -1,8 +1,9 @@
 # mix run dev/render_findings.exs [OUTPUT_DIRECTORY]
 #
-# Renders every finding both analyses place over the test suite's
-# fixtures, as `mix argus` shows them (pentiment frames, without color),
-# one file per fixture set and analysis under OUTPUT_DIRECTORY (default
+# Renders every finding each category places over the test suite's
+# fixtures (`ArgusNxTensorAnalyses.run/3` of `:all`), as `mix argus` shows
+# them (pentiment frames, without color), one file per fixture set and
+# category that finds any under OUTPUT_DIRECTORY (default
 # `_build/render`). Each finding is headed by the function it is in, so a
 # lint case's findings are found by its function's name (`lint_N`).
 #
@@ -16,38 +17,39 @@ if not File.dir?(fixtures), do: Mix.raise("no fixtures under #{fixtures}: run mi
 
 # Each set with the options its tests solve it with.
 runs = [
-  {"tensor_shapes", ArgusNxTensorAnalyses.TensorShapes, [unsupported_types: [:f64]]},
-  {"tensor_shapes_configured", ArgusNxTensorAnalyses.TensorShapes,
-   [unsupported_types: [:f64], float_types: [:f16, :bf16, :f32]]},
-  {"tensor_shapes", ArgusNxTensorAnalyses.EMLX, [unsupported_types: [:f64]]},
-  {"emlx", ArgusNxTensorAnalyses.TensorShapes, [unsupported_types: [:c128]]},
-  {"emlx", ArgusNxTensorAnalyses.EMLX, [unsupported_types: [:c128]]},
-  {"emlx_on_exla", ArgusNxTensorAnalyses.EMLX, []}
+  {"tensor_shapes", [unsupported_types: [:f64]]},
+  {"tensor_shapes_configured", [unsupported_types: [:f64], float_types: [:f16, :bf16, :f32]]},
+  {"emlx", [unsupported_types: [:c128]]},
+  {"emlx_on_exla", []}
 ]
 
 File.rm_rf!(output)
 File.mkdir_p!(output)
 config = Argus.Config.load()
 
-for {label, analysis, options} <- runs do
+for {label, options} <- runs do
   set = String.replace_suffix(label, "_configured", "")
   beams = fixtures |> Path.join("#{set}/*.beam") |> Path.wildcard()
-  {:ok, placed} = analysis.run(beams, options)
+  {:ok, placed} = ArgusNxTensorAnalyses.run(beams, [:all], options)
 
-  # One finding at a time, to head each with the function it is in.
-  entries =
-    for %{finding: %{mfa: {module, name, arity}}} = one <- placed,
-        [entry] <- [Argus.Report.build(%{analysis.name() => {:ok, [one]}}, config, cwd)],
-        do: {Exception.format_mfa(module, name, arity), entry}
+  for category <- ArgusNxTensorAnalyses.analyses(),
+      found = Map.fetch!(placed, category),
+      found != [] do
+    # One finding at a time, to head each with the function it is in.
+    entries =
+      for %{finding: %{mfa: {module, name, arity}}} = one <- found,
+          [entry] <- [Argus.Report.build(%{category => {:ok, [one]}}, config, cwd)],
+          do: {Exception.format_mfa(module, name, arity), entry}
 
-  rendered =
-    entries
-    |> Enum.sort_by(fn {function, entry} -> {function, entry.line, entry.title} end)
-    |> Enum.map(fn {function, entry} ->
-      ["## ", function, "\n", Argus.Report.Pentiment.format(entry, cwd), "\n\n"]
-    end)
+    rendered =
+      entries
+      |> Enum.sort_by(fn {function, entry} -> {function, entry.line, entry.title} end)
+      |> Enum.map(fn {function, entry} ->
+        ["## ", function, "\n", Argus.Report.Pentiment.format(entry, cwd), "\n\n"]
+      end)
 
-  file = Path.join(output, "#{label}_#{analysis.name()}.txt")
-  File.write!(file, rendered)
-  IO.puts("#{Path.relative_to(file, cwd)}: #{length(entries)} findings")
+    file = Path.join(output, "#{label}_#{category}.txt")
+    File.write!(file, rendered)
+    IO.puts("#{Path.relative_to(file, cwd)}: #{length(entries)} findings")
+  end
 end

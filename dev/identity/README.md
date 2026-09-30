@@ -37,7 +37,7 @@ untracked, and `identity.exs` includes it after the rules.
 
 For a change to how findings are built or worded, compare the findings
 themselves: `mix run dev/identity/findings.exs NAME` keeps every finding
-both analyses place, with every field, and
+each category places, with every field, and
 `dev/identity/compare_findings.sh BEFORE AFTER` compares two runs, with
 the same exit codes as `compare.sh`.
 

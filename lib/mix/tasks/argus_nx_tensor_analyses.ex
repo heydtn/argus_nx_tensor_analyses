@@ -2,36 +2,39 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   @shortdoc "Runs argus's analyses and the Nx tensor analyses"
 
   @moduledoc """
-  `mix argus`, with this package's analyses (`ArgusNxTensorAnalyses.analyses/0`)
-  beside argus's own. Argus runs only the analyses it ships, so this task
-  runs argus as `mix argus` does, then these analyses over the project,
-  and reports both as one. Aliased as `argus` in the project's `mix.exs`
-  (`aliases: [argus: "argus_nx_tensor_analyses"]`), it takes `mix argus`'s
-  place:
+  `mix argus`, with this package's analyses, the categories of
+  `ArgusNxTensorAnalyses.analyses/0`, beside argus's own. Argus runs only
+  the analyses it ships, so this task runs argus as `mix argus` does, then
+  these over the project, and reports both as one. Aliased as `argus` in
+  the project's `mix.exs` (`aliases: [argus: "argus_nx_tensor_analyses"]`),
+  it takes `mix argus`'s place:
 
       mix argus                       # argus's configured analyses and the default ones here
       mix argus --all                 # every analysis, argus's and these
-      mix argus tensor_emlx           # the EMLX analysis alone
-      mix argus tensor_shapes ets     # the tensor shape analysis and argus's `ets`
+      mix argus emlx                  # the EMLX category alone
+      mix argus nx_shapes ets         # the Nx shape category and argus's `ets`
       mix argus --list                # what's available
 
   It takes `mix argus`'s command line. `--format`, `--fail-above` and
   `--color` apply to every finding. These analyses read the project's own
   beams, not its dependencies', and keep what they find under
-  `_build/<env>/argus_nx_tensor_analyses` until the code they read
-  changes; souffle must be on `PATH`.
+  `_build/<env>/argus_nx_tensor_analyses`, a directory for each program
+  they solve, until the code they read changes; souffle must be on
+  `PATH`. A run solves each program once, whichever of its categories it
+  asks for (`ArgusNxTensorAnalyses.run/3`).
 
   The project configures these analyses in its `mix.exs`, under
-  `argus_nx_tensor_analyses:` in `project/0`. `analyses` chooses the ones a
-  run that names none runs, by name or as the sets `:default`
-  (`ArgusNxTensorAnalyses.default_analyses/0`, the default) and `:all`.
+  `argus_nx_tensor_analyses:` in `project/0`. `analyses` chooses the
+  categories a run that names none runs, by name or as the sets
+  `:default` (`ArgusNxTensorAnalyses.default_analyses/0`, the default) and
+  `:all`.
   `unsupported_types` lists the tensor types its backend lacks, and a call
   that makes one is reported. `float_types` lists the float types the code
   may run at, and a type the code reads from configuration is checked as
   each of them:
 
       argus_nx_tensor_analyses: [
-        analyses: [:default, :tensor_emlx],
+        analyses: [:default, :emlx],
         unsupported_types: [:f64],
         float_types: [:f16, :bf16, :f32]
       ]
@@ -40,6 +43,7 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   use Mix.Task
 
   alias Argus.CLI.Options
+  alias ArgusNxTensorAnalyses.Categories
 
   @impl Mix.Task
   def run(arguments) do
@@ -51,9 +55,9 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
         Mix.Task.run("argus", arguments)
         IO.puts("\nThe Nx tensor analyses (✓ runs by default, mix argus --all runs all):\n")
 
-        for analysis <- ArgusNxTensorAnalyses.analyses() do
-          mark = if analysis in ArgusNxTensorAnalyses.default_analyses(), do: "✓", else: " "
-          IO.puts("  #{mark} #{analysis.name()} — #{analysis.description()}")
+        for category <- ArgusNxTensorAnalyses.analyses() do
+          mark = if category in ArgusNxTensorAnalyses.default_analyses(), do: "✓", else: " "
+          IO.puts("  #{mark} #{category} — #{Categories.description(category)}")
         end
 
       {:ok, _help} ->
@@ -67,13 +71,12 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   defp analyze(options) do
     {:ok, _apps} = Application.ensure_all_started(:telemetry)
 
-    analyses = ArgusNxTensorAnalyses.analyses()
-    names = Enum.map(analyses, & &1.name())
-    selected = selected(options, analyses)
+    categories = ArgusNxTensorAnalyses.analyses()
+    selected = selected(options, categories)
 
     options = %{
       options
-      | analyses: options.analyses && Enum.reject(options.analyses, &(&1 in names))
+      | analyses: options.analyses && Enum.reject(options.analyses, &(&1 in categories))
     }
 
     compile!()
@@ -89,20 +92,16 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
     end
 
     beams = Path.wildcard(Path.join(Mix.Project.compile_path(), "*.beam"))
+    cache = Path.join(Mix.Project.build_path(), "argus_nx_tensor_analyses")
 
+    # Each category's findings, or why the solve it needs failed.
     located =
-      Enum.reduce(selected, result.located, fn analysis, located ->
-        cache =
-          Path.join([Mix.Project.build_path(), "argus_nx_tensor_analyses", "#{analysis.name()}"])
+      case ArgusNxTensorAnalyses.run(beams, selected, [cache: cache] ++ project_options()) do
+        {:ok, placed} -> Map.new(placed, fn {category, found} -> {category, {:ok, found}} end)
+        {:error, _reason} = error -> Map.new(selected, &{&1, error})
+      end
 
-        Map.put(
-          located,
-          analysis.name(),
-          analysis.run(beams, [cache: cache] ++ project_options())
-        )
-      end)
-
-    result = %{result | located: located}
+    result = %{result | located: Map.merge(result.located, located)}
     cwd = File.cwd!()
     notices = Argus.Report.Notice.from_result(result, config, cwd)
     %{entries: entries} = Argus.CLI.report(result, notices, config, options, cwd, cwd)
@@ -112,16 +111,16 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
     end
   end
 
-  # The analyses this run asks for: all of them with `--all`, the ones the
-  # command line names when it names any (argus's among them), and
-  # otherwise the ones the project's `mix.exs` chooses (`:default` unless
-  # it says).
-  defp selected(%Options{all: true}, analyses), do: analyses
+  # The categories this run asks for: all of them with `--all`, the ones
+  # the command line names when it names any (argus's analyses among
+  # them), and otherwise the ones the project's `mix.exs` chooses
+  # (`:default` unless it says).
+  defp selected(%Options{all: true}, categories), do: categories
 
-  defp selected(%Options{analyses: named}, analyses) when is_list(named),
-    do: Enum.filter(analyses, &(&1.name() in named))
+  defp selected(%Options{analyses: named}, categories) when is_list(named),
+    do: Enum.filter(categories, &(&1 in named))
 
-  defp selected(_options, _analyses) do
+  defp selected(_options, _categories) do
     configured =
       Mix.Project.config()
       |> Keyword.get(:argus_nx_tensor_analyses, [])
