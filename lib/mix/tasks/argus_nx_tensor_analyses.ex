@@ -9,10 +9,10 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   (`aliases: [argus: "argus_nx_tensor_analyses"]`), it takes `mix argus`'s
   place:
 
+      mix argus                       # argus's configured analyses and the default ones here
       mix argus --all                 # every analysis, argus's and these
-      mix argus tensor_shapes         # the tensor shape analysis alone
-      mix argus tensor_shapes ets     # it and argus's `ets`
-      mix argus                       # argus's configured analyses only
+      mix argus tensor_emlx           # the EMLX analysis alone
+      mix argus tensor_shapes ets     # the tensor shape analysis and argus's `ets`
       mix argus --list                # what's available
 
   It takes `mix argus`'s command line. `--format`, `--fail-above` and
@@ -22,12 +22,19 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
   changes; souffle must be on `PATH`.
 
   The project configures these analyses in its `mix.exs`, under
-  `argus_nx_tensor_analyses:` in `project/0`. `unsupported_types` lists
-  the tensor types its backend lacks, and a call that makes one is
-  reported. `float_types` lists the float types the code may run at, and a
-  type the code reads from configuration is checked as each of them:
+  `argus_nx_tensor_analyses:` in `project/0`. `analyses` chooses the ones a
+  run that names none runs, by name or as the sets `:default`
+  (`ArgusNxTensorAnalyses.default_analyses/0`, the default) and `:all`.
+  `unsupported_types` lists the tensor types its backend lacks, and a call
+  that makes one is reported. `float_types` lists the float types the code
+  may run at, and a type the code reads from configuration is checked as
+  each of them:
 
-      argus_nx_tensor_analyses: [unsupported_types: [:f64], float_types: [:f16, :bf16, :f32]]
+      argus_nx_tensor_analyses: [
+        analyses: [:default, :tensor_emlx],
+        unsupported_types: [:f64],
+        float_types: [:f16, :bf16, :f32]
+      ]
   """
 
   use Mix.Task
@@ -42,10 +49,12 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
 
       {:ok, %Options{command: :list}} ->
         Mix.Task.run("argus", arguments)
-        IO.puts("\nThe Nx tensor analyses (mix argus --all runs them):\n")
+        IO.puts("\nThe Nx tensor analyses (✓ runs by default, mix argus --all runs all):\n")
 
-        for analysis <- ArgusNxTensorAnalyses.analyses(),
-            do: IO.puts("    #{analysis.name()} — #{analysis.description()}")
+        for analysis <- ArgusNxTensorAnalyses.analyses() do
+          mark = if analysis in ArgusNxTensorAnalyses.default_analyses(), do: "✓", else: " "
+          IO.puts("  #{mark} #{analysis.name()} — #{analysis.description()}")
+        end
 
       {:ok, _help} ->
         Mix.Task.run("argus", arguments)
@@ -60,7 +69,7 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
 
     analyses = ArgusNxTensorAnalyses.analyses()
     names = Enum.map(analyses, & &1.name())
-    selected = Enum.filter(analyses, &(options.all or &1.name() in (options.analyses || [])))
+    selected = selected(options, analyses)
 
     options = %{
       options
@@ -100,6 +109,27 @@ defmodule Mix.Tasks.ArgusNxTensorAnalyses do
 
     if options.fail_above && length(entries) > options.fail_above do
       Mix.raise("argus: #{length(entries)} findings exceed --fail-above #{options.fail_above}")
+    end
+  end
+
+  # The analyses this run asks for: all of them with `--all`, the ones the
+  # command line names when it names any (argus's among them), and
+  # otherwise the ones the project's `mix.exs` chooses (`:default` unless
+  # it says).
+  defp selected(%Options{all: true}, analyses), do: analyses
+
+  defp selected(%Options{analyses: named}, analyses) when is_list(named),
+    do: Enum.filter(analyses, &(&1.name() in named))
+
+  defp selected(_options, _analyses) do
+    configured =
+      Mix.Project.config()
+      |> Keyword.get(:argus_nx_tensor_analyses, [])
+      |> Keyword.get(:analyses, [:default])
+
+    case ArgusNxTensorAnalyses.select(configured) do
+      {:ok, selected} -> selected
+      {:error, message} -> Mix.raise("argus_nx_tensor_analyses: " <> message)
     end
   end
 
