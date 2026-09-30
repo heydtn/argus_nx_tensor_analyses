@@ -135,7 +135,7 @@ can_go_negative(context, function, "result", site, site, "subtract") :-
 minuend_can_be_zero(context, site) :-
   negative_call(context, site, _, "subtract"),
   slot_sign(context, site, 1, "zero", _, cause),
-  cause != "input".
+  made_by_math(cause).
 minuend_can_be_zero(context, site) :-
   negative_call(context, site, _, "subtract"),
   slot_sign(context, site, 1, "zero", _, "input"),

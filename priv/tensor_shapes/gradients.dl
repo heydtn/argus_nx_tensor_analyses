@@ -66,7 +66,7 @@ gradient_call_error(site, "gradient_of_container", shape, "") :- container_gradi
 angle_at_origin(context, site, origin, cause) :-
   takes_angle(site, coordinates),
   both_coordinates_zero(context, coordinates, origin, cause),
-  cause != "input".
+  made_by_math(cause).
 
 // Such an angle of coordinates only inputs make zero: noisier, as the
 // inputs may never both be.
@@ -78,12 +78,13 @@ angle_of_inputs(context, site) :-
 
 // An arc sine or arc cosine of a value its math takes to ±1 (a clip into
 // [-1, 1], a tanh that rounds to 1), or an arc hyperbolic cosine of one it
-// takes to 1, where a grad differentiates it: the value is finite there,
-// and the derivative, 1/sqrt(1 - x²) or 1/sqrt(x² - 1), infinite.
+// takes to 1, where a grad differentiates it and its math does not
+// already take it outside the domain: the value is finite there, and the
+// derivative, 1/sqrt(1 - x²) or 1/sqrt(x² - 1), infinite.
 .decl steep_at_edge(context: Context, site: symbol, origin: symbol, cause: symbol)
 steep_at_edge(context, site, origin, cause) :-
   differentiated_at_edge(context, site, origin, cause),
-  !outside_domain(context, site, _, _).
+  !math_breaks_requirement(context, site, _, _, _, _).
 
 // A select that keeps a branch only where a value is away from zero, of a
 // branch that takes the logarithm or a root of that value, or divides by
@@ -308,7 +309,7 @@ differentiated_at_edge(context, site, origin, cause) :-
   argument_region(context, site, 0, region, origin, cause),
   ( domain = "closed_unit", ( region = "one" ; region = "minus_one" ) ;
     domain = "at_least_one", region = "one" ),
-  known_region_cause(cause).
+  made_by_math(cause).
 differentiated_at_edge(context, site, origin, cause) :-
   takes_domain(site, "at_least_one"),
   differentiated_operand(site, 0),
@@ -317,7 +318,7 @@ differentiated_at_edge(context, site, origin, cause) :-
   flow_argument(addition, function, position, "literal", one),
   written_number(one, "region", "one"),
   argument_sign(context, addition, 1 - position, "zero", origin, cause),
-  cause != "input".
+  made_by_math(cause).
 
 // ── The double where ──────────────────────────────────────────────────
 

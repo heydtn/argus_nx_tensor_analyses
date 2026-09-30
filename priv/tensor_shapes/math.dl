@@ -136,7 +136,7 @@ may_have_sign(context, function, "result", site, "zero", site, "product_underflo
 product_of_fractions(context, site) :-
   signed_call(context, site, _, "product"),
   argument_region(context, site, 0, "inside", _, cause),
-  known_region_cause(cause),
+  made_by_math(cause),
   cause != "comparison", cause != "index", cause != "sign", cause != "identity".
 
 // A product over at least 20 elements, or over a size variable, which
@@ -349,7 +349,7 @@ nx_members("argument", "positive", " Nx.log/2:0 ").
 logarithm_to_base_one(context, site, origin, cause) :-
   logarithm_with_base(site),
   argument_region(context, site, 1, "one", origin, cause),
-  known_region_cause(cause).
+  made_by_math(cause).
 
 nonfinite(site, "log_base_one", cause, origin) :-
   logarithm_to_base_one(_, site, origin, cause).
@@ -369,7 +369,7 @@ zero_scaled_exponentials(context, site, origin, cause) :-
   site_active(context, site),
   may_have_sign(context, function, kind, source, "zero", origin, cause),
   !may_have_sign(context, function, kind, source, "negative", _, _),
-  cause != "input",
+  made_by_math(cause),
   !partial_zero(cause).
 
 // A log-sum-exp whose scaling factor nothing keeps positive: it can be

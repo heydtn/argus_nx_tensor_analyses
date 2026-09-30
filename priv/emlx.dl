@@ -144,23 +144,22 @@ negative_by_math(context, site, position, origin) :-
   in_region(context, function, kind, source, region, origin, cause),
   region_order(region, order),
   order <= 1,
-  made_by_math(cause, origin).
+  lowered_by_math(cause, origin).
 
-// A cause of a value's region that is the code's own math: any but an
-// input's; and, for a call the region rules do not follow
-// ("unbounded"), a difference whose first operand the code's math lets
-// be zero, as an index minus a number. A difference of two inputs, or of
-// two sizes, is negative only as inputs are.
-.decl made_by_math(cause: symbol, origin: symbol)
-made_by_math(cause, origin) :-
+// A cause of a region at or below -1, with the call it names, that is
+// the code's own math (`made_by_math`); and, for a call the region rules
+// do not follow ("unbounded"), a difference whose first operand the
+// code's math lets be zero, as an index minus a number. A difference of
+// two inputs, or of two sizes, is negative only as inputs are.
+.decl lowered_by_math(cause: symbol, origin: symbol)
+lowered_by_math(cause, origin) :-
   negative_cause(cause, origin),
-  cause != "input",
-  cause != "unbounded".
-made_by_math("unbounded", origin) :-
+  made_by_math(cause).
+lowered_by_math("unbounded", origin) :-
   negative_cause("unbounded", origin),
   sign_rule(origin, "subtract"),
   argument_sign(_, origin, 0, "zero", _, cause),
-  cause != "input".
+  made_by_math(cause).
 
 // The causes, and the calls they name, of the regions at or below -1
 // the arguments asked about can be in.

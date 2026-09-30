@@ -8298,23 +8298,23 @@ misalignment(context, site, "vectorize_name", detail) :- vectorize_renaming(cont
 // Signs are followed on demand, for the values a division reads, after
 // the values themselves: nothing the values read depends on them.
 
-// A division by a value its own math keeps from being negative but not
-// from being zero.
-.decl divides_by_zero(context: Context, site: symbol, origin: symbol, cause: symbol)
-divides_by_zero(context, site, origin, cause) :-
-  divides_by(site, position),
-  argument_sign(context, site, position, "zero", origin, cause),
-  !argument_sign(context, site, position, "negative", _, _),
-  cause != "input".
-
-// A logarithm of a value its own math keeps from being negative but not
-// from being zero: negative infinity there.
-.decl logarithm_of_zero(context: Context, site: symbol, origin: symbol, cause: symbol)
-logarithm_of_zero(context, site, origin, cause) :-
-  takes_logarithm(site, position),
-  argument_sign(context, site, position, "zero", origin, cause),
-  !argument_sign(context, site, position, "negative", _, _),
-  cause != "input".
+// A call whose operand the code's own math takes where the call is not
+// defined (`requirement`, and the `value` it rules out): a divisor, or a
+// logarithm's operand, that it keeps from being negative but not from
+// being zero, an infinity there; an operand of a function defined on only
+// part of the line (`takes_domain`) that it takes outside it, as asin of
+// twice a tanh or acosh of a tanh, NaN there. `cause` "rounding" where
+// only rounding does, as with the arc cosine of a cosine similarity,
+// which exact arithmetic keeps within [-1, 1] and floats do not.
+.decl math_breaks_requirement(context: Context, site: symbol, requirement: symbol, value: symbol, origin: symbol, cause: symbol)
+math_breaks_requirement(context, site, requirement, "zero", origin, cause) :-
+  reaches(context, site, position, requirement, "zero", origin, cause),
+  made_by_math(cause),
+  !argument_sign(context, site, position, "negative", _, _).
+math_breaks_requirement(context, site, domain, region, origin, cause) :-
+  reaches(context, site, _, domain, region, origin, cause),
+  undefined_in(domain, region),
+  made_by_math(cause).
 
 // A square root or logarithm of a difference of two values that cannot be
 // negative, such as a variance written as E[x²] - E[x]²: where they are
@@ -8344,43 +8344,26 @@ unshifted_exponentials(site, exponential) :-
   normalizes_exponentials(site, exponential),
   !shifted_by_maximum(exponential).
 
-// A division by a value nothing keeps from being zero: one from an
-// input, or a difference of inputs that is zero where they meet, that no
-// test on the call's path and no select checks. Noisier than
-// `divides_by_zero`, since an input may never be zero, and reported apart
-// (`unchecked_divisor`).
-.decl unchecked_division(context: Context, site: symbol, origin: symbol, cause: symbol)
-unchecked_division(context, site, origin, cause) :-
-  divides_by(site, position),
-  argument_sign(context, site, position, "zero", origin, cause),
-  !checked_operand(site, position, "nonzero"),
+// A call whose operand nothing keeps within what the call requires: a
+// divisor that can be zero, a logarithm's operand that can be zero or
+// negative, a square root's that can be negative, a partial function's
+// that can lie outside its domain, from an input or from math, that no
+// test on the call's path checks and, for a log1p, no sign keeps in its
+// domain (`safe_by_sign`). Noisier than `nonfinite`, since an input may
+// never be zero, and reported apart, where no definite finding at the
+// call already says so.
+.decl unchecked_operand(site: symbol, kind: symbol, origin: symbol, cause: symbol)
+unchecked_operand(site, kind, origin, cause) :-
+  reaches(context, site, position, requirement, value, origin, cause),
+  unchecked_kind(requirement, value, kind),
+  !checked_operand(site, position, requirement),
+  !safe_by_sign(context, site, requirement),
   !definite_site(site).
 
 // A call with a definite finding in some context, which an unchecked one
 // at the call would only repeat.
 .decl definite_site(site: symbol)
 definite_site(site) :- nonfinite(site, _, _, _).
-
-// A logarithm of a value nothing keeps positive.
-.decl unchecked_logarithm(context: Context, site: symbol, origin: symbol, cause: symbol)
-unchecked_logarithm(context, site, origin, cause) :-
-  takes_logarithm(site, position),
-  argument_sign(context, site, position, "zero", origin, cause),
-  !checked_operand(site, position, "positive"),
-  !definite_site(site).
-unchecked_logarithm(context, site, "", "negative") :-
-  takes_logarithm(site, position),
-  argument_sign(context, site, position, "negative", _, _),
-  !checked_operand(site, position, "positive"),
-  !definite_site(site).
-
-// A square root of a value nothing keeps from being negative.
-.decl unchecked_root(context: Context, site: symbol, origin: symbol, cause: symbol)
-unchecked_root(context, site, "", "negative") :-
-  takes_root(site, position, "root_of_negative"),
-  argument_sign(context, site, position, "negative", _, _),
-  !checked_operand(site, position, "nonnegative"),
-  !definite_site(site).
 
 // A square root, norm or root power in a function a `grad` or
 // `value_and_grad` differentiates, whose result its math keeps from being
@@ -8393,56 +8376,83 @@ infinite_gradient(context, site, origin, cause) :-
   singular_derivative(site, _),
   gradient_asked(context, site, function),
   may_have_sign(context, function, "result", site, "zero", origin, cause),
-  cause != "input",
+  made_by_math(cause),
   !nonnegative_root_needed(context, site),
   !stopped_gradient(site).
 
-// A function defined on only part of the line (`takes_domain`) whose
-// operand the code's own math takes outside it: asin of twice a tanh,
-// acosh of a tanh. NaN there. `cause` "rounding" where only rounding
-// does, as with the arc cosine of a cosine similarity, which exact
-// arithmetic keeps within [-1, 1] and floats do not.
-.decl outside_domain(context: Context, site: symbol, origin: symbol, cause: symbol)
-outside_domain(context, site, origin, cause) :-
-  takes_domain(site, domain),
-  argument_region(context, site, 0, region, origin, cause),
-  undefined_in(domain, region),
-  known_region_cause(cause).
-
 // An atanh or erf_inv of a value its math takes to ±1 (a tanh that
-// rounds to 1, a clip to ±1), or a log1p of one it takes to -1: an
-// infinity there.
+// rounds to 1, a clip to ±1), or a log1p of one it takes to -1, where
+// its math does not already take it outside the domain: an infinity
+// there.
 .decl infinite_at_edge(context: Context, site: symbol, origin: symbol, cause: symbol)
 infinite_at_edge(context, site, origin, cause) :-
-  takes_domain(site, domain),
-  argument_region(context, site, 0, region, origin, cause),
+  reaches(context, site, _, domain, region, origin, cause),
   infinite_at(domain, region),
-  known_region_cause(cause),
-  !outside_domain(context, site, _, _).
-
-// A function defined on only part of the line, of a value nothing keeps
-// inside it: one from an input, or made by math the rules do not bound,
-// that no clip and no test on the call's path keeps there.
-.decl unchecked_domain(context: Context, site: symbol, origin: symbol, cause: symbol)
-unchecked_domain(context, site, origin, cause) :-
-  takes_domain(site, domain),
-  argument_region(context, site, 0, region, origin, cause),
-  not_defined_in(domain, region),
-  unknown_region_cause(cause),
-  !domain_checked(site, domain),
-  !safe_by_sign(context, site, domain),
-  !definite_site(site).
+  made_by_math(cause),
+  !math_breaks_requirement(context, site, _, _, _, _).
 
 // ── Words ──────────────────────────────────────────────────────────
 
+// The operand at `position` of a call in a context can be a value its
+// requirement rules out, from `origin`, by `cause`: zero, as its signs
+// say; a negative number (from no one call, `cause` "negative"); a region
+// its domain leaves out.
+.decl reaches(context: Context, site: symbol, position: number, requirement: symbol, value: symbol, origin: symbol, cause: symbol)
+reaches(context, site, position, requirement, "zero", origin, cause) :-
+  operand_requirement(site, position, requirement),
+  ruled_out(requirement, "zero"),
+  argument_sign(context, site, position, "zero", origin, cause).
+reaches(context, site, position, requirement, "negative", "", "negative") :-
+  operand_requirement(site, position, requirement),
+  ruled_out(requirement, "negative"),
+  argument_sign(context, site, position, "negative", _, _).
+reaches(context, site, position, requirement, region, origin, cause) :-
+  operand_requirement(site, position, requirement),
+  argument_region(context, site, position, region, origin, cause),
+  ruled_out(requirement, region).
+
+// The values a requirement rules out: zero for a divisor, zero and the
+// negatives for a logarithm's operand, the negatives for a root's, and
+// the regions a domain leaves out.
+.decl ruled_out(requirement: symbol, value: symbol)
+ruled_out("nonzero", "zero").
+ruled_out("positive", "zero"). ruled_out("positive", "negative").
+ruled_out("nonnegative", "negative").
+ruled_out(domain, region) :- not_defined_in(domain, region).
+
+// A cause of a value that is the code's own math: neither an input nor,
+// for a region, math the rules do not bound ("unbounded").
+.decl made_by_math(cause: symbol) inline
+made_by_math(cause) :- cause != "input", cause != "unbounded".
+
+// What a definite finding, and an unchecked one, calls an operand that
+// can be a value its requirement rules out.
+.decl definite_kind(requirement: symbol, value: symbol, kind: symbol)
+definite_kind("nonzero", "zero", "divide_by_zero").
+definite_kind("positive", "zero", "log_of_zero").
+definite_kind(domain, region, "outside_domain") :- undefined_in(domain, region).
+
+.decl unchecked_kind(requirement: symbol, value: symbol, kind: symbol)
+unchecked_kind("nonzero", "zero", "unchecked_divisor").
+unchecked_kind("positive", "zero", "unchecked_logarithm").
+unchecked_kind("positive", "negative", "unchecked_logarithm").
+unchecked_kind("nonnegative", "negative", "unchecked_root").
+unchecked_kind(domain, region, "unchecked_domain") :- not_defined_in(domain, region).
+
 // The call runs only where a test on its path says its operand is not
-// zero, is positive, or is not negative (`need`): `if n == 0`, `when n
-// > 0`. The operand has to be the tested value itself.
+// zero, is positive, is not negative, or is in a domain (`need`): `if n
+// == 0`, `when n > 0`, both of a domain's bounds (`domain_needs`). The
+// operand has to be the tested value itself.
 .decl checked_operand(site: symbol, position: number, need: symbol)
 checked_operand(site, position, need) :-
   check_demand(site, position),
   flow_checked(site, _, position, literal, polarity),
   test_ensures(literal, polarity, need).
+checked_operand(site, 0, domain) :-
+  checked_operand(site, 0, lower),
+  takes_domain(site, domain),
+  domain_needs(domain, lower, upper),
+  checked_operand(site, 0, upper).
 
 // The operands whose checks are asked of: what a call divides by, or
 // takes the logarithm, root or other partial function of.
@@ -8492,14 +8502,7 @@ bound_test("ge", order, "at_least_one") :- region_order(_, order), order >= 3.
 bound_test("eq", order, need) :- bound_test("le", order, need).
 bound_test("eq", order, need) :- bound_test("ge", order, need).
 
-// A test on the path to the call keeps its operand in its domain.
-.decl domain_checked(site: symbol, domain: symbol)
-domain_checked(site, domain) :-
-  takes_domain(site, domain),
-  domain_needs(domain, lower, upper),
-  checked_operand(site, 0, lower),
-  checked_operand(site, 0, upper).
-
+// The bounds a test keeps an operand within to keep it in a domain.
 .decl domain_needs(domain: symbol, lower: symbol, upper: symbol)
 domain_needs("closed_unit", "at_least_minus_one", "at_most_one").
 domain_needs("open_unit", "above_minus_one", "below_one").
@@ -8659,14 +8662,6 @@ infinite_at("above_minus_one", "minus_one").
 .decl not_defined_in(domain: symbol, region: symbol)
 not_defined_in(domain, region) :- undefined_in(domain, region).
 not_defined_in(domain, region) :- infinite_at(domain, region).
-
-// How a value comes to a region: from math the rules follow, or from an
-// input or math they do not bound.
-.decl known_region_cause(cause: symbol) inline
-known_region_cause(cause) :- cause != "input", cause != "unbounded".
-.decl unknown_region_cause(cause: symbol) inline
-unknown_region_cause(cause) :- cause = "input".
-unknown_region_cause(cause) :- cause = "unbounded".
 
 // A call's argument is the result of a subtraction in its function.
 .decl difference_argument(context: Context, site: symbol, position: number, difference: symbol)
@@ -9010,7 +9005,7 @@ slot_sign(context, site, slot, sign, origin, cause) :-
 // the operand's own cause if it has one, else this call.
 .decl zero_kept(site: symbol, origin: symbol, cause: symbol, here: symbol, kept_origin: symbol, kept_cause: symbol) inline
 zero_kept(site, origin, cause, here, origin, cause) :-
-  cause != "input", strlen(site) > 0, strlen(here) > 0.
+  made_by_math(cause), strlen(site) > 0, strlen(here) > 0.
 zero_kept(site, origin, cause, here, site, here) :-
   cause = "input", strlen(origin) >= 0, strlen(site) > 0, strlen(here) > 0.
 
@@ -10422,8 +10417,9 @@ tensor_axis_misalignment_via(site, kind, order, at, function, how, subject, posi
 // A call whose result the code's own math can make infinite or NaN, by
 // kind, with how and where.
 .decl nonfinite(site: symbol, kind: symbol, cause: symbol, origin: symbol)
-nonfinite(site, "divide_by_zero", cause, origin) :- divides_by_zero(_, site, origin, cause).
-nonfinite(site, "log_of_zero", cause, origin) :- logarithm_of_zero(_, site, origin, cause).
+nonfinite(site, kind, cause, origin) :-
+  math_breaks_requirement(_, site, requirement, value, origin, cause),
+  definite_kind(requirement, value, kind).
 nonfinite(site, kind, "cancellation", difference) :-
   root_of_cancellation(_, site, kind, difference).
 nonfinite(site, "log_of_zero", "underflow", softmax) :-
@@ -10434,22 +10430,13 @@ nonfinite(site, "exp_overflow", "unshifted", exponential) :-
   active_site(site).
 nonfinite(site, "infinite_gradient", cause, origin) :-
   infinite_gradient(_, site, origin, cause).
-nonfinite(site, "outside_domain", cause, origin) :-
-  outside_domain(_, site, origin, cause).
 nonfinite(site, "infinite_at_edge", cause, origin) :-
   infinite_at_edge(_, site, origin, cause).
 
 // A call whose operand nothing keeps where the call is defined, by kind:
 // noisier than `nonfinite`, and reported apart.
 .decl unchecked(site: symbol, kind: symbol, cause: symbol, origin: symbol)
-unchecked(site, "unchecked_divisor", cause, origin) :-
-  unchecked_division(_, site, origin, cause).
-unchecked(site, "unchecked_logarithm", cause, origin) :-
-  unchecked_logarithm(_, site, origin, cause).
-unchecked(site, "unchecked_root", cause, origin) :-
-  unchecked_root(_, site, origin, cause).
-unchecked(site, "unchecked_domain", cause, origin) :-
-  unchecked_domain(_, site, origin, cause).
+unchecked(site, kind, cause, origin) :- unchecked_operand(site, kind, origin, cause).
 
 // An Nx call whose result the code's own math can make infinite or NaN,
 // or whose operand nothing keeps where it is defined. `kind` names what
