@@ -41,7 +41,7 @@ handed, whose contents the analysis cannot see. `key` is a random key.
 | `axis` | error | An axis the operand does not have, or one listed twice. | `Nx.sum(Nx.iota({2, 3}), axes: [2])` |
 | `dot` | error | Contracted or batch axes of different sizes, or a batch axis that is also contracted. | `Nx.dot(Nx.iota({4, 8}), Nx.iota({6, 16}))` |
 | `reshape` | error | A new shape with another element count, or a size below 1. | `Nx.reshape(Nx.iota({2, 3}), {4, 2})` |
-| `names` | error | Axes of different names that meet. | `Nx.add(Nx.iota({2}, names: [:x]), Nx.iota({2}, names: [:y]))` |
+| `names` | error | Axes of different names that meet, or names that are not one per axis or that repeat. | `Nx.add(Nx.iota({2}, names: [:x]), Nx.iota({2}, names: [:y]))` |
 | `concatenate` | error | Joined tensors that differ on an axis other than the one joined. | `Nx.concatenate([Nx.iota({2, 3}), Nx.iota({2, 4})])` |
 | `stack` | error | Stacked tensors of different shapes. | `Nx.stack([Nx.iota({2}), Nx.iota({3})])` |
 | `squeeze` | error | Squeezing an axis whose size is not 1. | `Nx.squeeze(Nx.iota({2, 3}), axes: [0])` |
@@ -55,7 +55,7 @@ handed, whose contents the analysis cannot see. `key` is a random key.
 | `square` | error | A matrix that is not square where the operation needs one. | `Nx.LinAlg.determinant(Nx.iota({2, 3}, type: :f32))` |
 | `solve` | error | A right-hand side that does not fit the system. | `Nx.LinAlg.solve(Nx.eye(3), Nx.iota({2}, type: :f32))` |
 | `least_squares` | error | A right-hand side with other rows than the system. | `Nx.LinAlg.least_squares(Nx.iota({3, 2}, type: :f32), Nx.iota({4}, type: :f32))` |
-| `diagonal` | error | A diagonal of another length than the one its offset picks. | `Nx.put_diagonal(Nx.iota({3, 3}), Nx.iota({2}))` |
+| `diagonal` | error | An offset that leaves the diagonal outside the matrix, or a diagonal of another length than the one its offset picks. | `Nx.put_diagonal(Nx.iota({3, 3}), Nx.iota({2}))` |
 | `diff` | error | A difference order at or past the axis's size. | `Nx.diff(Nx.iota({3}), order: 3)` |
 | `gather` | error | Indices whose last axis addresses more axes than the tensor has. | `Nx.gather(Nx.iota({3}), Nx.iota({2, 2}))` |
 | `indexed` | error | Indices or updates of an indexed update that do not fit the tensor. | `Nx.indexed_add(Nx.iota({3}), Nx.iota({2, 1}), Nx.iota({3}))` |

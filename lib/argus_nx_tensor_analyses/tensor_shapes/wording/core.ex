@@ -36,10 +36,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Core do
         "check the input's and kernel's ranks, the kernel's size against the input's spatial axes, and that the strides are positive"
     },
     "diagonal" => %{
-      title: "gets a diagonal of the wrong length",
+      title: "gets a diagonal offset or length that does not fit the matrix",
       why:
-        "A diagonal written into a tensor must be exactly as long as the diagonal its offset picks.",
-      help: "make the diagonal as long as the one the offset picks"
+        "A diagonal's offset must leave it inside the matrix: below the column count when positive, and the row count when negative. A diagonal written into a matrix must be exactly as long as the one its offset picks.",
+      help:
+        "keep the offset inside the matrix, and make a diagonal written into it as long as the one the offset picks"
     },
     "diff" => %{
       title: "takes more differences than the axis holds",
@@ -85,11 +86,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Core do
       help: "give start and stop the same shape, and give n"
     },
     "names" => %{
-      title: "merges axes of different names",
+      title: "gets axis names that do not fit",
       why:
-        "Where axes meet, each keeps one name: a name merges with nil or with itself, and a tensor's names are its own.",
+        "Where axes meet, each keeps one name: a name merges with nil or with itself. A tensor's own names are one per axis, nil or an atom, and none repeats another or a vectorized axis's.",
       help:
-        "rename one side with Nx.rename/2 so the names agree, or drop the names that should not meet"
+        "rename one side with Nx.rename/2 so the names agree, drop the names that should not meet, or give one name per axis, none twice"
     },
     "pad" => %{
       title: "gets a padding configuration that does not fit",
