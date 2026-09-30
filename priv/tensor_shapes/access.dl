@@ -117,22 +117,18 @@ call_error(site, "access_float_index", detail, "") :-
   term_spelling(text, start, spelled),
   detail = cat("slicing a tensor on an axis requires an integer, a scalar tensor or a range, got: ", spelled).
 
-// A tensor key that is an integer tensor on no path in some context: a
-// scalar Nx slices at, or indices it takes. `origin` is the call that
-// makes it a float or complex tensor.
+// A tensor key that is an integer tensor on no path in some context
+// (`only_wrong_class`): a scalar Nx slices at, or indices it takes.
+// `origin` is the call that makes it a float or complex tensor.
 call_error(site, "access_float_index_tensor", detail, origin) :-
-  indexed_tensor(context, site, _),
-  argument_value(context, site, 1, $Tensor([_, nil])),
-  argument_class(context, site, 1, class, origin),
-  class != "integer",
-  !argument_class(context, site, 1, "integer", _),
+  reaches(context, site, 1, "integer_key", class, origin, "class"),
+  argument_value(context, site, 1, $Tensor([_vectorized, nil])),
+  only_wrong_class(context, site, 1, "integer_key"),
   detail = cat("index must be integer type, got a ", class, " type for axis 0").
 call_error(site, "access_float_index_tensor", detail, origin) :-
-  indexed_tensor(context, site, _),
-  argument_value(context, site, 1, $Tensor([_, [_, _, _]])),
-  argument_class(context, site, 1, class, origin),
-  class != "integer",
-  !argument_class(context, site, 1, "integer", _),
+  reaches(context, site, 1, "integer_key", class, origin, "class"),
+  argument_value(context, site, 1, $Tensor([_vectorized, [_size, _name, _rest]])),
+  only_wrong_class(context, site, 1, "integer_key"),
   detail = cat("indices must be an integer tensor, got a ", class, " type").
 
 // A tensor with axes where a list indexes one axis.
@@ -633,10 +629,16 @@ append_demand([size, name, [next, label, others]], rest) :-
   access_key(context, site, $Tensor([nil, [size, name, [next, label, others]]])).
 .plan 1:(2,1)
 
-// Asks the class of a key that is a tensor.
+// Asks the class of a key that is a tensor. Nx requires an integer tensor
+// there ("integer_key"), and a key it rejects is a call error of its own
+// above, not a type error.
 sign_site(context, site) :-
   indexed_tensor(context, site, _),
   argument_value(context, site, 1, $Tensor(_)).
+operand_class(context, site, 1, "integer_key", class, origin) :-
+  indexed_tensor(context, site, _),
+  argument_class(context, site, 1, class, origin).
+ruled_out("integer_key", "float"). ruled_out("integer_key", "complex").
 
 // ══ Tuples where a tensor is expected ═══════════════════════════════
 

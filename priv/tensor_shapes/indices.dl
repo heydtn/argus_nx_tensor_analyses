@@ -582,16 +582,10 @@ integer_range(name, to_float(-limit - 1), to_float(limit)) :-
 // and is silently wrong.
 
 // A call that rejects complex tensors (`kind` "complex_operand") or
-// misreads them ("complex_spread") whose operand can be complex.
-.decl complex_operand(context: Context, site: symbol, position: number, kind: symbol, origin: symbol)
-complex_operand(context, site, position, kind, origin) :-
-  complex_hazard(site, position, kind),
-  operand_class(context, site, position, "complex", origin).
-
-// The operands of Nx calls that reject complex tensors or misread them.
-.decl complex_hazard(site: symbol, position: number, kind: symbol) inline
-complex_hazard(site, position, "complex_operand") :- operand_requirement(site, position, "real").
-complex_hazard(site, position, "complex_spread") :- operand_requirement(site, position, "real_spread").
+// misreads them ("complex_spread") whose operand can be complex: a type
+// error (`class_kind`).
+class_kind("real", "complex_operand").
+class_kind("real_spread", "complex_spread").
 
 // An operand of the functions that order or round values, or take them
 // as real ("real"), of the matrix norms of singular values, and of a
@@ -627,21 +621,24 @@ nx_members("argument", "real", cat(
   " Nx.Defn.Kernel.__less_than_equal_to__:0 Nx.Defn.Kernel.__less_than_equal_to__:1",
   " Nx.Defn.Kernel.__more_than_equal_to__:0 Nx.Defn.Kernel.__more_than_equal_to__:1 ")).
 
-// The class an operand of such a call can be of, asked only of a program
-// that can make a complex tensor.
-.decl operand_class(context: Context, site: symbol, position: number, class: symbol, origin: symbol)
-operand_class(context, site, position, class, origin) :-
-  complex_hazard(site, position, _),
-  makes_complex(),
+// The classes an operand that must be real can be of: those of the values
+// that reach it, in a context the call runs in, asked only of a program
+// that can make a complex tensor (no operand must be real in another),
+// and apart from its signs.
+operand_class(context, site, position, requirement, class, origin) :-
+  operand_requirement(site, position, requirement),
+  in_set("real", requirement),
   site_active(context, site),
   flow_argument(site, function, position, kind, source),
   value_class(context, function, kind, source, class, origin).
 
 sign_demand(context, function, kind, source) :-
-  complex_hazard(site, position, _),
-  makes_complex(),
+  operand_requirement(site, position, requirement),
+  in_set("real", requirement),
   site_active(context, site),
   flow_argument(site, function, position, kind, source).
+
+nx_members("set", "real", " real real_spread ").
 
 // The program makes a complex tensor somewhere: calls that make one, and
 // the complex types written in its literals. With none, no operand can be
@@ -672,15 +669,3 @@ value_class(context, function, "result", site, class, origin) :-
 value_class(context, function, "result", site, "float", site) :-
   argument_class(context, site, 0, "complex", _),
   type_call(context, site, function, "magnitude").
-
-// `certain` is 1 where an operand is never anything but complex in some
-// context, which Nx rejects on every path there.
-type_error(site, kind, "complex", position, min(certain, 1), origin) :-
-  complex_operand(_, site, position, kind, origin),
-  certain = count : {
-    complex_operand(context, site, position, _, _),
-    !operand_class(context, site, position, "integer", _),
-    !operand_class(context, site, position, "float", _)
-  },
-  operation_site(site, _, _),
-  nx_origin(origin).

@@ -8396,7 +8396,7 @@ infinite_at_edge(context, site, origin, cause) :-
 // The operand at `position` of a call in a context can be a value its
 // requirement rules out, from `origin`, by `cause`: zero, as its signs
 // say; a negative number (from no one call, `cause` "negative"); a region
-// its domain leaves out.
+// its domain leaves out; a class (`cause` "class", `operand_class`).
 .decl reaches(context: Context, site: symbol, position: number, requirement: symbol, value: symbol, origin: symbol, cause: symbol)
 reaches(context, site, position, requirement, "zero", origin, cause) :-
   operand_requirement(site, position, requirement),
@@ -8410,15 +8410,21 @@ reaches(context, site, position, requirement, region, origin, cause) :-
   operand_requirement(site, position, requirement),
   argument_region(context, site, position, region, origin, cause),
   ruled_out(requirement, region).
+reaches(context, site, position, requirement, class, origin, "class") :-
+  operand_class(context, site, position, requirement, class, origin),
+  ruled_out(requirement, class).
 
 // The values a requirement rules out: zero for a divisor, zero and the
-// negatives for a logarithm's operand, the negatives for a root's, and
-// the regions a domain leaves out.
+// negatives for a logarithm's operand, the negatives for a root's, the
+// regions a domain leaves out, and the classes an integer or a real
+// operand cannot be.
 .decl ruled_out(requirement: symbol, value: symbol)
 ruled_out("nonzero", "zero").
 ruled_out("positive", "zero"). ruled_out("positive", "negative").
 ruled_out("nonnegative", "negative").
 ruled_out(domain, region) :- not_defined_in(domain, region).
+ruled_out("integer", "float"). ruled_out("integer", "complex").
+ruled_out("real", "complex"). ruled_out("real_spread", "complex").
 
 // A cause of a value that is the code's own math: neither an input nor,
 // for a region, math the rules do not bound ("unbounded").
@@ -9880,14 +9886,14 @@ nx_members("set", "unit_from_sign", " compare index identity select clip maximum
 // Asked of the same values as signs are (`sign_demand`), from the operands
 // of the calls that take only integers.
 
-// An Nx call defined only on integers whose operand can be a float or a
-// complex number: a bitwise operation, an integer quotient, the indices of
-// a take, gather or indexed update. Nx raises.
-.decl non_integer_operand(context: Context, site: symbol, position: number, class: symbol, origin: symbol)
-non_integer_operand(context, site, position, class, origin) :-
-  integer_only(site, position),
-  argument_class(context, site, position, class, origin),
-  class != "integer".
+// An operand a call requires to be of some class can be only classes the
+// requirement rules out, in a context: a float or complex operand of a
+// call defined only on integers that is never an integer there, which Nx
+// rejects on every path there.
+.decl only_wrong_class(context: Context, site: symbol, position: number, requirement: symbol)
+only_wrong_class(context, site, position, requirement) :-
+  reaches(context, site, position, requirement, _, _, "class"),
+  !takes_a_class(context, site, position, requirement).
 
 // An Nx call that makes a tensor of a type the backend does not support.
 .decl makes_unsupported_type(context: Context, site: symbol, name: symbol)
@@ -9897,11 +9903,28 @@ makes_unsupported_type(context, site, name) :-
 
 // ── Words ──────────────────────────────────────────────────────────
 
+// Such an operand can be a class its requirement allows, in a context.
+.decl takes_a_class(context: Context, site: symbol, position: number, requirement: symbol)
+takes_a_class(context, site, position, requirement) :-
+  operand_class(context, site, position, requirement, class, _),
+  !ruled_out(requirement, class).
+
+// The classes an operand a call requires to be of some class can be of
+// in a context, each with the call that makes it so: an integer
+// operand's are its argument's (`argument_class`), as its signs are; the
+// files included below add others.
+.decl operand_class(context: Context, site: symbol, position: number, requirement: symbol, class: symbol, origin: symbol)
+operand_class(context, site, position, "integer", class, origin) :-
+  operand_requirement(site, position, "integer"),
+  argument_class(context, site, position, class, origin).
+
+// What a type finding calls an operand of a class its requirement rules
+// out: an integer operand's is "non_integer_operand".
+.decl class_kind(requirement: symbol, kind: symbol)
+class_kind("integer", "non_integer_operand").
+
 // The operands of the Nx calls defined only on integers ("integer"): the
 // bitwise operations' and the integer quotient's, and indices.
-.decl integer_only(site: symbol, position: number) inline
-integer_only(site, position) :- operand_requirement(site, position, "integer").
-
 nx_argument(operation, 2, position, "integer") :-
   nx_trait(operation, "integer_binary"),
   nx_named(operation, 2),
@@ -9928,13 +9951,6 @@ nx_members("argument", "indices", cat(
 argument_class(context, site, position, class, origin) :-
   value_class(context, function, kind, source, class, origin),
   signed_argument(context, site, position, function, kind, source).
-
-// An argument whose every class in some context is one other than an
-// integer, which Nx rejects on every path there.
-.decl never_integer(site: symbol, position: number)
-never_integer(site, position) :-
-  non_integer_operand(context, site, position, _, _),
-  !argument_class(context, site, position, "integer", _).
 
 .decl value_class(context: Context, function: symbol, kind: symbol, source: symbol, class: symbol, origin: symbol)
 
@@ -10211,15 +10227,17 @@ context_call(origin, call) :- entered_from(origin, context, _), invocation(_, ca
 // where it goes wrong on every path in some context, and `origin` is the
 // call that makes it so, "" for none. Here:
 //
-//   * "non_integer_operand": an operand of a call that takes only
-//     integers can be a float or complex number (`subject`, its class);
-//     certain where it is never an integer in some context;
+//   * an operand of a class its requirement rules out (`class_kind`), as
+//     "non_integer_operand", a float or complex operand of a call that
+//     takes only integers (`subject`, its class); certain where it is
+//     never another class in some context (`only_wrong_class`);
 //   * "unsupported_type": the call makes a tensor of type `subject`, which
 //     the analysis is told the backend does not support.
 .decl type_error(site: symbol, kind: symbol, subject: symbol, position: number, certain: number, origin: symbol)
-type_error(site, "non_integer_operand", class, position, certain, origin) :-
-  non_integer_operand(_, site, position, class, origin),
-  type_certainty(site, position, certain),
+type_error(site, kind, class, position, min(certain, 1), origin) :-
+  reaches(_, site, position, requirement, class, origin, "class"),
+  class_kind(requirement, kind),
+  certain = count : { only_wrong_class(_, site, position, requirement) },
   operation_site(site, _, _),
   nx_origin(origin).
 type_error(site, "unsupported_type", name, -1, 1, "") :-
@@ -10234,12 +10252,6 @@ tensor_type_error(site, function, operation, kind, subject, position, certain, o
   call_spelled(origin, origin_operation).
 named_call(site) :- type_error(site, _, _, _, _, _).
 named_call(origin) :- type_error(_, _, _, _, _, origin).
-
-.decl type_certainty(site: symbol, position: number, certain: number)
-type_certainty(site, position, 1) :- never_integer(site, position).
-type_certainty(site, position, 0) :-
-  non_integer_operand(_, site, position, _, _),
-  !never_integer(site, position).
 
 // The module and function a call calls, Nx's or its constants'.
 .decl called_name(site: symbol, operation: symbol, arity: number)
