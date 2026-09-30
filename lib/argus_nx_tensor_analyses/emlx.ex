@@ -23,6 +23,9 @@ defmodule ArgusNxTensorAnalyses.EMLX do
       on EMLX's CPU device when run eagerly and gives 0 elsewhere on EMLX.
     * A round of a value the code's math can put exactly on a half, which
       EMLX rounds to even and BinaryBackend and EXLA away from zero.
+    * A shift by a written amount at or past the width EMLX shifts the
+      type in, which it takes modulo that width: `Nx.left_shift(1, 33)`
+      of an s32 is 2 on EMLX and 0 on BinaryBackend and EXLA.
     * An Nx call that gets tensors of two backends that cannot meet, such
       as the result of a function compiled with EXLA and a tensor made on
       EMLX: Nx raises `Nx.Defn.IncompatibleBackendsError`.
@@ -74,9 +77,9 @@ defmodule ArgusNxTensorAnalyses.EMLX do
           {:func, :func_id, "the function making it"},
           {:operation, :symbol, "the Nx function, as Nx.remainder/2"},
           {:kind, :symbol,
-           "what EMLX does differently: narrowed_type, negative_remainder, negative_integer_power or round_half"},
+           "what EMLX does differently: narrowed_type, negative_remainder, negative_integer_power, round_half or wrapped_shift"},
           {:detail, :symbol,
-           "the type (f64, c128), the operand that can be negative (divisor, dividend, exponent), or how the operand lands on a half (halved, half_added, mean)"},
+           "the type (f64, c128), the operand that can be negative (divisor, dividend, exponent), how the operand lands on a half (halved, half_added, mean), or the type and the amount shifted (s32 33)"},
           {:certain, :number,
            "1 where the code's own math causes it, 0 where only an input the analysis does not follow may"},
           {:origin, :symbol, "the Nx call whose math causes it, or empty"},

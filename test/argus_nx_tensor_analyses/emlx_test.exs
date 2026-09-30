@@ -17,6 +17,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     defn wrap(x), do: rem(x - 1, 4)
     defn inverse(x), do: x ** -1
     defn add_iota(x), do: x + Nx.iota({2}, type: :f32)
+    defn shift_far(x), do: x <<< 33
     defp on_exla(tensor), do: Nx.backend_transfer(tensor, EXLA.Backend)
     defp combine(left, right), do: Nx.add(left, right)
     defp tables(n), do: %{cos: Nx.iota({n}, type: :f32), sin: Nx.iota({n}, type: :f32)}
@@ -65,6 +66,15 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     {:quiet, "Nx.round(Nx.multiply(Nx.iota({5}, type: :f32), 0.5))"},
     {:quiet, "Nx.round(t)"},
     {:quiet, "Nx.round(Nx.divide(t, 2))"},
+    # shifts past the width EMLX shifts the type in
+    {{:finds, "wrapped_shift", "s32 33", "1"}, "Nx.left_shift(Nx.tensor(1), 33)"},
+    {{:finds, "wrapped_shift", "s32 32", "1"}, "Nx.right_shift(Nx.iota({3}), 32)"},
+    {{:finds, "wrapped_shift", "u8 32", "1"}, "Nx.left_shift(Nx.tensor(1, type: :u8), 32)"},
+    {{:finds, "wrapped_shift", "s64 64", "1"}, "Nx.left_shift(Nx.tensor(1, type: :s64), 64)"},
+    {{:finds, "wrapped_shift", "u32 65", "1"}, "Nx.left_shift(Nx.tensor(1, type: :u32), 65)"},
+    {:quiet, "Nx.left_shift(Nx.tensor(1), 31)"},
+    {:quiet, "Nx.left_shift(Nx.tensor(1, type: :u8), 8)"},
+    {:quiet, "Nx.left_shift(Nx.tensor(1, type: :u32), 32)"},
     # tensors of two backends
     {{:mixed, "EXLA.Backend", "EMLX.Backend", "Nx.tensor/2"},
      "Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.iota({1}))"},
@@ -183,6 +193,13 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     assert {"negative_integer_power", "exponent", "1", ""} in divergences_in(
              rows,
              defn_id(@fixtures, :inverse, 1)
+           )
+  end
+
+  test "a shift in a defn past the width EMLX shifts in", %{rows: rows} do
+    assert {"wrapped_shift", "s32 33", "1", ""} in divergences_in(
+             rows,
+             defn_id(@fixtures, :shift_far, 1)
            )
   end
 
@@ -310,6 +327,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
       def calls_combine, do: combine(Nx.tensor([1.0], backend: EXLA.Backend), Nx.iota({1}))
       def calls_wrap, do: wrap(Nx.iota({4}))
       def calls_inverse, do: inverse(Nx.iota({3}))
+      def calls_shift_far, do: shift_far(Nx.iota({3}))
       def calls_add_iota(t), do: add_iota(Nx.backend_transfer(t, EXLA.Backend))
     """
 

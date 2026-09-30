@@ -126,7 +126,34 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
     }
   end
 
+  def divergence("wrapped_shift", detail) do
+    [type | amount] = String.split(detail, " ", parts: 2)
+    amount = Enum.join(amount)
+    width = if type in ~w(u32 u64 s64), do: 64, else: 32
+
+    %{
+      title: "shifts #{article(type)} #{type} by #{amount}, which EMLX takes modulo #{width}",
+      detail:
+        "EMLX shifts #{article(type)} #{type} in #{width} bits and takes the amount modulo " <>
+          "#{width}, so a shift by #{amount} is #{wrapped(amount, width)} there. BinaryBackend and EXLA " <>
+          "shift every bit out and give 0, or -1 for a negative number shifted right: " <>
+          "left_shift(1, 33) of an s32 is 2 on EMLX and 0 on them.",
+      label: "shifts by #{amount} here",
+      help:
+        "keep the amount below #{width}, or select the result for amounts past the type's width (0, or -1 shifting a negative number right)",
+      frame: ""
+    }
+  end
+
   def divergence(_kind, _detail), do: nil
+
+  # A shift's amount as EMLX takes it, modulo the width it shifts in.
+  defp wrapped(amount, width) do
+    case Integer.parse(amount) do
+      {value, ""} -> "one by #{rem(value, width)}"
+      _unread -> "one by its amount modulo #{width}"
+    end
+  end
 
   # How the rounded value lands on a half, by the cause the program names.
   defp half_cause("halved"), do: "the value rounded is an integer halved, which lies on halves"

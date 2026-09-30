@@ -379,6 +379,7 @@ analysis: run `mix argus tensor_emlx`, or add it to `analyses`.
 | `negative_remainder` | warning; info if only an input can be negative | A remainder whose divisor or dividend can be negative, which EMLX computes wrongly. | `Nx.remainder(Nx.subtract(Nx.iota({4}), 2), 3)` |
 | `negative_integer_power` | warning; info if only an input can be negative | An integer power whose exponent can be negative, which hangs EMLX's CPU device when run eagerly and gives 0 elsewhere. | `Nx.pow(Nx.iota({3}), -1)` |
 | `round_half` | info | `Nx.round` of a value the code's math puts on a half (an integer halved, an integer plus 0.5, a mean of integers), which EMLX rounds to even. | `Nx.round(Nx.divide(Nx.iota({5}), 2))` |
+| `wrapped_shift` | warning | A shift by a written amount at or past the width EMLX shifts the type in (32 bits, 64 for u32 and the 64-bit types), which EMLX takes modulo that width where the BinaryBackend and EXLA give 0. | `Nx.left_shift(Nx.tensor(1), 33)` |
 | `tensor_emlx_mixed_backends` | warning | An Nx call handed tensors of two backends, neither of them the BinaryBackend. Nx raises. | `Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.iota({1}))` |
 
 `tensor_emlx_mixed_backends` is a relation's name: its findings carry the
