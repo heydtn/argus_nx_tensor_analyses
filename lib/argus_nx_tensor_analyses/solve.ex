@@ -95,10 +95,18 @@ defmodule ArgusNxTensorAnalyses.Solve do
     end
   end
 
-  # The program after the Argus rules it builds on: its facts, its call
-  # graph and its shared words (`clientlib/imports.dl`). Souffle resolves
-  # an `.include` against the file it is in, and Argus's are wherever Mix
-  # put the dependency.
+  @doc false
+  # The Argus files a program is solved after: its facts and its reach
+  # components, not all of `clientlib/imports.dl`, which declares hundreds
+  # of relations these rules never read and Soufflé's front end walks the
+  # program once for each. The few other words the rules read are copied
+  # in `priv/argus.dl`. Souffle resolves an `.include` against the file it
+  # is in, and Argus's are wherever Mix put the dependency.
+  def argus_includes do
+    Enum.map(~w(base.dl clientlib/reach.dl), &Application.app_dir(:argus_beam, "priv/dl/#{&1}"))
+  end
+
+  # The program after the Argus rules it builds on.
   #
   # The call graph (Argus's stage 0) is derived here, and the solve told
   # it is provided: left to itself, `run_rules/3` would also learn
@@ -106,11 +114,8 @@ defmodule ArgusNxTensorAnalyses.Solve do
   # does, by compiling the program, which takes most of a solve's time.
   defp solve_rules(directory, program) do
     wrapper = directory <> ".dl"
-
-    File.write!(wrapper, """
-    .include "#{Application.app_dir(:argus_beam, "priv/dl/clientlib/imports.dl")}"
-    .include "#{Path.expand(program)}"
-    """)
+    includes = argus_includes() ++ [Path.expand(program)]
+    File.write!(wrapper, Enum.map(includes, &~s(.include "#{&1}"\n)))
 
     try do
       with :ok <- Argus.Analysis.derive_stage0(directory),

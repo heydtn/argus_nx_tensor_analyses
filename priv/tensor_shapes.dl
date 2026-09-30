@@ -55,10 +55,12 @@
 // at least 1 is written `max(divisor, 1)`: the same where it holds, never
 // 0 where it does not.
 
-// Argus's facts, its call graph and its shared words (its
-// `priv/dl/clientlib/imports.dl`) come first: the runner includes them
+// Argus's facts (its `priv/dl/base.dl`) and reach components (its
+// `priv/dl/clientlib/reach.dl`) come first: the runner includes them
 // ahead of this program, from wherever Mix put `argus_beam`
-// (`ArgusNxTensorAnalyses.TensorShapes.solve/3`).
+// (`ArgusNxTensorAnalyses.Solve`). The few other Argus words these rules
+// read are copied in `argus.dl`.
+.include "argus.dl"
 
 // ══ Types ═══════════════════════════════════════════════════════════
 

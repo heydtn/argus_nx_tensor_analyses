@@ -1,0 +1,28 @@
+// The words of Argus's `clientlib/imports.dl` these rules read, copied
+// here so the runner can include Argus's facts (`base.dl`) and reach
+// components (`clientlib/reach.dl`) without the rest of `imports.dl`.
+// Soufflé's front end walks the whole program once for every declared
+// relation, read or not, and `imports.dl` declares hundreds these rules
+// never read. `ArgusNxTensorAnalyses.SolveTest` fails if any of these
+// stops matching Argus's own, word for word.
+
+// Argus's stage 0: the call graph, derived before the solve
+// (`Argus.Analysis.derive_stage0/1`) and read as facts.
+.decl call_edge(caller: symbol, callee: symbol)
+.input call_edge
+
+.decl call_site(id: symbol, caller: symbol, callee_mod: symbol, callee_func: symbol, arity: number)
+.input call_site
+
+// The instruction in `func` that calls the project function `callee`.
+.decl call_instr(func: symbol, callee: symbol, id: symbol)
+
+call_instr(f, g, id) :-
+  call_site(id, f, mod, name, arity),
+  g = cat(mod, cat(":", cat(name, cat("/", to_string(arity))))),
+  function_def(g, _, _, _, _).
+
+// A module the analyzed beams define.
+.decl program_module(mod: symbol)
+
+program_module(m) :- function_def(_, m, _, _, _).
