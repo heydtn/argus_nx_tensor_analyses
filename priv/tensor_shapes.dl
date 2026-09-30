@@ -5607,7 +5607,8 @@ indexed_mask(site, [first, second, third], mask) :-
   option(site, "axes", text, start),
   term_axes_mask(first, text, start, mask).
 
-// The tensor's free axis (not addressed) at `ordinal`, counting from 0.
+// A walk over the tensor's axes: `before` of those ahead of `axis` are
+// free (not addressed by the mask).
 .decl free_walk(axes: Axes, mask: number, axis: number, before: number)
 free_walk(first, mask, 0, 0) :- indexed_mask(_, [first, _, _], mask).
 free_walk(axes, mask, axis + 1, before + 1) :-
@@ -5621,6 +5622,7 @@ free_walk(axes, mask, axis + 1, before) :-
   axis < rank,
   (mask band (1 bshl axis)) != 0.
 
+// The tensor's free axis (not addressed) at `ordinal`, counting from 0.
 .decl free_axis(axes: Axes, mask: number, ordinal: number, axis: number)
 free_axis(axes, mask, before, axis) :-
   free_walk(axes, mask, axis, before),

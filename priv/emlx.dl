@@ -176,7 +176,7 @@ negative_cause(cause, origin) :-
 .decl divergence_negative_asked(site: symbol, position: number)
 divergence_negative_asked(site, 0) :- takes_remainder(site).
 divergence_negative_asked(site, 1) :- takes_remainder(site).
-divergence_negative_asked(site, 1) :- takes_power(site).
+divergence_negative_asked(site, 1) :- sign_rule(site, "power").
 
 // ══ Integer powers with negative exponents ══════════════════════════
 //
@@ -189,25 +189,13 @@ divergence_negative_asked(site, 1) :- takes_power(site).
 // exponent can be negative.
 .decl hanging_integer_power(context: Context, site: symbol, certain: number, origin: symbol)
 hanging_integer_power(context, site, certain, origin) :-
-  takes_power(site),
-  integer_operands(context, site),
+  integer_power(context, site),
   operand_can_be_negative(context, site, 1, certain, origin).
 
 // ── Words ──────────────────────────────────────────────────────────
 
-.decl takes_power(site: symbol)
-takes_power(site) :- operation_site(site, operation, 2), nx_class(operation, "sign", "power").
-
-// The power's base and exponent can both be integers, which makes its
-// result one.
-.decl integer_operands(context: Context, site: symbol)
-integer_operands(context, site) :-
-  takes_power(site),
-  argument_class(context, site, 0, "integer", _),
-  argument_class(context, site, 1, "integer", _).
-
 // A power asks for its operands' signs and types, as a division does.
-sign_site(context, site) :- takes_power(site), site_active(context, site).
+sign_site(context, site) :- sign_rule(site, "power"), site_active(context, site).
 
 // ══ Rounding halves ═════════════════════════════════════════════════
 //
