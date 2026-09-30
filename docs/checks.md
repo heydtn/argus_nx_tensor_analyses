@@ -319,7 +319,8 @@ or root inside a `custom_grad`.
 
 A list or keyword list passed as an argument itself is not checked, as Nx
 takes it as it is, and a `defn` called while Nx traces traverses nothing.
-A struct or container is known only where the code builds it.
+A struct or container is known only where the code builds it or writes
+it as a literal.
 
 ### Randomness and spent values
 

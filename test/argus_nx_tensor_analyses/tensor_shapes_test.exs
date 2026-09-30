@@ -1798,7 +1798,31 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :finite}, "Nx.tensor([65519.0], type: :f8)"},
     {{:finds, {"tensor_type_error", "literal_flushes", "1.52e-5 as f8"}, :finite},
      "Nx.tensor([1.52e-5], type: :f8)"},
-    {{:finds_none, :finite}, "Nx.tensor([1.523e-5], type: :f8)"}
+    {{:finds_none, :finite}, "Nx.tensor([1.523e-5], type: :f8)"},
+    # a map the compiler keeps as one literal, read by key or field
+    {{:finds, {"tensor_type_error", "invalid_type", ":float32"}, :raises},
+     "Nx.iota({2}, type: Map.get(%{type: :float32}, :type))"},
+    {{:finds_none, :accepted}, "Nx.iota({2}, type: Map.get(%{type: :f32}, :type))"},
+    {{:finds, {"tensor_type_error", "invalid_type", ":float32"}, :raises},
+     "Nx.iota({2}, type: Map.get(%{\"name\" => \"x\", :type => :float32}, :type))"},
+    {{:finds, {"tensor_type_error", "invalid_type", ":float32"}, :raises},
+     "config = %{type: :float32, size: 1}\nconfig = %{config | size: Nx.size(t)}\nNx.iota({2}, type: config.type)"},
+    {{:finds, {"tensor_call_error", "option_form", "axes: 0"}, :raises},
+     "call_with(fn options -> Nx.sum(Nx.iota({2, 2}), axes: Map.get(options, :axes)) end, %{axes: 0})"},
+    {{:finds_none, :accepted},
+     "call_with(fn options -> Nx.sum(Nx.iota({2, 2}), axes: Map.get(options, :axes)) end, %{axes: [0]})"},
+    {{:finds, {"tensor_call_error", "option_form", "axes: 0"}, :raises},
+     "Nx.sum(Nx.iota({2, 2}), axes: Map.get(%{axes: 0}, :axes))"},
+    {{:finds_none, :accepted}, "Nx.sum(Nx.iota({2, 2}), axes: Map.get(%{axes: [0]}, :axes))"},
+    {{:finds, {"tensor_call_error", "literal_underflow", "1.0e-12 f16"}, :finite},
+     "Nx.add(Nx.f16([0.0]), Map.get(%{eps: 1.0e-12}, :eps))"},
+    # a literal map or tuple handed to a jitted function
+    {{:finds, {"tensor_call_error", "container_leaf", "nil at argument 1.bias"}, :raises},
+     "Nx.Defn.jit(fn m -> m.scale end).(%{scale: 2.0, bias: nil})"},
+    {{:finds_none, :accepted}, "Nx.Defn.jit(fn m -> m.scale end).(%{scale: 2.0, bias: 0.0})"},
+    {{:finds, {"tensor_call_error", "container_leaf", "nil at argument 1{1}"}, :raises},
+     "Nx.Defn.jit(fn {a, _b} -> a end).({2.0, nil})"},
+    {{:finds_none, :accepted}, "Nx.Defn.jit(fn {a, _b} -> a end).({2.0, 1.0})"}
   ]
 
   @literal_fixtures ArgusNxTensorAnalyses.TensorShapesTest.LiteralFixtures

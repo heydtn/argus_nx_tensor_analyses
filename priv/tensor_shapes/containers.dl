@@ -28,7 +28,8 @@
 //
 // Which way they err: a struct is known only where the code builds it
 // (`%S{...}`, or an update of one it builds), and a container only where
-// the code builds it, so a value the rules cannot follow gives no finding;
+// the code builds it or writes it as a literal (a tuple, or a map that is
+// no struct), so a value the rules cannot follow gives no finding;
 // nor does a call from a function a `defn`'s body may call, which is taken
 // to run while the `defn` is traced (quiet). A `grad`'s function that
 // reads a value it captures only for its shape is reported all the same
@@ -393,6 +394,31 @@ traversed_value(context, site, root, cat(path, suffix), object, selector, value)
   held(object_context, builder, kind, source, value).
 .plan 1:(2,1,3,4,5), 2:(5,4,2,1,3)
 
+// A literal term a call hands `defn`, at `path` from the argument `root`,
+// and where it sits: at a field of a term the code builds (`object`,
+// `selector`), or as the argument itself (`object` the literal, `selector`
+// "").
+.decl held_term(context: Context, site: symbol, root: symbol, path: symbol, object: symbol, selector: symbol, text: symbol, start: number)
+held_term(context, site, root, "", text, "", text, start) :-
+  defn_argument(context, site, root, $Term(text, start)).
+held_term(context, site, root, path, object, selector, text, start) :-
+  traversed_value(context, site, root, path, object, selector, $Term(text, start)),
+  strlen(path) <= 96.
+
+// The values Nx traverses in such a term, where the term sits: every
+// element of a tuple, and every value of a map that is no struct.
+traversed_value(context, site, root, cat(path, "{", to_string(index), "}"), object, selector, value) :-
+  held_term(context, site, root, path, object, selector, text, start),
+  term_tuple(text, start),
+  term_child(text, start, index, child),
+  term_value(text, child, value).
+traversed_value(context, site, root, cat(path, ".", key), object, selector, value) :-
+  held_term(context, site, root, path, object, selector, text, start),
+  term_map(text, start),
+  !term_keyword(text, start, "__struct__", _),
+  term_keyword(text, start, key, found),
+  term_value(text, found, value).
+
 // A term a call hands `defn`, or that one holds, whose kind as a container
 // the rules ask.
 .decl container_demand(object: symbol)
@@ -505,6 +531,11 @@ sole_part(site, inner) :-
   traverses(object, selector),
   flow_field(_, object, selector, "object", inner),
   1 = count : { flow_field(_, object, selector, _, _) }.
+// ... or a literal the call is handed as the only value of an argument.
+sole_part(site, text) :-
+  defn_call(site, caller),
+  flow_argument(site, caller, position, "literal", text),
+  1 = count : { flow_argument(site, caller, position, _, _) }.
 
 // A cell of the list a call hands `defn` the entries of, which every path
 // to the call hands it.

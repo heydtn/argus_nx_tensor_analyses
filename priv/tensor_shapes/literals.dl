@@ -22,9 +22,8 @@
 // compared by its spelling (digit strings of one length compare as their
 // numbers do), and a float by patterns over its spelling. Errs quiet: a
 // value the rules do not hold as a term is not checked (one read at run
-// time, or from a map the compiler keeps as a literal, which the term
-// parser does not read), and a float within a few parts in ten million
-// of a type's limit is taken to fit.
+// time), and a float within a few parts in ten million of a type's limit
+// is taken to fit.
 
 // ══ Reported ════════════════════════════════════════════════════════
 

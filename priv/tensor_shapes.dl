@@ -1661,13 +1661,13 @@ literal_source(function, text) :- flow_return(function, _, "literal", text).
 literal_source(function, text) :- flow_base(function, _, "literal", text).
 literal_source(function, text) :- flow_load(function, _, _, "literal", text).
 
-// The literals the term parser reads: those a shape, an option or a
-// module can be written in, not strings, maps or funs.
+// The literals the term parser reads: those a shape, an option, a map or
+// a module can be written in, not strings or funs.
 .decl literal_text(text: symbol)
 literal_text(text) :-
   literal_source(_, text),
   strlen(text) <= 4096,
-  match("[\\[{:0-9~A-Za-z-].*", text),
+  match("[\\[{%:0-9~A-Za-z-].*", text),
   !contains("...", text),
   !contains("<<", text).
 
@@ -1789,6 +1789,12 @@ field_value($Term(text, start), selector, value) :-
   term_tuple(text, start),
   term_child(text, start, index, child),
   term_value(text, child, value).
+field_value($Term(text, start), selector, value) :-
+  field_demand($Term(text, start), selector),
+  term_map(text, start),
+  term_keyword(text, start, key, found),
+  selector = cat(":", key),
+  term_value(text, found, value).
 field_value($Term(text, start), "head", value) :-
   field_demand($Term(text, start), "head"),
   term_list(text, start),
@@ -2724,11 +2730,13 @@ nx_members("argument", "first_operand", " Nx.axis_size/2:0 Nx.rank/1:0 Nx.size/1
 
 // ══ Literal terms ═══════════════════════════════════════════════════
 //
-// The literals shapes, axes and options are written in, parsed from their
-// spelling. A term is identified by the literal it is in and the position
-// it starts at. A scan over each literal tracks the bracket depth and
-// whether it is inside a quoted string, so the separators of a list are
-// the commas at its own depth.
+// The literals shapes, axes, options and maps are written in, parsed from
+// their spelling. A term is identified by the literal it is in and the
+// position it starts at. A scan over each literal tracks the bracket depth
+// and whether it is inside a quoted string, so the separators of a list
+// are the commas at its own depth. A map, `%{...}` (a struct is spelled as
+// one, with its `__struct__`), opens at its brace, and its elements are
+// pairs whose keys and values are terms.
 
 .decl character(text: symbol, position: number, glyph: symbol)
 character(text, position, substr(text, position, 1)) :-
@@ -2836,7 +2844,22 @@ element(text, open, index, start, close) :-
   container(text, open, close),
   !later_separator(text, open, start).
 
-// A keyword list's element `key: value`, the value starting at `value`.
+// A map's element `key => value`, its key ending at `key_end` and its
+// value starting at `value`: `inspect/1` writes every key of a map so
+// where one is no atom.
+.decl arrow_pair(text: symbol, start: number, key_end: number, value: number)
+arrow_pair(text, start, arrow - 1, arrow + 3) :-
+  element(text, open, _, start, end),
+  character(text, open - 1, "%"),
+  bracket_open(text, open, depth),
+  character(text, arrow, "="),
+  arrow > start,
+  arrow < end,
+  substr(text, arrow - 1, 4) = " => ",
+  scan(text, arrow, depth + 1, "code").
+
+// A keyword list's or map's element `key: value`, the value starting at
+// `value`.
 .decl keyword_pair(text: symbol, start: number, key: symbol, value: number)
 keyword_pair(text, start, key, colon + 2) :-
   element(text, _, _, start, end),
@@ -2849,10 +2872,15 @@ keyword_pair(text, start, key, colon + 2) :-
 term(text, 0, strlen(text)) :- literal_text(text).
 term(text, start, end) :-
   element(text, _, _, start, end),
-  !keyword_pair(text, start, _, _).
+  !keyword_pair(text, start, _, _),
+  !arrow_pair(text, start, _, _).
 term(text, value, end) :-
   element(text, _, _, start, end),
   keyword_pair(text, start, _, value).
+term(text, start, key_end) :- arrow_pair(text, start, key_end, _).
+term(text, value, end) :-
+  element(text, _, _, start, end),
+  arrow_pair(text, start, _, value).
 
 .decl term_spelling(text: symbol, start: number, spelling: symbol)
 term_spelling(text, start, substr(text, start, end - start)) :- term(text, start, end).
@@ -2862,6 +2890,9 @@ term_list(text, start) :- term(text, start, _), character(text, start, "[").
 
 .decl term_tuple(text: symbol, start: number)
 term_tuple(text, start) :- term(text, start, _), character(text, start, "{").
+
+.decl term_map(text: symbol, start: number)
+term_map(text, start) :- term(text, start, _), character(text, start, "%"), character(text, start + 1, "{").
 
 // An integer, where it fits a Souffle number, which is an s32: nine
 // digits always do, and ten where they are within s32's bounds (digit
@@ -2944,11 +2975,22 @@ term_child(text, start, index, child) :-
   element(text, start, index, child, _),
   !keyword_pair(text, child, _, _).
 
+// A keyword list's or map's value under an atom key, by the key's name.
 .decl term_keyword(text: symbol, start: number, key: symbol, value: number)
 term_keyword(text, start, key, value) :-
   term_list(text, start),
   element(text, start, _, pair, _),
   keyword_pair(text, pair, key, value).
+term_keyword(text, start, key, value) :-
+  term_map(text, start),
+  element(text, start + 1, _, pair, _),
+  keyword_pair(text, pair, key, value).
+term_keyword(text, start, substr(atom, 1, strlen(atom) - 1), value) :-
+  term_map(text, start),
+  element(text, start + 1, _, pair, _),
+  arrow_pair(text, pair, _, value),
+  term_atom(text, pair, atom),
+  match(":.*", atom).
 
 .decl term_element_integer(text: symbol, start: number, index: number, value: number)
 term_element_integer(text, start, index, value) :-
@@ -3381,6 +3423,7 @@ site_options_known(site) :-
 .decl option(site: symbol, key: symbol, text: symbol, value: number)
 option(site, key, text, value) :-
   options_source(site, _, "literal", text),
+  term_list(text, 0),
   term_keyword(text, 0, key, value).
 option(site, key, text, 0) :-
   option_pair(site, key, _, "literal", text),
