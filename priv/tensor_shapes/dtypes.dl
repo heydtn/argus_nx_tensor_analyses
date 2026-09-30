@@ -83,16 +83,19 @@ call_error(site, "integer_determinant", type, origin) :-
 call_error(site, "f32_precision", "f64", "") :-
   f32_precision(_, site).
 
-nonfinite(site, "literal_overflow", cat(type, " ", number), "") :-
-  literal_overflow(_, site, type, number).
-nonfinite(site, "cast_overflow", type, origin) :- cast_overflow(_, site, type, origin).
-nonfinite(site, "float_sum_overflow", cat(type, " ", counted), "") :-
-  float_sum_overflow(_, site, type, counted).
+nonfinite(site, "literal_overflow", cat(types, " ", number), "") :-
+  types_joined(site, "literal_overflow", -1, number, "", _, types).
+nonfinite(site, "cast_overflow", types, origin) :-
+  types_joined(site, "cast_overflow", -1, "", origin, _, types).
+nonfinite(site, "float_sum_overflow", cat(types, " ", counted), "") :-
+  types_joined(site, "float_sum_overflow", -1, counted, "", _, types).
 nonfinite(site, "unsigned_logsumexp", type, origin) :-
   unsigned_logsumexp(_, site, type, origin).
 
-type_error(site, kind, cat(from, " ", to), position, 0, origin) :-
-  type_meeting(site, kind, position, from, to, origin).
+type_error(site, "upcast", cat(types, " ", to), position, 0, origin) :-
+  types_joined(site, "upcast", position, to, origin, _, types).
+type_error(site, "narrowing_merge", cat(types, " ", to), position, 0, origin) :-
+  types_joined(site, "narrowing_merge", position, to, origin, _, types).
 
 // A check a call breaks in a type, at the argument at `position` (-1 for
 // none) and by the rest of what its finding says (`rest`): a row for each
@@ -103,6 +106,12 @@ breaks_in(site, "sequence_precision", -1, counted, origin, type) :-
   sequence_precision(_, site, type, counted, origin).
 breaks_in(site, "complex_to_real", -1, from, origin, to) :- drops_imaginary_part(_, site, from, to, origin).
 breaks_in(site, "literal_underflow", -1, number, "", type) :- literal_underflow(_, site, number, type).
+breaks_in(site, "literal_overflow", -1, number, "", type) :- literal_overflow(_, site, type, number).
+breaks_in(site, "cast_overflow", -1, "", origin, type) :- cast_overflow(_, site, type, origin).
+breaks_in(site, "float_sum_overflow", -1, counted, "", type) :- float_sum_overflow(_, site, type, counted).
+breaks_in(site, "upcast", position, to, origin, from) :- upcast(_, site, position, from, to, origin).
+breaks_in(site, "narrowing_merge", position, to, origin, from) :-
+  narrowing_merge(_, site, position, from, to, origin).
 
 // Every type a check breaks at a call, joined by "/" in the order Nx's
 // types are listed in (`type_order`), the last of rank `last`. They are
@@ -134,12 +143,6 @@ next_breaking(site, kind, position, rest, origin, rank, next, type) :-
 .decl type_order(type: symbol, rank: number)
 type_order(type, size * 16 + reach) :- float_format(type, _, size, _, reach, _).
 type_order(type, size * 16 + 8 + rank) :- nx_dtype(type, family, size, "integer"), family_rank(family, rank).
-
-// The type findings: an upcast, a narrowing merge.
-.decl type_meeting(site: symbol, kind: symbol, position: number, from: symbol, to: symbol, origin: symbol)
-type_meeting(site, "upcast", position, from, to, origin) :- upcast(_, site, position, from, to, origin).
-type_meeting(site, "narrowing_merge", position, from, to, origin) :-
-  narrowing_merge(_, site, position, from, to, origin).
 
 // ── Wraparound ─────────────────────────────────────────────────────
 

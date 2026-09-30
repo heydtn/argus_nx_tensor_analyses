@@ -48,8 +48,9 @@ values through the program to where they meet. The EMLX analysis,
   number meets a tensor as `merge_number/2` has it. A type the code reads
   from configuration is checked as each float type the project lists
   (`float_types:`), and a call that breaks a check in several of them is
-  reported once, naming each. A tensor whose type the code does not show
-  has none, and nothing is reported of it.
+  reported once, naming each: once for each operand, for a type error, and
+  once for each type, for a pad value of another type. A tensor whose type
+  the code does not show has none, and nothing is reported of it.
 - **Traced code is known.** The rules follow which code Nx traces rather
   than runs: `defn` bodies and what they reach, and funs handed to
   `Nx.Defn.jit`, `jit_apply`, `compile`, `grad` and `value_and_grad`, or

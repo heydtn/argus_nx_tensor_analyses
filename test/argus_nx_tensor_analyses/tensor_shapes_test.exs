@@ -2979,6 +2979,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_type_error", "narrowing_merge", "f16 f8_e4m3fn"}, :accepted},
      "Nx.add(Nx.tensor([1], type: :f8_e4m3fn), Nx.f16([1]))"},
     {{:finds_none, :accepted}, "Nx.add(Nx.f16([1]), Nx.tensor([1], type: :f8_e4m3fn))"},
+    # an operand of one type on one path and another on another: one
+    # finding, naming both
+    {{:finds, {"tensor_type_error", "upcast", "f16/bf16 f32"}, :accepted},
+     "x = if config.a > 0, do: Nx.bf16([1]), else: Nx.f16([1])\nNx.multiply(x, Nx.Constants.pi())"},
+    {{:finds, {"tensor_nonfinite_result", "literal_overflow", "f16/bf16 -1.0e39"}, :nonfinite},
+     "x = if config.a > 0, do: Nx.bf16([1]), else: Nx.f16([1])\nNx.add(x, -1.0e39)"},
+    {{:finds_none, :finite},
+     "x = if config.a > 0, do: Nx.bf16([1]), else: Nx.f16([1])\nNx.add(x, -6.0e4)"},
     # a pad value of another type than the tensor
     {{:finds, {"tensor_call_error", "pad_type_mismatch", "s32 f32"}, :accepted},
      "Nx.pad(Nx.tensor([1]), 0.5, [{1, 0, 0}])"},
@@ -3052,6 +3060,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     def written_bf16(x), do: Nx.add(Nx.as_type(x, :bf16), -1.0e9)
     def real_part(x, type), do: Nx.as_type(Nx.as_type(x, :c64), type)
     def tiny_epsilon(x, type), do: Nx.add(Nx.as_type(x, type), 1.0e-46)
+    def huge_mask(x, type), do: Nx.add(Nx.as_type(x, type), -1.0e39)
+    def held_mask(x, type), do: Nx.add(Nx.as_type(x, type), -6.0e4)
   end
   """
 
@@ -5037,11 +5047,17 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
       {"tensor_nonfinite_result", "literal_overflow", "f16 -1.0e9"}
     )
 
-    assert_finding(findings.(:scaled), {"tensor_type_error", "upcast", "bf16 f32"})
-    assert_finding(findings.(:scaled), {"tensor_type_error", "upcast", "f16 f32"})
     assert findings.(:same_type) == []
 
     # one finding for a call, naming each float type that breaks it
+    assert findings.(:scaled) == [{"tensor_type_error", "upcast", "f16/bf16 f32"}]
+
+    assert findings.(:huge_mask) == [
+             {"tensor_nonfinite_result", "literal_overflow", "f16/bf16/f32 -1.0e39"}
+           ]
+
+    assert findings.(:held_mask) == []
+
     assert findings.(:positions) == [
              {"tensor_call_error", "sequence_precision", "f16/bf16 arg0"}
            ]
@@ -5065,7 +5081,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert findings.(:written_bf16) == []
 
     # without them, a type read from configuration is not known
-    for function <- [:masked, :scaled, :positions, :against_f16, :normalized],
+    for function <- [:masked, :scaled, :positions, :against_f16, :normalized, :huge_mask],
         do: assert(dtypes_findings(rows, @dtypes_configured, function) == [])
   end
 
