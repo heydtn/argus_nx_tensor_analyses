@@ -142,8 +142,8 @@ holds(function, "param", to_string(position), "expression", "") :-
 
 // A tensor traced code makes of no tensor, with the default backend,
 // which is expressions' while Nx traces: `Nx.tensor/1,2` and its
-// shorthands, and the calls that make one of a shape or a seed but
-// `Nx.from_binary`.
+// shorthands, and the calls that make one of a binary, a shape or a
+// seed.
 holds(function, "result", site, "expression", "") :-
   held_asked(function, "result", site, "expression"),
   operation_site(site, operation, arity),
@@ -152,8 +152,7 @@ holds(function, "result", site, "expression", "") :-
   held_asked(function, "result", site, "expression"),
   operation_site(site, operation, _),
   nx_trait(operation, "creates"),
-  operation != "Nx.tensor",
-  operation != "Nx.from_binary".
+  operation != "Nx.tensor".
 
 // An Nx call's result where an operand is an expression, a leaf of a
 // container of them, or a written number, which Nx makes an expression.
