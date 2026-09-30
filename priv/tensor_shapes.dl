@@ -358,25 +358,15 @@ remote_literal_tail(site, caller, offset, text) :-
   list_rest(list, offset, text),
   term_list(text, 0).
 
-// An argument written in that literal tail.
-.decl remote_literal_argument(site: symbol, caller: symbol, index: number, text: symbol, start: number)
-remote_literal_argument(site, caller, offset + element, text, child) :-
-  remote_literal_tail(site, caller, offset, text),
-  term_child(text, 0, element, child).
-
-.decl remote_arity(site: symbol, caller: symbol, arity: number)
-remote_arity(site, caller, offset + length) :-
-  remote_literal_tail(site, caller, offset, text),
-  term_length(text, 0, length).
-
 .decl remote_defn(site: symbol, caller: symbol, callee: symbol)
 remote_defn(site, caller, callee) :-
   remote_defn_site(site, caller),
   flow_argument(site, caller, 0, "literal", module),
   flow_argument(site, caller, 2, "literal", spelled),
   match(":\".*\"", spelled),
-  remote_arity(site, caller, arity),
-  function_def(callee, module, substr(spelled, 2, strlen(spelled) - 3), arity, _).
+  remote_literal_tail(site, caller, offset, text),
+  term_length(text, 0, length),
+  function_def(callee, module, substr(spelled, 2, strlen(spelled) - 3), offset + length, _).
 
 // `Nx.Defn.Expr.defn_cond/2` runs the closures of a `defn`'s `cond` or
 // `if`, one per branch.
@@ -388,9 +378,6 @@ runs_branches(site) :- remote_call(site, _, "Nx.Defn.Expr", "defn_cond", 2).
 // `__defn:name__`: Argus's backward reach over its call graph, and over
 // the calls that graph does not see, which run an implementation of a
 // protocol or another module's `defn`.
-.decl tensor_function(function: symbol)
-tensor_function(function) :- tensor_reach.reaches(function).
-
 .init tensor_reach = CallReachSet
 tensor_reach.seed(function) :-
   remote_call(_, function, module, _, _),
@@ -597,7 +584,7 @@ in_set(set, class) :- nx_members("set", set, classes), contains(cat(" ", class, 
 // The function is analyzed in the context: every function that handles
 // tensors over its own names, and every function a call runs.
 .decl active(context: Context, function: symbol)
-active(context, function) :- tensor_function(function), own_context(function, context).
+active(context, function) :- tensor_reach.reaches(function), own_context(function, context).
 active(callee_context, callee) :- invocation(_, _, callee, callee_context).
 
 // The function's canonical context over its own names: where a finding
@@ -1038,10 +1025,11 @@ call_argument(context, site, callee, position, value) :-
   remote_argument(site, caller, position, kind, source),
   value_of(context, caller, kind, source, value).
 .plan 1:(4,3,1,2)
-call_argument(context, site, callee, position, value) :-
+call_argument(context, site, callee, offset + element, value) :-
   site_active(context, site),
   remote_defn(site, caller, callee),
-  remote_literal_argument(site, caller, position, text, start),
+  remote_literal_tail(site, caller, offset, text),
+  term_child(text, 0, element, start),
   term_value(text, start, value).
 call_argument(context, site, callee, position, value) :-
   calls_closure(context, site, callee, $Object(object_context, object, mapping)),
@@ -3439,9 +3427,6 @@ shape_slot(operation, arity, 2, position) :- nx_argument(operation, arity, posit
 slot_used(operation, arity, slot) :- operand_slot(operation, arity, slot, _).
 slot_used(operation, arity, slot) :- shape_slot(operation, arity, slot, _).
 
-.decl slotted_site(site: symbol)
-slotted_site(site) :- operation_site(site, operation, arity), slot_used(operation, arity, _).
-
 .decl slot_value(context: Context, site: symbol, slot: number, vectorized: VectorizedAxes, axes: Axes)
 slot_value(context, site, slot, vectorized, axes) :-
   argument_tensor(context, site, position, [vectorized, axes]),
@@ -3453,8 +3438,8 @@ slot_value(context, site, slot, nil, axes) :-
   shape_slot(operation, arity, slot, position).
 slot_value(context, site, slot, nil, nil) :-
   site_active(context, site),
-  slotted_site(site),
   operation_site(site, operation, arity),
+  slot_used(operation, arity, _),
   slot = range(1, 4),
   !slot_used(operation, arity, slot).
 
@@ -7751,7 +7736,7 @@ revectorize_inner(site, first, inner) :-
   site_instance(site, "Nx.revectorize", _, [first, _, _]),
   option(site, "target_shape", text, start),
   shape_term(text, start, shape),
-  target_named(site, shape, inner).
+  target_named_from(site, shape, 0, inner).
 
 // The target shape named by `:target_names`, or with no names.
 .decl target_named_demand(site: symbol, axes: Axes, index: number)
@@ -7768,9 +7753,6 @@ target_named_from(site, [size, own, rest], index, [size, name, named]) :-
   target_named_demand(site, [size, own, rest], index),
   ( option_absent(site, "target_names"), name = own
   ; option(site, "target_names", text, start), term_element_atom(text, start, index, name) ).
-
-.decl target_named(site: symbol, axes: Axes, named: Axes)
-target_named(site, shape, named) :- target_named_from(site, shape, 0, named).
 
 .decl revectorize_combined_from(site: symbol, axes: Axes, index: number, combined: Axes)
 revectorize_combined_from(site, first, vectorized_count, inner) :-
@@ -8906,14 +8888,6 @@ may_have_sign(context, function, kind, source, sign, origin, cause) :-
   arrives_from(context, function, kind, source, from_context, from_function, from_kind, from_source),
   sign_demand(context, function, kind, source).
 
-// A call of the program that runs a function in its canonical context,
-// for a function the program enters only through its calls.
-.decl canonical_entry(caller: Context, site: symbol, caller_function: symbol, function: symbol, arguments: Arguments)
-canonical_entry(caller, site, caller_function, function, arguments) :-
-  invocation(caller, site, function, $Canonical(function, arguments)),
-  program_call(site, caller_function, function),
-  !entered_from_outside(function).
-
 // A value in a context made, across a call, of a value in another: a
 // call's result of what the function it runs returns there, a parameter
 // of a canonical context the program enters only through its calls of
@@ -8930,7 +8904,9 @@ arrives_from(context, function, "result", site, callee_context, callee, kind, so
   flow_return(callee, at, kind, source),
   feasible(callee_context, at).
 arrives_from($Canonical(function, arguments), function, "param", to_string(position), caller, caller_function, kind, source) :-
-  canonical_entry(caller, site, caller_function, function, arguments),
+  invocation(caller, site, function, $Canonical(function, arguments)),
+  program_call(site, caller_function, function),
+  !entered_from_outside(function),
   flow_argument(site, caller_function, position, kind, source).
 arrives_from($Called(site, caller), callee, "param", to_string(position), caller, caller_function, kind, source) :-
   invocation(caller, site, callee, $Called(site, caller)),
@@ -10220,8 +10196,7 @@ certainty(context, site, "on_some_path") :-
   combinations(context, site, _),
   !certain_context(context).
 
-// The contexts a finding's context is entered from, a few calls up, and
-// the calls that enter them.
+// The contexts a finding's context is entered from, a few calls up.
 .decl entered_from(origin: Context, context: Context, depth: number)
 entered_from(context, context, 0) :- finding_at(context, _).
 entered_from(origin, base, depth) :- entered_from(origin, fork, depth), fork_of(fork, base, _).
@@ -10229,9 +10204,6 @@ entered_from(origin, caller, depth + 1) :-
   entered_from(origin, context, depth),
   depth < 4,
   invocation(caller, _, _, context).
-
-.decl context_call(context: Context, call: symbol)
-context_call(origin, call) :- entered_from(origin, context, _), invocation(_, call, _, context).
 
 // A call Nx rejects for its operand's type, or that makes a tensor of a
 // type the backend does not support: `kind` names what goes wrong (the
@@ -10384,7 +10356,8 @@ finding_frame(context, site, cat("1", to_string(position)), origin, function, ho
   !operand_shown(context, site, position, _).
 finding_frame(context, site, "2", call, caller, "call", callee, -1, "") :-
   finding_at(context, site),
-  context_call(context, call),
+  entered_from(context, entered, _),
+  invocation(_, call, _, entered),
   site_function(call, caller),
   invocation(_, call, callee, _).
 
