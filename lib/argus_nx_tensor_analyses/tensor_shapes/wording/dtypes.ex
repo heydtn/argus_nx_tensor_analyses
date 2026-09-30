@@ -290,15 +290,17 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     }
   end
 
-  # A number past the largest finite value of the tensor's own type.
-  defp overflow_in_type(number, type) do
+  # A number past the largest finite value of the tensor's own types.
+  defp overflow_in_type(number, names) do
+    type = join(names, "or")
+
     %{
       title: "makes #{number} infinite in #{type}",
       detail:
-        "The number #{number} is past #{type}'s largest finite value#{largest(type)}, and " <>
-          "the tensor it meets is #{type}, which keeps its type: the number becomes infinite " <>
-          "there, so a -1.0e9 mask gives -Inf, and a softmax over it NaN.",
-      label: "#{number} becomes an infinity in #{type}#{largest(type, "largest ")}",
+        "The number #{number} is past #{largest_value(names)}, and the tensor it meets is " <>
+          "#{type}, which keeps its type: the number becomes infinite there, so a -1.0e9 mask " <>
+          "gives -Inf, and a softmax over it NaN.",
+      label: "#{number} becomes an infinity in #{with_largest(names)}",
       help:
         "use a number the type holds, such as Nx.Constants.min_finite(Nx.type(x)), or compute in f32",
       frame: "",
@@ -308,7 +310,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
 
   # A number Nx makes an f32, which makes it infinite, before it meets a
   # tensor of a type that would have held it.
-  defp overflow_before_meeting(number, type) do
+  defp overflow_before_meeting(number, [name | _rest] = names) do
+    type = join(names, "or")
+
     %{
       title: "makes #{number} infinite in f32 before it meets #{type}",
       detail:
@@ -318,48 +322,56 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
           "have held it.",
       label: "#{number} is infinite in f32, before it meets #{type}",
       help:
-        "make the number a tensor of the other's type first, as in Nx.tensor(#{number}, type: :#{type}), or compute it in a defn, where it keeps the merged type",
+        "make the number a tensor of the other's type first, as in Nx.tensor(#{number}, type: :#{name}), or compute it in a defn, where it keeps the merged type",
       frame: "",
       severity: :warning
     }
   end
 
   @impl true
-  # A written number past the float type it is made (`f16 -1.0e9`), or
+  # A written number past each float type it is made (`f16 -1.0e9`), or
   # past f32, which Nx makes it before it meets a wider type (`f64 1.0e39`).
   def hazard("literal_overflow", cause, _operation) do
-    [type, number] = String.split(cause, " ")
+    [types, number] = String.split(cause, " ")
+    names = String.split(types, "/")
 
-    if type in @wider_than_f32,
-      do: overflow_before_meeting(number, type),
-      else: overflow_in_type(number, type)
+    if Enum.all?(names, &(&1 in @wider_than_f32)),
+      do: overflow_before_meeting(number, names),
+      else: overflow_in_type(number, names)
   end
 
-  def hazard("cast_overflow", type, _operation) do
+  def hazard("cast_overflow", types, _operation) do
+    [name | _rest] = names = String.split(types, "/")
+    type = join(names, "or")
+    {infinite_in, past} = beyond_largest(names)
+
     %{
       title: "makes a value infinite in #{type}",
       detail:
-        "The value made #{type} holds a number past #{type}'s largest finite value" <>
-          "#{largest(type)}: it becomes infinite (-1.0e9, or Nx.Constants.min_finite(:f32), " <>
-          "is -Inf in f16), and a fully masked softmax row over it NaN.",
-      label: "a number #{past_largest(type)} is infinite in #{type}",
+        "The value made #{type} holds a number past #{largest_value(names)}: it becomes " <>
+          "infinite (-1.0e9, or Nx.Constants.min_finite(:f32), is -Inf in f16), and a fully " <>
+          "masked softmax row over it NaN.",
+      label: "a number #{past} is infinite in #{infinite_in}",
       help:
-        "make the value in the target type, as with Nx.Constants.min_finite(:#{type}), or clip it into range first",
-      frame: "makes a number past #{type}'s range:",
+        "make the value in the target type, as with Nx.Constants.min_finite(:#{name}), or clip it into range first",
+      frame: "makes a number past #{range_of(names)}:",
       severity: :warning
     }
   end
 
   def hazard("float_sum_overflow", cause, _operation) do
-    [type, length] = String.split(cause, " ", parts: 2)
+    [types, length] = String.split(cause, " ", parts: 2)
+    names = String.split(types, "/")
+    type = join(names, "or")
+    {summed_in, past} = beyond_largest(names)
 
     %{
       title: "sums more values than #{type} holds the total of",
       detail:
         "It sums #{elements(length)} in #{type}, which Nx keeps for the sums, means and " <>
-          "variances of floats: a sum of values near 1 passes #{type}'s largest finite value" <>
-          "#{largest(type)} and is infinite.",
-      label: "#{sums(length)} in #{type}, where a sum of ones goes #{past_largest(type)}",
+          "variances of floats: a sum of values near 1 passes #{largest_value(names)} and is " <>
+          "infinite.",
+      label: "#{sums(length)} in #{summed_in}, where a sum of ones goes #{past}",
       help: "sum in f32, as in Nx.sum(Nx.as_type(t, :f32)), and convert the result back",
       frame: "",
       severity: written_severity(length)
@@ -383,7 +395,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
 
   @impl true
   def type_error("upcast", subject, operation, _position, _certain) do
-    [from, to] = String.split(subject, " ")
+    [types, to] = String.split(subject, " ")
+    from = types |> String.split("/") |> join("or")
 
     %{
       title: "turns #{article(from)} #{from} operand into #{to}",
@@ -396,13 +409,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def type_error("narrowing_merge", subject, _operation, _position, _certain) do
-    [from, to] = String.split(subject, " ")
+    [types, to] = String.split(subject, " ")
+    names = String.split(types, "/")
+    from = join(names, "or")
 
     %{
       title: "merges #{article(from)} #{from} operand into #{to}, which holds less",
       detail:
         "Nx.Type.merge/2 takes #{to} for these operands, which has a smaller range or fewer " <>
-          "significand bits than #{from}#{narrowing_example(from, to)}.",
+          "significand bits than #{from}#{narrowing_example(names, to)}.",
       label: "#{from} becomes #{to}",
       help:
         "convert both operands to a type that holds either (f32, or s64 for integers) before they meet",
@@ -473,9 +488,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   defp base_logarithm("Nx.log10"), do: "ln 10"
   defp base_logarithm(_name), do: "the base's logarithm"
 
-  defp narrowing_example("u64", _to), do: ": a u64 past 2^63 turns negative in s64"
-  defp narrowing_example("bf16", "f16"), do: ": a bf16 past 65504 becomes infinite in f16"
-  defp narrowing_example(_from, _to), do: ""
+  # What a merge into `to` loses, for the first of the types that has an
+  # example.
+  defp narrowing_example(names, to), do: Enum.find_value(names, "", &narrowing_loss(&1, to))
+
+  defp narrowing_loss("u64", _to), do: ": a u64 past 2^63 turns negative in s64"
+  defp narrowing_loss("bf16", "f16"), do: ": a bf16 past 65504 becomes infinite in f16"
+  defp narrowing_loss(_from, _to), do: nil
 
   defp wraparound_detail("Nx.diff", type),
     do:
@@ -602,6 +621,27 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       :error -> "past #{type}'s largest value"
     end
   end
+
+  # The largest finite value of the types a finding names: f16's (65504),
+  # or, of several, that of each: f16 (65504), bf16 or f32.
+  defp largest_value([type]), do: "#{type}'s largest finite value#{largest(type)}"
+
+  defp largest_value(names),
+    do: "the largest finite value of #{names |> Enum.map(&"#{&1}#{largest(&1)}") |> join("or")}"
+
+  # Types as a label names them, each low-range one with its largest
+  # finite value: f16 (largest 65504), bf16 or f32.
+  defp with_largest(names),
+    do: names |> Enum.map(&"#{&1}#{largest(&1, "largest ")}") |> join("or")
+
+  # What a label says a value is infinite in, and past what: f16, past
+  # 65504; or f16 (largest 65504) or bf16, past the type's largest value.
+  defp beyond_largest([type]), do: {type, past_largest(type)}
+  defp beyond_largest(names), do: {with_largest(names), "past the type's largest value"}
+
+  # The range of the types a finding names: f16's, or that of f16 or bf16.
+  defp range_of([type]), do: "#{type}'s range"
+  defp range_of(names), do: "the range of #{join(names, "or")}"
 
   # A low-range float type's largest finite value, in parentheses after
   # `prefix`, and nothing for another type.

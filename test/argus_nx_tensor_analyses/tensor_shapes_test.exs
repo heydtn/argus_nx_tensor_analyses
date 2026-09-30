@@ -5068,8 +5068,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
              {"tensor_call_error", "literal_underflow", "1.0e-46 f16/bf16/f32"}
            ]
 
-    titles = Enum.map(Argus.Findings.build(TensorShapes, float_rows), & &1.title)
+    found = Argus.Findings.build(TensorShapes, float_rows)
+    titles = Enum.map(found, & &1.title)
     assert "Nx.multiply/2 counts past what f16 or bf16 holds exactly" in titles
+    assert "Nx.multiply/2 turns an f16 or bf16 operand into f32" in titles
+
+    huge = Enum.find(found, &(&1.title == "Nx.add/2 makes -1.0e39 infinite in f16, bf16 or f32"))
+    assert huge.at_label == "-1.0e39 becomes an infinity in f16 (largest 65504), bf16 or f32"
 
     assert_finding(findings.(:against_f16), {"tensor_type_error", "narrowing_merge", "bf16 f16"})
 
