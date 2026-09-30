@@ -61,8 +61,8 @@ handed, whose contents the analysis cannot see. `key` is a random key.
 | `indexed` | error | Indices or updates of an indexed update that do not fit the tensor. | `Nx.indexed_add(Nx.iota({3}), Nx.iota({2, 1}), Nx.iota({3}))` |
 | `take_along_axis` | error | Indices that differ from the tensor on an axis not taken along. | `Nx.take_along_axis(Nx.iota({2, 3}), Nx.iota({3, 3}), axis: 1)` |
 | `top_k` | error | A `k` past the last axis's size. | `Nx.top_k(Nx.iota({3}), k: 4)` |
-| `conv` | error | Input and kernel of different ranks or channels, or a kernel larger than the padded input. | `Nx.conv(Nx.iota({1, 3, 5, 5}), Nx.iota({4, 2, 2, 2}))` |
-| `window` | error | Window sizes or strides not one per axis, or a window larger than the padded axis. | `Nx.window_sum(Nx.iota({4}), {5})` |
+| `conv` | error | Input and kernel of different ranks or channels, a kernel larger than the padded input, or a negative stride that leaves no window. | `Nx.conv(Nx.iota({1, 3, 5, 5}), Nx.iota({4, 2, 2, 2}))` |
+| `window` | error | Window sizes or strides not one per axis, a window larger than the padded axis, or a negative stride that leaves no window. | `Nx.window_sum(Nx.iota({4}), {5})` |
 | `linspace` | error | Start and stop of different shapes, or no `:n`. | `Nx.linspace(Nx.iota({2}), Nx.iota({3}), n: 3)` |
 | `weighted_mean` | error | Weights that do not fit the input once Nx reshapes and swaps them. | `Nx.weighted_mean(Nx.iota({2, 3}), Nx.iota({2}), axes: [1])` |
 | `vectorize` | error | Vectorizing axes the tensor lacks, or under a name it already uses. | `Nx.vectorize(Nx.iota({2, 3}), x: 3)` |

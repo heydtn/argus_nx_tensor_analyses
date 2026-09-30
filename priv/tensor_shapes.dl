@@ -6375,10 +6375,14 @@ violation(context, site, "conv", detail) :-
   sizes_spelled(first, extent),
   sizes_spelled(second, kernel),
   detail = cat("size of input channels divided by feature groups must match size of kernel channels, got ", to_string(channels), " / ", to_string(feature_groups), " != ", to_string(kernel_channels), " for shapes ", extent, " and ", kernel).
+// A spatial axis the kernel takes no window along: the dilated kernel is
+// wider than the padded input, or a negative stride steps back from its
+// first window where the input leaves room past it.
 violation(context, site, "conv", "conv would result in empty tensor which is not currently supported in Nx") :-
   conv_context(context, site, [first, second, third]),
-  conv_window(site, [first, second, third], _, span),
-  span < 0.
+  conv_window(site, [first, second, third], axis, span),
+  ( span < 0
+  ; span > 0, conv_instance(site, [first, second, third], spatial), per_axis(site, "strides", spatial, axis, stride), stride < 0 ).
 
 // The contexts a conv's operands arrive in, as the convolution reads them.
 .decl conv_context(context: Context, site: symbol, operands: Operands)
@@ -6462,15 +6466,18 @@ window_padding(site, rank, axis, low + high) :-
   term_element_integer(text, tuple, 0, low),
   term_element_integer(text, tuple, 1, high).
 
-// The number of window positions along an axis.
+// The number of window positions along an axis: the steps a stride takes
+// the dilated window over the padded axis, forward, or back from its first
+// position for a negative stride, counted as Elixir's `div` counts them.
 .decl window_positions(site: symbol, operands: Operands, axis: number, positions: number)
-window_positions(site, [first, second, third], axis, (size + padding - span) / max(stride, 1) + 1) :-
+window_positions(site, [first, second, third], axis, positions) :-
   window_instance(site, [first, second, third], rank),
   axes_axis(first, axis, [size, nil], _),
   window_span(site, rank, axis, span),
   window_padding(site, rank, axis, padding),
   per_axis(site, "strides", rank, axis, stride),
-  stride >= 1.
+  ( stride >= 1, positions = (size + padding - span) / max(stride, 1) + 1
+  ; stride <= -1, size + padding >= span, positions = 1 - (size + padding - span) / max(0 - stride, 1) ).
 .plan 1:(2,5,3,4,1), 2:(3,5,4,1,2), 3:(4,5,3,1,2), 4:(5,3,4,1,2)
 
 build_rank(site, operands, rank) :- window_instance(site, operands, rank).

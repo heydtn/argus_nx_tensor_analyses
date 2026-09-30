@@ -31,9 +31,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Core do
     "conv" => %{
       title: "gets an input and kernel that do not fit",
       why:
-        "A convolution needs an input and kernel of one rank, and windows that fit inside the padded input.",
+        "A convolution needs an input and kernel of one rank, and windows that fit inside the padded input, which its strides step forward over.",
       help:
-        "check the input's and kernel's ranks, and the kernel's size against the input's spatial axes"
+        "check the input's and kernel's ranks, the kernel's size against the input's spatial axes, and that the strides are positive"
     },
     "diagonal" => %{
       title: "gets a diagonal of the wrong length",
@@ -191,8 +191,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Core do
     "window" => %{
       title: "gets a window that does not fit the tensor",
       why:
-        "A window operation takes one window size and stride per axis, and windows that leave something of each axis.",
-      help: "give one window size and stride per axis, each within the padded axis"
+        "A window operation takes one window size and stride per axis, and windows that leave something of each axis, which its strides step forward over.",
+      help: "give one window size and positive stride per axis, each within the padded axis"
     },
     "size_variables" => %{
       title: "lines up sizes the code names differently",
