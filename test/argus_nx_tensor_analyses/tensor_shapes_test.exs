@@ -1110,6 +1110,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "container_leaf", "true at entry 1{1}"}, :raises},
      "Nx.Batch.stack([{t, true}])"},
     {{:finds_none, :accepted}, "Nx.Batch.stack([{t, t}])"},
+    # a callback Nx runs on the values computed, outside the trace, hands
+    # a jit its arguments afresh
+    {{:finds, {"tensor_call_error", "container_leaf", "nil at argument 1.b"}, :raises},
+     "Nx.Defn.jit(fn x -> Nx.runtime_call(x, x, fn value, _ -> Nx.Defn.jit(fn m -> m.w end).(%{w: value, b: nil}) end) end).(t)"},
+    {{:finds_none, :accepted},
+     "Nx.Defn.jit(fn x -> Nx.runtime_call(x, x, fn value, _ -> Nx.Defn.jit(fn m -> m.w end).(%{w: value, b: value}) end) end).(t)"},
     {{:finds, {"tensor_call_error", "container_leaf", "possibly nil at argument 2.b"}, :raises},
      "bias = if Nx.to_number(Nx.sum(t)) > 0, do: t, else: nil\nNx.Defn.jit(fn x, _ -> x end).(t, %{w: t, b: bias})"},
     # a list or keyword list at the top is taken as it is

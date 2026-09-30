@@ -61,12 +61,18 @@ entering_call(site, caller) :-
 // core's `runs_in_trace`) calls it, or calls what calls it, as Argus's
 // call graph has it or as the rules follow the calls (a protocol's
 // implementation, a fun a transform captures, which the core's reach does
-// not follow). Asked of the functions that make the calls above, and of
-// those that build a struct whose container drops a field.
+// not follow). A callback Nx runs later on the values computed
+// (`print_value`, `runtime_call`) is not, as the core's reach ends there
+// (`trace_reach.cut`). Asked of the functions that make the calls above,
+// and of those that build a struct whose container drops a field.
 .decl runs_while_traced(function: symbol)
 runs_while_traced(function) :- traced_caller_reach.reaches(traced, function), runs_in_trace(traced).
 
-.init traced_caller_reach = CallReach
+.init traced_caller_reach = Backward
+traced_caller_reach.reaches(caller, target) :-
+  traced_caller_reach.reaches(callee, target),
+  call_edge(caller, callee),
+  !trace_reach.cut(caller, callee).
 traced_caller_reach.seed(caller, caller) :- entering_call(_, caller).
 traced_caller_reach.seed(builder, builder) :-
   dropped_field(struct, _, _),
