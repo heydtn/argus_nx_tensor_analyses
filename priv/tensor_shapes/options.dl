@@ -191,28 +191,9 @@ option_keys("Nx.Constants.i", " names backend ").
 
 // Where more of the functions above take their options, by arity: their
 // last argument.
-options_at("Nx.from_binary", 3, 2).
-options_at("Nx.to_binary", 2, 1).
-options_at("Nx.to_flat_list", 2, 1).
-options_at("Nx.to_batched", 3, 2).
-options_at("Nx.revectorize", 3, 2).
-options_at("Nx.covariance", 2, 1).
-options_at("Nx.covariance", 3, 2).
-options_at("Nx.LinAlg.qr", 2, 1).
-options_at("Nx.LinAlg.eigh", 2, 1).
-options_at("Nx.LinAlg.svd", 2, 1).
-options_at("Nx.LinAlg.matrix_rank", 2, 1).
-options_at("Nx.Random.randint", 4, 3).
-options_at("Nx.Random.uniform", 2, 1).
-options_at("Nx.Random.uniform", 4, 3).
-options_at("Nx.Random.normal", 2, 1).
-options_at("Nx.Random.normal", 4, 3).
-options_at("Nx.Random.multivariate_normal", 4, 3).
-options_at("Nx.Random.multivariate_normal_split", 4, 3).
-options_at("Nx.Random.shuffle", 3, 2).
-options_at("Nx.Random.choice", 3, 2).
-options_at("Nx.Random.choice", 4, 3).
-options_at("Nx.Random.gumbel", 2, 1).
+nx_members("argument", "options", cat(
+  " Nx.from_binary/3:2 Nx.to_binary/2:1 Nx.to_flat_list/2:1 Nx.to_batched/3:2",
+  " Nx.LinAlg.matrix_rank/2:1 ")).
 
 // The key is not one the function takes.
 .decl takes_no_option(operation: symbol, key: symbol) inline

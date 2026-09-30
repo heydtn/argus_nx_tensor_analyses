@@ -517,10 +517,12 @@ function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 // string rather than a fact each.
 .decl nx_members(facet: symbol, value: symbol, members: symbol)
 
-// The Nx functions the program names, by arity: those it calls. Read from
-// the code alone, so that rules may negate what the views derive from it.
+// The Nx functions the program names, by arity: those it calls, `Nx.Defn`'s
+// among them. Read from the code alone, so that rules may negate what the
+// views derive from it.
 .decl nx_named(operation: symbol, arity: number)
 nx_named(operation, arity) :- called_name(_, operation, arity).
+nx_named(cat("Nx.Defn.", name), arity) :- remote_call(_, _, "Nx.Defn", name, arity).
 
 // A function the program names has the trait.
 .decl nx_trait(operation: symbol, trait: symbol)
@@ -3178,62 +3180,50 @@ integer_limit("bf16|f32|c64", "340282356779733661637539395458142568448").
 
 // ══ Options ═════════════════════════════════════════════════════════
 
-// The operation takes a keyword list of options as argument `position`,
-// the last one, and a call with `position` arguments takes the defaults.
-.decl trailing_options(operation: symbol, position: number)
-trailing_options(cat("Nx.", name), 1) :- options_first(name).
-trailing_options(cat("Nx.", name), 2) :- options_second(name).
-trailing_options(cat("Nx.", name), 3) :- options_third(name).
-trailing_options("Nx.LinAlg.norm", 1).
-trailing_options("Nx.LinAlg.pinv", 1).
-trailing_options("Nx.LinAlg.triangular_solve", 2).
-trailing_options("Nx.LinAlg.least_squares", 2).
-trailing_options("Nx.Random.split", 1).
-trailing_options("Nx.Random.gumbel_split", 1).
-trailing_options("Nx.Random.randint_split", 3).
-trailing_options("Nx.Random.uniform_split", 3).
-trailing_options("Nx.Random.normal_split", 3).
-
-.decl options_first(name: symbol)
-options_first("sum"). options_first("product"). options_first("reduce_max"). options_first("reduce_min").
-options_first("all"). options_first("any"). options_first("mean"). options_first("logsumexp").
-options_first("variance"). options_first("standard_deviation"). options_first("argmax"). options_first("argmin").
-options_first("median"). options_first("mode"). options_first("flatten"). options_first("squeeze").
-options_first("transpose"). options_first("sort"). options_first("argsort"). options_first("reverse").
-options_first("cumulative_sum"). options_first("cumulative_product"). options_first("cumulative_min").
-options_first("cumulative_max"). options_first("top_k"). options_first("fft"). options_first("ifft").
-options_first("rfft"). options_first("irfft"). options_first("fft2"). options_first("ifft2").
-options_first("diff"). options_first("take_diagonal"). options_first("make_diagonal"). options_first("tril").
-options_first("triu"). options_first("devectorize"). options_first("iota"). options_first("eye").
-options_first("tensor"). options_first("concatenate"). options_first("stack").
-
-.decl options_second(name: symbol)
-options_second("reshape"). options_second("broadcast"). options_second("template"). options_second("take").
-options_second("take_along_axis"). options_second("gather"). options_second("window_sum").
-options_second("window_mean"). options_second("window_max"). options_second("window_min").
-options_second("window_product"). options_second("weighted_mean"). options_second("all_close").
-options_second("linspace"). options_second("put_diagonal"). options_second("tri"). options_second("fill").
-options_second("conv").
-
-.decl options_third(name: symbol)
-options_third("slice"). options_third("slice_along_axis"). options_third("indexed_add"). options_third("indexed_put").
-
-.decl options_at(operation: symbol, arity: number, position: number)
-options_at(operation, position + 1, position) :- trailing_options(operation, position).
-options_at("Nx.reduce", 4, 2).
-options_at("Nx.window_reduce", 5, 3).
-options_at("Nx.window_scatter_max", 5, 4).
-options_at("Nx.window_scatter_min", 5, 4).
-options_at("Nx.Defn.jit", 2, 1).
-options_at("Nx.Defn.compile", 3, 2).
-options_at("Nx.Defn.jit_apply", 3, 2).
-
-.decl options_omitted(operation: symbol, arity: number)
-options_omitted(operation, position) :- trailing_options(operation, position).
-options_omitted("Nx.reduce", 3).
-options_omitted("Nx.window_reduce", 4).
-options_omitted("Nx.window_scatter_max", 4).
-options_omitted("Nx.window_scatter_min", 4).
+// The argument a function takes a keyword list of options at, by arity
+// ("options"): its last, and a position equal to the arity where a call
+// of that arity takes the defaults. Most take them after one argument,
+// two or three, at the arity one more.
+nx_members("argument", "options", cat(
+  " Nx.sum/1:1 Nx.sum/2:1 Nx.product/1:1 Nx.product/2:1 Nx.reduce_max/1:1 Nx.reduce_max/2:1",
+  " Nx.reduce_min/1:1 Nx.reduce_min/2:1 Nx.all/1:1 Nx.all/2:1 Nx.any/1:1 Nx.any/2:1",
+  " Nx.mean/1:1 Nx.mean/2:1 Nx.logsumexp/1:1 Nx.logsumexp/2:1 Nx.variance/1:1",
+  " Nx.variance/2:1 Nx.standard_deviation/1:1 Nx.standard_deviation/2:1 Nx.argmax/1:1",
+  " Nx.argmax/2:1 Nx.argmin/1:1 Nx.argmin/2:1 Nx.median/1:1 Nx.median/2:1 Nx.mode/1:1",
+  " Nx.mode/2:1 Nx.flatten/1:1 Nx.flatten/2:1 Nx.squeeze/1:1 Nx.squeeze/2:1",
+  " Nx.transpose/1:1 Nx.transpose/2:1 Nx.sort/1:1 Nx.sort/2:1 Nx.argsort/1:1 Nx.argsort/2:1",
+  " Nx.reverse/1:1 Nx.reverse/2:1 Nx.cumulative_sum/1:1 Nx.cumulative_sum/2:1",
+  " Nx.cumulative_product/1:1 Nx.cumulative_product/2:1 Nx.cumulative_min/1:1",
+  " Nx.cumulative_min/2:1 Nx.cumulative_max/1:1 Nx.cumulative_max/2:1 Nx.top_k/1:1",
+  " Nx.top_k/2:1 Nx.fft/1:1 Nx.fft/2:1 Nx.ifft/1:1 Nx.ifft/2:1 Nx.rfft/1:1 Nx.rfft/2:1",
+  " Nx.irfft/1:1 Nx.irfft/2:1 Nx.fft2/1:1 Nx.fft2/2:1 Nx.ifft2/1:1 Nx.ifft2/2:1 Nx.diff/1:1",
+  " Nx.diff/2:1 Nx.take_diagonal/1:1 Nx.take_diagonal/2:1 Nx.make_diagonal/1:1",
+  " Nx.make_diagonal/2:1 Nx.tril/1:1 Nx.tril/2:1 Nx.triu/1:1 Nx.triu/2:1 Nx.devectorize/1:1",
+  " Nx.devectorize/2:1 Nx.iota/1:1 Nx.iota/2:1 Nx.eye/1:1 Nx.eye/2:1 Nx.tensor/1:1",
+  " Nx.tensor/2:1 Nx.concatenate/1:1 Nx.concatenate/2:1 Nx.stack/1:1 Nx.stack/2:1 ")).
+nx_members("argument", "options", cat(
+  " Nx.reshape/2:2 Nx.reshape/3:2 Nx.broadcast/2:2 Nx.broadcast/3:2 Nx.template/2:2",
+  " Nx.template/3:2 Nx.take/2:2 Nx.take/3:2 Nx.take_along_axis/2:2 Nx.take_along_axis/3:2",
+  " Nx.gather/2:2 Nx.gather/3:2 Nx.window_sum/2:2 Nx.window_sum/3:2 Nx.window_mean/2:2",
+  " Nx.window_mean/3:2 Nx.window_max/2:2 Nx.window_max/3:2 Nx.window_min/2:2",
+  " Nx.window_min/3:2 Nx.window_product/2:2 Nx.window_product/3:2 Nx.weighted_mean/2:2",
+  " Nx.weighted_mean/3:2 Nx.all_close/2:2 Nx.all_close/3:2 Nx.linspace/2:2 Nx.linspace/3:2",
+  " Nx.put_diagonal/2:2 Nx.put_diagonal/3:2 Nx.tri/2:2 Nx.tri/3:2 Nx.fill/2:2 Nx.fill/3:2",
+  " Nx.conv/2:2 Nx.conv/3:2 ")).
+nx_members("argument", "options", cat(
+  " Nx.slice/3:3 Nx.slice/4:3 Nx.slice_along_axis/3:3 Nx.slice_along_axis/4:3",
+  " Nx.indexed_add/3:3 Nx.indexed_add/4:3 Nx.indexed_put/3:3 Nx.indexed_put/4:3 ")).
+nx_members("argument", "options", cat(
+  " Nx.LinAlg.norm/1:1 Nx.LinAlg.norm/2:1 Nx.LinAlg.pinv/1:1 Nx.LinAlg.pinv/2:1",
+  " Nx.Random.split/1:1 Nx.Random.split/2:1 Nx.Random.gumbel_split/1:1",
+  " Nx.Random.gumbel_split/2:1 Nx.LinAlg.triangular_solve/2:2",
+  " Nx.LinAlg.triangular_solve/3:2 Nx.LinAlg.least_squares/2:2 Nx.LinAlg.least_squares/3:2",
+  " Nx.Random.randint_split/3:3 Nx.Random.randint_split/4:3 Nx.Random.uniform_split/3:3",
+  " Nx.Random.uniform_split/4:3 Nx.Random.normal_split/3:3 Nx.Random.normal_split/4:3 ")).
+nx_members("argument", "options", cat(
+  " Nx.reduce/3:3 Nx.reduce/4:2 Nx.window_reduce/4:4 Nx.window_reduce/5:3",
+  " Nx.window_scatter_max/4:4 Nx.window_scatter_max/5:4 Nx.window_scatter_min/4:4",
+  " Nx.window_scatter_min/5:4 Nx.Defn.jit/2:1 Nx.Defn.compile/3:2 Nx.Defn.jit_apply/3:2 ")).
 
 .decl option_key(key: symbol)
 option_key("axes"). option_key("keep_axes"). option_key("axis"). option_key("keep_axis").
@@ -3245,12 +3235,13 @@ option_key("feature_group_size"). option_key("batch_group_size"). option_key("in
 option_key("kernel_permutation"). option_key("output_permutation"). option_key("left_side"). option_key("ord").
 option_key("type").
 
-// Where the call's options come from: the argument `options_at` names for
-// its function, and a constant's last, after its type.
+// Where the call's options come from: its function's "options" argument
+// at its arity, and a constant's last, after its type.
 .decl options_source(site: symbol, function: symbol, kind: symbol, source: symbol)
 options_source(site, function, kind, source) :-
   remote_call(site, _, module, name, arity),
-  options_at(cat(module, ".", name), arity, position),
+  nx_argument(cat(module, ".", name), arity, position, "options"),
+  position < arity,
   flow_argument(site, function, position, kind, source).
 options_source(site, function, kind, source) :-
   remote_call(site, _, "Nx.Constants", _, arity),
@@ -3319,7 +3310,7 @@ options_open(site) :- options_source(site, _, "literal", text), !term_list(text,
 site_options_known(site) :- options_source(site, _, _, _), !options_open(site).
 site_options_known(site) :-
   operation_site(site, operation, arity),
-  options_omitted(operation, arity).
+  nx_argument(operation, arity, arity, "options").
 
 // An option's value, written as a literal term.
 .decl option(site: symbol, key: symbol, text: symbol, value: number)
@@ -5298,7 +5289,7 @@ violation(context, site, "slice", detail) :-
 // `Nx.split/3` gives a tuple of the two slices on either side of the split
 // along `:axis`; the split falls strictly inside the axis.
 nx_members("argument", "first_operand", " Nx.split/2:0 Nx.split/3:0 ").
-trailing_options("Nx.split", 2).
+nx_members("argument", "options", " Nx.split/2:2 Nx.split/3:2 ").
 option_default(site, "axis", 0) :- operation_site(site, "Nx.split", _).
 axis_option_demand(site, "axis", 0, first) :- site_instance(site, "Nx.split", _, [first, _, _]).
 
@@ -7705,7 +7696,7 @@ violation(context, site, "vectorize", cat("cannot use name ", name, " for new ve
 // a new shape (the tensor's own without `:target_shape`), one size of all
 // of them at most `:auto`.
 nx_members("argument", "first_operand", " Nx.revectorize/2:0 Nx.revectorize/3:0 ").
-trailing_options("Nx.revectorize", 2).
+nx_members("argument", "options", " Nx.revectorize/2:2 Nx.revectorize/3:2 ").
 option_key("target_shape"). option_key("target_names").
 vectorizing("Nx.revectorize").
 

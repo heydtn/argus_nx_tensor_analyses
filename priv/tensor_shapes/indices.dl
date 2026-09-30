@@ -425,8 +425,7 @@ spread("Nx.variance", "axes", 1). spread("Nx.standard_deviation", "axes", 0).
 spread("Nx.covariance", "observations", 1).
 
 // `Nx.covariance/2` takes options where `Nx.covariance/3` takes the mean.
-options_at("Nx.covariance", 2, 1).
-options_at("Nx.covariance", 3, 2).
+nx_members("argument", "options", " Nx.covariance/2:1 Nx.covariance/3:2 ").
 
 // How many values a spread reduces, where the rules know it: the product
 // of the axes a variance or deviation reduces (all of them over what the
@@ -537,9 +536,6 @@ random_sampling(site, "uniform") :-
   operation_site(site, operation, arity),
   arity >= 3,
   match("Nx\\.Random\\.uniform(_split)?", operation).
-
-trailing_options("Nx.Random.randint", 3).
-trailing_options("Nx.Random.uniform", 3).
 
 // A bound as a number, where the code writes it or it is a size the rules
 // know, and as written.

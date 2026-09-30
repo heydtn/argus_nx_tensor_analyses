@@ -97,12 +97,13 @@ draws_shape(operation) :-
 draws_shape(operation) :- random_sampler(operation).
 draws_shape("Nx.Random.multivariate_normal_split").
 
-trailing_options("Nx.Random.uniform", 1). trailing_options("Nx.Random.uniform", 3).
-trailing_options("Nx.Random.normal", 1). trailing_options("Nx.Random.normal", 3).
-trailing_options("Nx.Random.randint", 3). trailing_options("Nx.Random.gumbel", 1).
-trailing_options("Nx.Random.shuffle", 2).
-trailing_options("Nx.Random.multivariate_normal", 3).
-trailing_options("Nx.Random.multivariate_normal_split", 3).
+nx_members("argument", "options", cat(
+  " Nx.Random.uniform/1:1 Nx.Random.uniform/2:1 Nx.Random.normal/1:1 Nx.Random.normal/2:1",
+  " Nx.Random.gumbel/1:1 Nx.Random.gumbel/2:1 Nx.Random.shuffle/2:2 Nx.Random.shuffle/3:2",
+  " Nx.Random.uniform/3:3 Nx.Random.uniform/4:3 Nx.Random.normal/3:3 Nx.Random.normal/4:3",
+  " Nx.Random.randint/3:3 Nx.Random.randint/4:3 Nx.Random.multivariate_normal/3:3",
+  " Nx.Random.multivariate_normal/4:3 Nx.Random.multivariate_normal_split/3:3",
+  " Nx.Random.multivariate_normal_split/4:3 ")).
 
 // The shape a sampler draws: its `:shape` option's, {} when not given.
 .decl drawn_shape(site: symbol, axes: Axes)
@@ -297,8 +298,7 @@ tuple_element(context, site, "{0}", [vectorized, first]) :-
 // (`p`) or not. What it returns has no names.
 nx_members("argument", "first_operand", " Nx.Random.choice/2:1 Nx.Random.choice/3:1 Nx.Random.choice/4:1 ").
 nx_members("argument", "second_operand", " Nx.Random.choice/4:2 ").
-trailing_options("Nx.Random.choice", 2).
-options_at("Nx.Random.choice", 4, 3).
+nx_members("argument", "options", " Nx.Random.choice/2:2 Nx.Random.choice/3:2 Nx.Random.choice/4:3 ").
 option_default(site, "samples", 1) :- operation_site(site, "Nx.Random.choice", _).
 option_key("samples"). option_key("replace").
 
@@ -444,8 +444,9 @@ violation(context, site, "multivariate_normal", detail) :-
 .decl decomposition(operation: symbol)
 decomposition(operation) :- returns_tuple(operation, "parts"), operation != "Nx.split".
 
-trailing_options("Nx.LinAlg.qr", 1). trailing_options("Nx.LinAlg.svd", 1).
-trailing_options("Nx.LinAlg.eigh", 1).
+nx_members("argument", "options", cat(
+  " Nx.LinAlg.qr/1:1 Nx.LinAlg.qr/2:1 Nx.LinAlg.svd/1:1 Nx.LinAlg.svd/2:1",
+  " Nx.LinAlg.eigh/1:1 Nx.LinAlg.eigh/2:1 ")).
 option_key("mode"). option_key("full_matrices?").
 
 // A decomposition's operand: its batch axes with no names, and the sizes
