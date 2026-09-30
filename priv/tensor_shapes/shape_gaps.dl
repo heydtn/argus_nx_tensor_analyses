@@ -325,16 +325,23 @@ operand_misfit(site, [first, second, third], "cropped_axis", cat("no match of ri
 
 // ── Literal sizes below 1 ──────────────────────────────────────────
 
-// A dimension below 1 in a shape the code writes where Nx validates it:
-// `Nx.iota/2`'s and `Nx.broadcast/3`'s shape, a sampler's `:shape`.
+// A dimension below 1 the code writes in a shape Nx validates:
+// `Nx.iota/2`'s and `Nx.broadcast/3`'s ("validated_shape"), written whole
+// or into a tuple the code builds, and a sampler's written `:shape`.
 // (`Nx.template/2` and `Nx.eye/2` take a dimension of 0.)
+nx_members("argument", "validated_shape", " Nx.iota/1:0 Nx.iota/2:0 Nx.broadcast/2:1 Nx.broadcast/3:1 ").
 written_misfit(site, "nonpositive", cat("invalid dimension in axis ", to_string(axis), " found in shape. Each dimension must be a positive integer, got ", to_string(value), " in shape ", text)) :-
-  operation_site(site, operation, _),
-  ( operation = "Nx.iota", position = 0 ; operation = "Nx.broadcast", position = 1 ),
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "validated_shape"),
   argument_literal(site, position, text),
   term_tuple(text, 0),
   term_element_integer(text, 0, axis, value),
   value < 1.
+violation(context, site, "nonpositive", cat("invalid dimension in axis ", to_string(axis), " found in shape. Each dimension must be a positive integer, got ", to_string(value))) :-
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "validated_shape"),
+  argument_value(context, site, position, tuple),
+  written_element(tuple, axis, value).
 written_misfit(site, "nonpositive", cat("invalid dimension in axis ", to_string(axis), " found in shape. Each dimension must be a positive integer, got ", to_string(value), " in shape ", spelled)) :-
   nx_trait(operation, "random_sampler"),
   operation_site(site, operation, _),
@@ -344,22 +351,29 @@ written_misfit(site, "nonpositive", cat("invalid dimension in axis ", to_string(
   value < 1,
   term_spelling(text, start, spelled).
 
-// `Nx.reshape/3` to a written shape with a dimension below 1, which no
-// number of elements fits.
-violation(context, site, "reshape", cat("cannot reshape, current shape ", current, " is not compatible with new shape ", text)) :-
-  reshaped_to_nothing(site, text),
+// `Nx.reshape/3` to a shape with a dimension below 1, which no number of
+// elements fits.
+violation(context, site, "reshape", cat("cannot reshape, current shape ", current, " is not compatible with new shape ", shown)) :-
+  reshaped_to_nothing(context, site, shown),
   argument_tensor(context, site, 0, [_, first]),
   sizes_spelled(first, current).
 
-.decl reshaped_to_nothing(site: symbol, text: symbol)
-reshaped_to_nothing(site, text) :-
+// A new shape with a dimension below 1, as a message shows it: a shape
+// written whole, or the dimension written into a shape the code builds.
+.decl reshaped_to_nothing(context: Context, site: symbol, shown: symbol)
+reshaped_to_nothing(context, site, text) :-
   operation_site(site, "Nx.reshape", _),
   argument_literal(site, 1, text),
   term_tuple(text, 0),
   term_element_integer(text, 0, _, value),
-  value < 1.
+  value < 1,
+  site_active(context, site).
+reshaped_to_nothing(context, site, cat("with ", to_string(value), " at axis ", to_string(axis))) :-
+  operation_site(site, "Nx.reshape", _),
+  argument_value(context, site, 1, tuple),
+  written_element(tuple, axis, value).
 
-spelling_demand(first) :- reshaped_to_nothing(site, _), argument_tensor(_, site, 0, [_, first]).
+spelling_demand(first) :- reshaped_to_nothing(context, site, _), argument_tensor(context, site, 0, [_, first]).
 
 // A count, length, repetition or stride below 1 where Nx takes one of at
 // least 1.

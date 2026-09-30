@@ -2513,6 +2513,17 @@ shape_element($Object(object_context, tuple, mapping), index, [-1, nil]) :-
   term_atom(text, start, ":auto").
 .plan 1:(4,5,2,1,3)
 
+// A tuple's element written as an integer that no size can be, 0 or
+// below: a positive one is a size (`shape_element`).
+.decl written_element(tuple: Value, index: number, value: number)
+written_element($Object(object_context, tuple, mapping), index, value) :-
+  shape_tuple_demand($Object(object_context, tuple, mapping)),
+  flow_field(_, tuple, selector, _, _),
+  selector_position(selector, index),
+  field_value($Object(object_context, tuple, mapping), selector, $Term(text, start)),
+  term_integer(text, start, value),
+  value < 1.
+
 .decl shape_tuple_from(tuple: Value, index: number, axes: Axes)
 shape_tuple_from($Object(object_context, tuple, mapping), arity, nil) :-
   shape_tuple_demand($Object(object_context, tuple, mapping)),
