@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   MIX_ENV: test
@@ -36,32 +37,43 @@ jobs:
         run: mix format --check-formatted
 
   test:
-    name: Test / Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
-    runs-on: ubuntu-22.04
+    name: Test / ${{ matrix.runner }} / Elixir ${{ matrix.beam.elixir }} / OTP ${{ matrix.beam.otp }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        # x86_64 and arm64 Linux, and arm64 macOS. An integer division by 0
+        # in the rules traps on x86_64 and gives 0 on arm64, and a VM
+        # converts floats as it was built to.
+        runner: [ubuntu-22.04, ubuntu-22.04-arm, macos-26]
         # OTP 28 before 28.5.0.4, where its build has no C `_Float16` (as
         # Hex's x86_64 builds do not), converts to f16 wrongly: 7.0e4
         # becomes a NaN and 1.0e-8 a subnormal, where the tests hold what
         # Nx makes of a literal to what its finding says.
-        include:
+        beam:
           - elixir: "1.19.4"
             otp: "28.5.0.7"
           - elixir: "1.20.4"
             otp: "29.1"
+        # Souffle's 2.5 release has a package for x86_64 Linux alone, whose
+        # numbers are 64 bits; the other runners build it with the default
+        # options, whose numbers are 32, so the rules solve at both widths.
+        include:
+          - runner: ubuntu-22.04
+            souffle: package
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: ${{ matrix.elixir }}
-          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.beam.elixir }}
+          otp-version: ${{ matrix.beam.otp }}
 
       # The rules need Souffle 2.5, and the Souffle PPA serves 2.4, so this
       # installs the 2.5 release's package.
       - name: Install Souffle
+        if: matrix.souffle == 'package'
         env:
           SOUFFLE_DEB: x86_64-ubuntu-2204-souffle-2.5-Linux.deb
           SOUFFLE_SHA512: c21e2f8153c140499f5b2aa30a148dddec7be5663e36071466cdc225a6682f9fe699b939241c7c28258ee96d1e2c2fe5585e9e8e6b74fb20172f06d2b40774da
@@ -72,12 +84,45 @@ jobs:
           sudo apt-get install -y "./$SOUFFLE_DEB"
           souffle --version
 
+      # A build per runner and build script, saved as soon as it is built,
+      # whatever the tests then do.
+      - name: Restore the Souffle build
+        id: souffle-build
+        if: matrix.souffle != 'package'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/souffle
+          key: ${{ matrix.runner }}-souffle-${{ hashFiles('.github/scripts/build_souffle.sh') }}
+
+      - name: Build Souffle
+        if: matrix.souffle != 'package' && steps.souffle-build.outputs.cache-hit != 'true'
+        run: .github/scripts/build_souffle.sh "$HOME/souffle"
+
+      - name: Save the Souffle build
+        if: matrix.souffle != 'package' && steps.souffle-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/souffle
+          key: ${{ steps.souffle-build.outputs.cache-primary-key }}
+
+      # Souffle preprocesses with mcpp where it finds one, as the package
+      # installs, and with gcc otherwise.
+      - name: Put the Souffle build on the path
+        if: matrix.souffle != 'package'
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq mcpp
+          fi
+          echo "$HOME/souffle/bin" >> "$GITHUB_PATH"
+          "$HOME/souffle/bin/souffle" --version
+
       - name: Restore dependencies cache
         uses: actions/cache@v4
         with:
           path: deps
-          key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-
+          key: ${{ runner.os }}-${{ runner.arch }}-mix-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-mix-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-
 
       - name: Install dependencies
         run: mix deps.get
@@ -95,8 +140,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _build/test
-          key: ${{ runner.os }}-test-build-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: ${{ runner.os }}-test-build-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}-
+          key: ${{ runner.os }}-${{ runner.arch }}-test-build-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-${{ hashFiles('mix.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-test-build-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-${{ hashFiles('mix.lock') }}-
 
       - name: Compile
         run: mix compile --warnings-as-errors
@@ -109,4 +154,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: _build/test
-          key: ${{ runner.os }}-test-build-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ${{ runner.os }}-${{ runner.arch }}-test-build-${{ matrix.beam.elixir }}-${{ matrix.beam.otp }}-${{ hashFiles('mix.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
