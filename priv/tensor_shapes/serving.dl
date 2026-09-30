@@ -614,7 +614,7 @@ operates_along(context, site, first, axis, "it sorts or accumulates along the ba
   in_batched_run(_, context, _),
   instance(context, site, [first, _, _], _),
   operation_site(site, operation, _),
-  axis_preserving(operation),
+  nx_trait(operation, "axis_preserving"),
   axis_option(site, "axis", first, axis).
 operates_along(context, site, operand, axis, "it contracts the batch axis") :-
   in_batched_run(_, context, _),
@@ -657,7 +657,7 @@ runs_along_first_axis(context, site, path, detail) :-
   argument_unshaped(context, site, 0, path),
   operation_site(site, operation, _),
   ( axis_reduction(operation), detail = "it reduces the batch axis"
-  ; axis_preserving(operation), detail = "it sorts or accumulates along the batch axis" ),
+  ; nx_trait(operation, "axis_preserving"), detail = "it sorts or accumulates along the batch axis" ),
   ( option_absent(site, "axis") ; option_integer(site, "axis", 0) ).
 
 // The computation returns what a reduction over every axis makes,

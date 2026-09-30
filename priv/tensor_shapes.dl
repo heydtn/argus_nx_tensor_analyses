@@ -498,15 +498,19 @@ function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 // ...), the functions of each class. A member is a function as a call
 // names it (`Nx.add`, `Nx.Defn.Kernel.+`, the Kernel operators as the
 // compiler spells them), or, where a class holds for one arity only, the
-// function at that arity (`Nx.log/2`). The facet "set" holds classes
-// rather than functions, for the rules that treat several classes alike.
+// function at that arity (`Nx.log/2`). The facet "argument" holds the
+// arguments that play a role (`first_operand`): `Nx.dot/4:2` is the
+// argument at 2 of `Nx.dot/4`, `Nx.max:0` the one at 0 at every arity
+// that has it, and a position equal to the arity is the call itself. The
+// facet "set" holds classes rather than functions, for the rules that
+// treat several classes alike.
 //
 // Views read the members for the functions the program names only
-// (`nx_named`): `nx_trait` and `nx_class`. A trait or class that follows
-// from others is a rule over the views, whose exceptions are conditions
-// on the function's name rather than negations: the views derive each
-// other and the rules negate them, so a negation among them would not
-// stratify.
+// (`nx_named`): `nx_trait`, `nx_class` and `nx_argument`. A trait, class
+// or role that follows from others is a rule over the views, whose
+// exceptions are conditions on the function's name rather than negations:
+// the views derive each other and the rules negate them, so a negation
+// among them would not stratify.
 //
 // Souffle's front end costs grow with facts and clauses, and it minimizes
 // each relation's clauses pairwise, so the members of a value are one
@@ -534,13 +538,33 @@ nx_class(operation, facet, class) :-
   nx_members(facet, class, members),
   facet != "trait",
   facet != "set",
+  facet != "argument",
   contains(cat(" ", operation, " "), members).
 nx_class(cat(operation, "/", to_string(arity)), facet, class) :-
   nx_named(operation, arity),
   nx_members(facet, class, members),
   facet != "trait",
   facet != "set",
+  facet != "argument",
   contains(cat(" ", operation, "/", to_string(arity), " "), members).
+
+// The argument at `position` of a call of a function the program names,
+// at `arity`, plays the role: the members name it at that arity, or at
+// every arity that has it. A position equal to the arity is the call
+// itself.
+.decl nx_argument(operation: symbol, arity: number, position: number, role: symbol)
+nx_argument(operation, arity, position, role) :-
+  nx_named(operation, arity),
+  nx_members("argument", role, members),
+  contains(cat(" ", operation, "/", to_string(arity), ":"), members),
+  position = range(0, arity + 1),
+  contains(cat(" ", operation, "/", to_string(arity), ":", to_string(position), " "), members).
+nx_argument(operation, arity, position, role) :-
+  nx_named(operation, arity),
+  nx_members("argument", role, members),
+  contains(cat(" ", operation, ":"), members),
+  position = range(0, arity),
+  contains(cat(" ", operation, ":", to_string(position), " "), members).
 
 // The class is one of the set's, as a disjunction of classes would say.
 .decl in_set(set: symbol, class: symbol) inline
@@ -2500,11 +2524,11 @@ shape_query("Nx.rank"). shape_query("Nx.names"). shape_query("Nx.axis_index").
 opaque_result(context, site, path) :-
   argument_unshaped(context, site, 0, path),
   operation_site(site, operation, arity),
-  preserves_shape(operation, arity).
+  nx_argument(operation, arity, 0, "shape_kept").
 opaque_result(context, site, path) :-
   argument_unshaped(context, site, position, path),
   operation_site(site, operation, 2),
-  broadcasts(operation),
+  nx_trait(operation, "broadcasts"),
   argument_tensor(context, site, 1 - position, [nil, nil]).
 .plan 1:(4,1,2,3)
 opaque_result(context, site, "") :-
@@ -2627,9 +2651,7 @@ axes_known(axes) :-
   argument_tensor(_, site, 0, [_, axes]),
   operation_site(site, operation, _),
   ( operation = "Nx.rank" ; operation = "Nx.size" ; operation = "Nx.axis_size" ).
-operand_slot("Nx.axis_size", 2, 1, 0).
-operand_slot("Nx.rank", 1, 1, 0).
-operand_slot("Nx.size", 1, 1, 0).
+nx_members("argument", "first_operand", " Nx.axis_size/2:0 Nx.rank/1:0 Nx.size/1:0 ").
 
 
 // ══ Literal terms ═══════════════════════════════════════════════════
@@ -3372,8 +3394,16 @@ given_names_length(site, length) :-
 // slots hold in a context, with the vectorized axes its operands broadcast
 // to.
 
+// The argument at `position` a function's shape rules read in `slot` at
+// `arity`: the arguments of the roles "first_operand", "second_operand"
+// and "third_operand", and "first_shape" and "second_shape".
 .decl operand_slot(operation: symbol, arity: number, slot: number, position: number)
+operand_slot(operation, arity, 1, position) :- nx_argument(operation, arity, position, "first_operand").
+operand_slot(operation, arity, 2, position) :- nx_argument(operation, arity, position, "second_operand").
+operand_slot(operation, arity, 3, position) :- nx_argument(operation, arity, position, "third_operand").
 .decl shape_slot(operation: symbol, arity: number, slot: number, position: number)
+shape_slot(operation, arity, 1, position) :- nx_argument(operation, arity, position, "first_shape").
+shape_slot(operation, arity, 2, position) :- nx_argument(operation, arity, position, "second_shape").
 
 .decl slot_used(operation: symbol, arity: number, slot: number)
 slot_used(operation, arity, slot) :- operand_slot(operation, arity, slot, _).
@@ -4090,70 +4120,51 @@ names_spelled(axes, cat("[", inner, "]")) :-
 // ══ Operations: element-wise ════════════════════════════════════════
 
 // Applied to each element: the result has the operand's shape and names.
-.decl elementwise_function(name: symbol)
-elementwise_function("exp"). elementwise_function("expm1"). elementwise_function("log").
-elementwise_function("log1p"). elementwise_function("sigmoid"). elementwise_function("cos").
-elementwise_function("sin"). elementwise_function("tan"). elementwise_function("cosh").
-elementwise_function("sinh"). elementwise_function("tanh"). elementwise_function("acos").
-elementwise_function("asin"). elementwise_function("atan"). elementwise_function("acosh").
-elementwise_function("asinh"). elementwise_function("atanh"). elementwise_function("sqrt").
-elementwise_function("rsqrt"). elementwise_function("cbrt"). elementwise_function("erf").
-elementwise_function("erfc"). elementwise_function("erf_inv"). elementwise_function("floor").
-elementwise_function("ceil"). elementwise_function("round"). elementwise_function("abs").
-elementwise_function("negate"). elementwise_function("sign"). elementwise_function("bitwise_not").
-elementwise_function("logical_not"). elementwise_function("is_nan"). elementwise_function("is_infinity").
-elementwise_function("conjugate"). elementwise_function("real"). elementwise_function("imag").
-elementwise_function("phase"). elementwise_function("count_leading_zeros").
-elementwise_function("population_count").
+nx_members("trait", "elementwise", cat(
+  " Nx.exp Nx.expm1 Nx.log Nx.log1p Nx.sigmoid Nx.cos Nx.sin Nx.tan Nx.cosh Nx.sinh Nx.tanh",
+  " Nx.acos Nx.asin Nx.atan Nx.acosh Nx.asinh Nx.atanh Nx.sqrt Nx.rsqrt Nx.cbrt Nx.erf",
+  " Nx.erfc Nx.erf_inv Nx.floor Nx.ceil Nx.round Nx.abs Nx.negate Nx.sign Nx.bitwise_not",
+  " Nx.logical_not Nx.is_nan Nx.is_infinity Nx.conjugate Nx.real Nx.imag Nx.phase",
+  " Nx.count_leading_zeros Nx.population_count ")).
 
-// Operations whose result has the shape and names of their first operand.
-.decl preserves_shape(operation: symbol, arity: number)
-preserves_shape(cat("Nx.", name), 1) :- elementwise_function(name).
-preserves_shape("Nx.as_type", 2).
-preserves_shape("Nx.bitcast", 2).
-preserves_shape("Nx.backend_copy", 1). preserves_shape("Nx.backend_copy", 2).
-preserves_shape("Nx.backend_transfer", 1). preserves_shape("Nx.backend_transfer", 2).
-preserves_shape("Nx.fill", 2). preserves_shape("Nx.fill", 3).
-preserves_shape("Nx.clip", 3).
-preserves_shape("Nx.donatable", 1).
-preserves_shape("Nx.io_call", 2). preserves_shape("Nx.io_call", 3).
-preserves_shape("Nx.runtime_call", 3). preserves_shape("Nx.runtime_call", 4).
-preserves_shape(operation, arity) :-
-  axis_preserving(operation),
-  ( arity = 1 ; arity = 2 ).
-preserves_shape("Nx.reverse", 1). preserves_shape("Nx.reverse", 2).
-preserves_shape("Nx.tril", 1). preserves_shape("Nx.tril", 2).
-preserves_shape("Nx.triu", 1). preserves_shape("Nx.triu", 2).
-preserves_shape("Nx.Defn.Kernel.stop_grad", 1).
-preserves_shape("Nx.Defn.Kernel.print_value", 1). preserves_shape("Nx.Defn.Kernel.print_value", 2).
-preserves_shape("Nx.Defn.Kernel.print_expr", 1). preserves_shape("Nx.Defn.Kernel.print_expr", 2).
-preserves_shape("Nx.Defn.Kernel.custom_grad", 3).
-preserves_shape("Nx.Defn.Kernel.-", 1).
-preserves_shape("Nx.Defn.Kernel.+", 1).
-preserves_shape("Nx.Defn.Kernel.__unary_minus__", 1).
-preserves_shape("Nx.Defn.Kernel.__unary_plus__", 1).
-preserves_shape("Nx.Defn.Kernel.__not__", 1).
+// Operations whose result has the shape and names of their first operand
+// (`shape_kept`), which is their first operand: the element-wise ones of
+// one operand, and those preserving the shape along an axis.
+nx_members("argument", "shape_kept", cat(
+  " Nx.as_type/2:0 Nx.bitcast/2:0 Nx.backend_copy/1:0 Nx.backend_copy/2:0",
+  " Nx.backend_transfer/1:0 Nx.backend_transfer/2:0 Nx.fill/2:0 Nx.fill/3:0 Nx.clip/3:0",
+  " Nx.donatable/1:0 Nx.io_call/2:0 Nx.io_call/3:0 Nx.runtime_call/3:0 Nx.runtime_call/4:0",
+  " Nx.reverse/1:0 Nx.reverse/2:0 Nx.tril/1:0 Nx.tril/2:0 Nx.triu/1:0 Nx.triu/2:0",
+  " Nx.Defn.Kernel.stop_grad/1:0 Nx.Defn.Kernel.print_value/1:0",
+  " Nx.Defn.Kernel.print_value/2:0 Nx.Defn.Kernel.print_expr/1:0",
+  " Nx.Defn.Kernel.print_expr/2:0 Nx.Defn.Kernel.custom_grad/3:0 Nx.Defn.Kernel.-/1:0",
+  " Nx.Defn.Kernel.+/1:0 Nx.Defn.Kernel.__unary_minus__/1:0 Nx.Defn.Kernel.__unary_plus__/1:0",
+  " Nx.Defn.Kernel.__not__/1:0 ")).
+nx_argument(operation, 1, 0, "shape_kept") :- nx_trait(operation, "elementwise"), nx_named(operation, 1).
+nx_argument(operation, arity, 0, "shape_kept") :-
+  nx_trait(operation, "axis_preserving"),
+  nx_named(operation, arity),
+  arity >= 1,
+  arity <= 2.
+nx_argument(operation, arity, 0, "first_operand") :- nx_argument(operation, arity, 0, "shape_kept").
 
 // Preserving the shape along an `:axis` option (default 0).
-.decl axis_preserving(operation: symbol)
-axis_preserving("Nx.sort"). axis_preserving("Nx.argsort").
-axis_preserving("Nx.cumulative_sum"). axis_preserving("Nx.cumulative_product").
-axis_preserving("Nx.cumulative_min"). axis_preserving("Nx.cumulative_max").
+nx_members("trait", "axis_preserving", cat(
+  " Nx.sort Nx.argsort Nx.cumulative_sum Nx.cumulative_product Nx.cumulative_min",
+  " Nx.cumulative_max ")).
 
-operand_slot(operation, arity, 1, 0) :- preserves_shape(operation, arity).
-operand_slot("Nx.fill", arity, 2, 1) :- preserves_shape("Nx.fill", arity).
-operand_slot("Nx.clip", 3, 2, 1).
-operand_slot("Nx.clip", 3, 3, 2).
+nx_members("argument", "second_operand", " Nx.fill/2:1 Nx.fill/3:1 Nx.clip/3:1 ").
+nx_members("argument", "third_operand", " Nx.clip/3:2 ").
 
 result_axes(site, operands, first) :-
   site_instance(site, operation, arity, operands),
-  preserves_shape(operation, arity),
+  nx_argument(operation, arity, 0, "shape_kept"),
   operands = [first, _, _].
 
-option_default(site, "axis", 0) :- operation_site(site, operation, _), axis_preserving(operation).
+option_default(site, "axis", 0) :- operation_site(site, operation, _), nx_trait(operation, "axis_preserving").
 axis_option_demand(site, "axis", 0, first) :-
   site_instance(site, operation, _, [first, _, _]),
-  axis_preserving(operation).
+  nx_trait(operation, "axis_preserving").
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, "Nx.reverse", _, [first, _, _]),
@@ -4191,32 +4202,21 @@ violation(context, site, "scalar", cat(bound, " value must be a non-vectorized s
 
 // ── Broadcasting two operands ──────────────────────────────────────
 
-.decl elementwise_binary(name: symbol)
-elementwise_binary("add"). elementwise_binary("subtract"). elementwise_binary("multiply").
-elementwise_binary("divide"). elementwise_binary("pow"). elementwise_binary("remainder").
-elementwise_binary("quotient"). elementwise_binary("atan2"). elementwise_binary("max").
-elementwise_binary("min"). elementwise_binary("bitwise_and"). elementwise_binary("bitwise_or").
-elementwise_binary("bitwise_xor"). elementwise_binary("left_shift"). elementwise_binary("right_shift").
-elementwise_binary("equal"). elementwise_binary("not_equal"). elementwise_binary("greater").
-elementwise_binary("less"). elementwise_binary("greater_equal"). elementwise_binary("less_equal").
-elementwise_binary("logical_and"). elementwise_binary("logical_or"). elementwise_binary("logical_xor").
-elementwise_binary("complex"). elementwise_binary("log").
-
-.decl kernel_binary(name: symbol)
-kernel_binary("+"). kernel_binary("-"). kernel_binary("*"). kernel_binary("/"). kernel_binary("**").
-kernel_binary("&&&"). kernel_binary("|||"). kernel_binary("<<<"). kernel_binary(">>>").
-kernel_binary("div"). kernel_binary("rem"). kernel_binary("max"). kernel_binary("min").
-kernel_binary("__equal__"). kernel_binary("__not_equal__"). kernel_binary("__less_than__").
-kernel_binary("__more_than__"). kernel_binary("__less_than_equal_to__").
-kernel_binary("__more_than_equal_to__"). kernel_binary("__and__"). kernel_binary("__or__").
-
-// Element-wise over two operands, which broadcast to a common shape.
-.decl broadcasts(operation: symbol)
-broadcasts(cat("Nx.", name)) :- elementwise_binary(name).
-broadcasts(cat("Nx.Defn.Kernel.", name)) :- kernel_binary(name).
-
-operand_slot(operation, 2, 1, 0) :- broadcasts(operation).
-operand_slot(operation, 2, 2, 1) :- broadcasts(operation).
+// Element-wise over two operands, which broadcast to a common shape: at
+// arity 2, which is their first and second operand.
+nx_members("trait", "broadcasts", cat(
+  " Nx.add Nx.subtract Nx.multiply Nx.divide Nx.pow Nx.remainder Nx.quotient Nx.atan2 Nx.max",
+  " Nx.min Nx.bitwise_and Nx.bitwise_or Nx.bitwise_xor Nx.left_shift Nx.right_shift Nx.equal",
+  " Nx.not_equal Nx.greater Nx.less Nx.greater_equal Nx.less_equal Nx.logical_and",
+  " Nx.logical_or Nx.logical_xor Nx.complex Nx.log",
+  " Nx.Defn.Kernel.+ Nx.Defn.Kernel.- Nx.Defn.Kernel.* Nx.Defn.Kernel./ Nx.Defn.Kernel.**",
+  " Nx.Defn.Kernel.&&& Nx.Defn.Kernel.||| Nx.Defn.Kernel.<<< Nx.Defn.Kernel.>>>",
+  " Nx.Defn.Kernel.div Nx.Defn.Kernel.rem Nx.Defn.Kernel.max Nx.Defn.Kernel.min",
+  " Nx.Defn.Kernel.__equal__ Nx.Defn.Kernel.__not_equal__ Nx.Defn.Kernel.__less_than__",
+  " Nx.Defn.Kernel.__more_than__ Nx.Defn.Kernel.__less_than_equal_to__",
+  " Nx.Defn.Kernel.__more_than_equal_to__ Nx.Defn.Kernel.__and__ Nx.Defn.Kernel.__or__ ")).
+nx_argument(operation, 2, 0, "first_operand") :- nx_trait(operation, "broadcasts"), nx_named(operation, 2).
+nx_argument(operation, 2, 1, "second_operand") :- nx_trait(operation, "broadcasts"), nx_named(operation, 2).
 
 // Two shapes broadcast against each other (`Nx.Shape.binary_broadcast/4`):
 // aligned from the right, each pair of sizes is equal or has a 1, and each
@@ -4224,7 +4224,7 @@ operand_slot(operation, 2, 2, 1) :- broadcasts(operation).
 .decl broadcast_demand(left: Axes, right: Axes)
 broadcast_demand(first, second) :-
   site_instance(_, operation, 2, [first, second, _]),
-  broadcasts(operation).
+  nx_trait(operation, "broadcasts").
 
 aligned_demand(left, rank) :-
   broadcast_demand(left, right),
@@ -4269,14 +4269,14 @@ broadcast(left, right, result) :- built("#broadcast", [left, right, nil], result
 
 result_axes(site, operands, axes) :-
   site_instance(site, operation, 2, operands),
-  broadcasts(operation),
+  nx_trait(operation, "broadcasts"),
   operands = [first, second, _],
   broadcast(first, second, axes).
 .plan 1:(3,1,2)
 
 violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions ", left, " to ", right)) :-
   site_instance(site, operation, 2, [first, second, _]),
-  broadcasts(operation),
+  nx_trait(operation, "broadcasts"),
   instance(context, site, [first, second, _], _),
   broadcast_axis(first, second, _, left_size, _, right_size, _),
   broadcast_conflict(left_size, right_size),
@@ -4285,14 +4285,14 @@ violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions
 
 violation(context, site, "names", cat("cannot merge name ", left_name, " on axis ", to_string(axis), " with name ", right_name, " on axis ", to_string(axis))) :-
   site_instance(site, operation, 2, [first, second, _]),
-  broadcasts(operation),
+  nx_trait(operation, "broadcasts"),
   instance(context, site, [first, second, _], _),
   broadcast_axis(first, second, axis, _, left_name, _, right_name),
   left_name != right_name, left_name != "nil", right_name != "nil".
 
 // `Nx.all_close/3` compares two tensors that broadcast together.
-operand_slot("Nx.all_close", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.all_close", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.all_close/2:0 Nx.all_close/3:0 ").
+nx_members("argument", "second_operand", " Nx.all_close/2:1 Nx.all_close/3:1 ").
 broadcast_demand(first, second) :- site_instance(_, "Nx.all_close", _, [first, second, _]).
 
 result_axes(site, operands, nil) :-
@@ -4320,9 +4320,9 @@ violation(context, site, "vectorized_axes", detail) :-
 // `Nx.select/3` has its predicate's shape and names, or, for a scalar
 // predicate, the broadcast of both choices; each choice must broadcast
 // into it.
-operand_slot("Nx.select", 3, 1, 0).
-operand_slot("Nx.select", 3, 2, 1).
-operand_slot("Nx.select", 3, 3, 2).
+nx_members("argument", "first_operand", " Nx.select/3:0 ").
+nx_members("argument", "second_operand", " Nx.select/3:1 ").
+nx_members("argument", "third_operand", " Nx.select/3:2 ").
 
 broadcast_demand(second, third) :- site_instance(_, "Nx.select", 3, [nil, second, third]).
 aligned_demand(second, rank) :-
@@ -4378,15 +4378,14 @@ reduction("Nx.all"). reduction("Nx.any"). reduction("Nx.mean"). reduction("Nx.lo
 reduction("Nx.variance"). reduction("Nx.standard_deviation"). reduction("Nx.reduce").
 reduction("Nx.weighted_mean"). reduction("Nx.LinAlg.norm").
 
-operand_slot(operation, arity, 1, 0) :-
-  reduction(operation),
-  operation != "Nx.reduce",
-  operation != "Nx.weighted_mean",
-  ( arity = 1 ; arity = 2 ).
-operand_slot("Nx.reduce", arity, 1, 0) :- arity = 3 ; arity = 4.
-operand_slot("Nx.reduce", arity, 2, 1) :- arity = 3 ; arity = 4.
-operand_slot("Nx.weighted_mean", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.weighted_mean", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", cat(
+  " Nx.LinAlg.norm/1:0 Nx.LinAlg.norm/2:0 Nx.reduce_max/1:0 Nx.reduce_max/2:0 Nx.all/1:0",
+  " Nx.all/2:0 Nx.any/1:0 Nx.any/2:0 Nx.sum/1:0 Nx.sum/2:0 Nx.product/1:0 Nx.product/2:0",
+  " Nx.logsumexp/1:0 Nx.logsumexp/2:0 Nx.mean/1:0 Nx.mean/2:0 Nx.variance/1:0",
+  " Nx.variance/2:0 Nx.standard_deviation/1:0 Nx.standard_deviation/2:0 Nx.reduce_min/1:0",
+  " Nx.reduce_min/2:0 Nx.reduce/3:0 Nx.reduce/4:0 Nx.weighted_mean/2:0 Nx.weighted_mean/3:0 ")).
+nx_members("argument", "second_operand", cat(
+  " Nx.reduce/3:1 Nx.reduce/4:1 Nx.weighted_mean/2:1 Nx.weighted_mean/3:1 ")).
 
 .decl reduction_axes(site: symbol, axes: Axes, mask: number, keep: number)
 term_axes_demand(site, first, text, start) :-
@@ -4487,7 +4486,9 @@ violation(context, site, "weighted_mean", "weights tensor must have rank equal t
 .decl axis_reduction(operation: symbol)
 axis_reduction("Nx.argmax"). axis_reduction("Nx.argmin"). axis_reduction("Nx.median"). axis_reduction("Nx.mode").
 
-operand_slot(operation, arity, 1, 0) :- axis_reduction(operation), ( arity = 1 ; arity = 2 ).
+nx_members("argument", "first_operand", cat(
+  " Nx.mode/1:0 Nx.mode/2:0 Nx.argmax/1:0 Nx.argmax/2:0 Nx.argmin/1:0 Nx.argmin/2:0",
+  " Nx.median/1:0 Nx.median/2:0 ")).
 
 term_axis_demand(site, first, text, start) :-
   site_instance(site, operation, _, [first, _, _]),
@@ -4560,8 +4561,8 @@ result_tensor(context, site, [vectorized, axes]) :-
 // `Nx.reshape/3`: the same number of elements, one size at most given as
 // `:auto` and inferred. The names are the `:names` option's, or the
 // shape's (a tuple has none; a tensor given as the shape has its own).
-operand_slot("Nx.reshape", arity, 1, 0) :- arity = 2 ; arity = 3.
-shape_slot("Nx.reshape", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.reshape/2:0 Nx.reshape/3:0 ").
+nx_members("argument", "second_shape", " Nx.reshape/2:1 Nx.reshape/3:1 ").
 
 // The size an `:auto` axis takes: the elements divided by the other
 // sizes, not known where they do not divide out; without one, the shape
@@ -4650,7 +4651,7 @@ axes_needed(axes) :-
 .plan 1:(3,1,2)
 
 // `Nx.flatten/2` merges consecutive axes into one, all of them by default.
-operand_slot("Nx.flatten", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.flatten/1:0 Nx.flatten/2:0 ").
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, "Nx.flatten", _, [first, _, _]),
@@ -4737,7 +4738,7 @@ violation(context, site, "flatten", "flatten axes must be consecutive") :-
 
 // `Nx.new_axis/3` inserts an axis of size 1 at a position from 0 to the
 // rank, counted from the end when negative.
-operand_slot("Nx.new_axis", arity, 1, 0) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.new_axis/2:0 Nx.new_axis/3:0 ").
 
 .decl new_axis_given(site: symbol, axis: number, name: symbol)
 new_axis_given(site, axis, "nil") :-
@@ -4800,7 +4801,7 @@ violation(context, site, "axis", detail) :-
 
 // `Nx.squeeze/2` removes axes of size 1: those the `:axes` option names,
 // or all of them.
-operand_slot("Nx.squeeze", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.squeeze/1:0 Nx.squeeze/2:0 ").
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, "Nx.squeeze", _, [first, _, _]),
@@ -4841,7 +4842,7 @@ violation(context, site, "squeeze", cat("cannot squeeze dimensions whose sizes a
 
 // `Nx.transpose/2` permutes the axes: reverses them by default, or takes
 // each result axis from the axis the `:axes` option names in its place.
-operand_slot("Nx.transpose", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.transpose/1:0 Nx.transpose/2:0 ").
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, "Nx.transpose", _, [first, _, _]),
@@ -4888,8 +4889,8 @@ violation(context, site, "transpose", cat("expected length of permutation (", to
 // `Nx.broadcast/3` expands a tensor to a shape: each of its axes maps to a
 // result axis, the last ones by default, and has size 1 or that axis's.
 // The names are the `:names` option's, or the shape's.
-operand_slot("Nx.broadcast", arity, 1, 0) :- arity = 2 ; arity = 3.
-shape_slot("Nx.broadcast", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.broadcast/2:0 Nx.broadcast/3:0 ").
+nx_members("argument", "second_shape", " Nx.broadcast/2:1 Nx.broadcast/3:1 ").
 
 // The result axis the tensor's axis at `index` maps to.
 .decl broadcast_target(site: symbol, operands: Operands, index: number, target: number)
@@ -4982,7 +4983,7 @@ violation(context, site, "broadcast", cat("expected length of axes (", to_string
 
 // `Nx.tile/2` repeats a tensor along each axis, the repetitions aligned
 // with its axes from the right; the result has no names.
-operand_slot("Nx.tile", 2, 1, 0).
+nx_members("argument", "first_operand", " Nx.tile/2:0 ").
 
 .decl tile_repetitions(site: symbol, text: symbol, length: number)
 tile_repetitions(site, text, length) :-
@@ -5028,8 +5029,8 @@ result_axes(site, operands, axes) :-
 
 // `Nx.pad/3` grows each axis by its low, high and interior padding; the
 // padding value is a scalar.
-operand_slot("Nx.pad", 3, 1, 0).
-operand_slot("Nx.pad", 3, 2, 1).
+nx_members("argument", "first_operand", " Nx.pad/3:0 ").
+nx_members("argument", "second_operand", " Nx.pad/3:1 ").
 
 .decl pad_configuration(site: symbol, index: number, low: number, high: number, interior: number)
 pad_configuration(site, index, low, high, interior) :-
@@ -5097,8 +5098,8 @@ violation(context, site, "scalar", cat("padding value must be a scalar and non-v
 
 // `Nx.pad_outer/3` pads each axis by its low and high edge, with a scalar
 // value or by a mode (`:reflect`, ...) that takes no negative padding.
-operand_slot("Nx.pad_outer", 3, 1, 0).
-operand_slot("Nx.pad_outer", 3, 2, 1).
+nx_members("argument", "first_operand", " Nx.pad_outer/3:0 ").
+nx_members("argument", "second_operand", " Nx.pad_outer/3:1 ").
 
 // A padding mode is an atom, which gives the value slot no tensor.
 slot_value(context, site, 2, nil, nil) :-
@@ -5180,7 +5181,7 @@ violation(context, site, "scalar", cat("padding value must be a scalar and non-v
 
 // `Nx.slice/4`: each axis becomes its length, taken by strides; a length
 // is at least 1 and at most the axis's size.
-operand_slot("Nx.slice", arity, 1, 0) :- arity = 3 ; arity = 4.
+nx_members("argument", "first_operand", " Nx.slice/3:0 Nx.slice/4:0 ").
 
 .decl slice_lengths(site: symbol, text: symbol, length: number)
 slice_lengths(site, text, length) :-
@@ -5247,7 +5248,7 @@ violation(context, site, "slice", detail) :-
   ; length < 1, detail = cat("length at axis ", to_string(axis), " must be greater than or equal to 1, got: ", to_string(length)) ).
 
 // `Nx.slice_along_axis/4` slices one axis, the `:axis` option's.
-operand_slot("Nx.slice_along_axis", arity, 1, 0) :- arity = 3 ; arity = 4.
+nx_members("argument", "first_operand", " Nx.slice_along_axis/3:0 Nx.slice_along_axis/4:0 ").
 option_default(site, "strides", 1) :- operation_site(site, "Nx.slice_along_axis", _).
 option_default(site, "axis", 0) :- operation_site(site, "Nx.slice_along_axis", _).
 axis_option_demand(site, "axis", 0, first) :- site_instance(site, "Nx.slice_along_axis", _, [first, _, _]).
@@ -5296,7 +5297,7 @@ violation(context, site, "slice", detail) :-
 
 // `Nx.split/3` gives a tuple of the two slices on either side of the split
 // along `:axis`; the split falls strictly inside the axis.
-operand_slot("Nx.split", arity, 1, 0) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.split/2:0 Nx.split/3:0 ").
 trailing_options("Nx.split", 2).
 option_default(site, "axis", 0) :- operation_site(site, "Nx.split", _).
 axis_option_demand(site, "axis", 0, first) :- site_instance(site, "Nx.split", _, [first, _, _]).
@@ -5313,8 +5314,8 @@ violation(context, site, "split", "split must be an integer greater than zero an
 
 // `Nx.put_slice/3` writes a slice of the tensor's rank and at most its
 // sizes; the result has the tensor's shape and both operands' names.
-operand_slot("Nx.put_slice", 3, 1, 0).
-operand_slot("Nx.put_slice", 3, 2, 2).
+nx_members("argument", "first_operand", " Nx.put_slice/3:0 ").
+nx_members("argument", "second_operand", " Nx.put_slice/3:2 ").
 
 name_pair(name, slice_name) :-
   site_instance(_, "Nx.put_slice", 3, [first, second, _]),
@@ -5374,8 +5375,8 @@ violation(context, site, "names", cat("cannot merge name ", name, " on axis ", t
   name != slice_name, name != "nil", slice_name != "nil".
 
 // `Nx.take/3` replaces the axis it takes along with the indices' axes.
-operand_slot("Nx.take", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.take", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.take/2:0 Nx.take/3:0 ").
+nx_members("argument", "second_operand", " Nx.take/2:1 Nx.take/3:1 ").
 option_default(site, "axis", 0) :- operation_site(site, "Nx.take", _).
 axis_option_demand(site, "axis", 0, first) :- site_instance(site, "Nx.take", _, [first, _, _]).
 
@@ -5439,8 +5440,8 @@ violation(context, site, "names", cat("cannot merge name ", name, " on axis ", t
 // `Nx.take_along_axis/3` takes indices of the tensor's rank that agree
 // with it on every other axis; the result has the indices' shape and the
 // tensor's names.
-operand_slot("Nx.take_along_axis", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.take_along_axis", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.take_along_axis/2:0 Nx.take_along_axis/3:0 ").
+nx_members("argument", "second_operand", " Nx.take_along_axis/2:1 Nx.take_along_axis/3:1 ").
 option_default(site, "axis", 0) :- operation_site(site, "Nx.take_along_axis", _).
 axis_option_demand(site, "axis", 0, first) :- site_instance(site, "Nx.take_along_axis", _, [first, _, _]).
 agree_demand(first, second, axis) :-
@@ -5482,8 +5483,8 @@ violation(context, site, "take_along_axis", detail) :-
 // `Nx.gather/3` indexes the axes the indices' last axis spans, those the
 // `:axes` option names or the leading ones; the result is the indices'
 // other axes then the tensor's axes not indexed, with no names.
-operand_slot("Nx.gather", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.gather", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.gather/2:0 Nx.gather/3:0 ").
+nx_members("argument", "second_operand", " Nx.gather/2:1 Nx.gather/3:1 ").
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, "Nx.gather", _, [first, _, _]),
@@ -5575,9 +5576,12 @@ violation(context, site, "gather", ":axes must be an ordered list") :-
 indexed("Nx.indexed_add").
 indexed("Nx.indexed_put").
 
-operand_slot(operation, arity, 1, 0) :- indexed(operation), ( arity = 3 ; arity = 4 ).
-operand_slot(operation, arity, 2, 1) :- indexed(operation), ( arity = 3 ; arity = 4 ).
-operand_slot(operation, arity, 3, 2) :- indexed(operation), ( arity = 3 ; arity = 4 ).
+nx_members("argument", "first_operand", cat(
+  " Nx.indexed_add/3:0 Nx.indexed_add/4:0 Nx.indexed_put/3:0 Nx.indexed_put/4:0 ")).
+nx_members("argument", "second_operand", cat(
+  " Nx.indexed_add/3:1 Nx.indexed_add/4:1 Nx.indexed_put/3:1 Nx.indexed_put/4:1 ")).
+nx_members("argument", "third_operand", cat(
+  " Nx.indexed_add/3:2 Nx.indexed_add/4:2 Nx.indexed_put/3:2 Nx.indexed_put/4:2 ")).
 
 result_axes(site, operands, first) :-
   site_instance(site, operation, _, operands),
@@ -5923,12 +5927,8 @@ violation(context, site, "names", cat("cannot merge name ", name, " on axis ", t
 // `Nx.dot/2,4,6` contracts pairs of axes of equal size; batch axes lead
 // both operands in order and agree in size. The result is the batch axes,
 // then the first operand's free axes, then the second's.
-operand_slot("Nx.dot", 2, 1, 0).
-operand_slot("Nx.dot", 2, 2, 1).
-operand_slot("Nx.dot", 4, 1, 0).
-operand_slot("Nx.dot", 4, 2, 2).
-operand_slot("Nx.dot", 6, 1, 0).
-operand_slot("Nx.dot", 6, 2, 3).
+nx_members("argument", "first_operand", " Nx.dot/2:0 Nx.dot/4:0 Nx.dot/6:0 ").
+nx_members("argument", "second_operand", " Nx.dot/2:1 Nx.dot/4:2 Nx.dot/6:3 ").
 
 // The literal list of axes a `Nx.dot/4,6` argument gives.
 .decl dot_list(site: symbol, role: symbol, text: symbol)
@@ -6191,8 +6191,8 @@ violation(context, site, "names", cat("operation would result in duplicate names
 // `Nx.outer/2` multiplies every element of one operand by every element
 // of the other: {size of the first, size of the second}, named by the
 // first's first axis and the second's last.
-operand_slot("Nx.outer", 2, 1, 0).
-operand_slot("Nx.outer", 2, 2, 1).
+nx_members("argument", "first_operand", " Nx.outer/2:0 ").
+nx_members("argument", "second_operand", " Nx.outer/2:1 ").
 
 .decl leading_name(axes: Axes, name: symbol)
 leading_name(nil, "nil") :- axes_known(nil).
@@ -6215,8 +6215,8 @@ result_axes(site, [first, second, third], [left, left_name, [right, right_name, 
 // channels per group, spatial...} kernel, with the default permutations:
 // each spatial axis becomes the number of strided windows of the dilated
 // kernel over the dilated, padded input.
-operand_slot("Nx.conv", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.conv", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.conv/2:0 Nx.conv/3:0 ").
+nx_members("argument", "second_operand", " Nx.conv/2:1 Nx.conv/3:1 ").
 option_default(site, "feature_group_size", 1) :- operation_site(site, "Nx.conv", _).
 option_default(site, "batch_group_size", 1) :- operation_site(site, "Nx.conv", _).
 
@@ -6395,13 +6395,18 @@ window_operation("Nx.window_scatter_max", 5, 3).
 window_operation("Nx.window_scatter_min", 4, 3).
 window_operation("Nx.window_scatter_min", 5, 3).
 
-operand_slot(operation, arity, 1, 0) :- window_operation(operation, arity, _).
-operand_slot(operation, arity, 2, 1) :-
-  window_operation(operation, arity, _),
-  ( operation = "Nx.window_scatter_max" ; operation = "Nx.window_scatter_min" ).
-operand_slot(operation, arity, 3, 2) :-
-  window_operation(operation, arity, _),
-  ( operation = "Nx.window_scatter_max" ; operation = "Nx.window_scatter_min" ).
+nx_members("argument", "first_operand", cat(
+  " Nx.window_scatter_min/4:0 Nx.window_scatter_min/5:0 Nx.window_scatter_max/4:0",
+  " Nx.window_scatter_max/5:0 Nx.window_mean/2:0 Nx.window_mean/3:0 Nx.window_sum/2:0",
+  " Nx.window_sum/3:0 Nx.window_product/2:0 Nx.window_product/3:0 Nx.window_max/2:0",
+  " Nx.window_max/3:0 Nx.window_min/2:0 Nx.window_min/3:0 Nx.window_reduce/4:0",
+  " Nx.window_reduce/5:0 ")).
+nx_members("argument", "second_operand", cat(
+  " Nx.window_scatter_min/4:1 Nx.window_scatter_min/5:1 Nx.window_scatter_max/4:1",
+  " Nx.window_scatter_max/5:1 ")).
+nx_members("argument", "third_operand", cat(
+  " Nx.window_scatter_min/4:2 Nx.window_scatter_min/5:2 Nx.window_scatter_max/4:2",
+  " Nx.window_scatter_max/5:2 ")).
 
 .decl window_dimensions(site: symbol, text: symbol, rank: number)
 window_dimensions(site, text, rank) :-
@@ -6537,7 +6542,7 @@ violation(context, site, "window", cat("source shape ", source, " must match val
 
 // `Nx.top_k/2` keeps the `:k` largest along the last axis, in a tuple of
 // values and indices.
-operand_slot("Nx.top_k", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.top_k/1:0 Nx.top_k/2:0 ").
 option_default(site, "k", 1) :- operation_site(site, "Nx.top_k", _).
 
 build_rank(site, [first, second, third], rank) :-
@@ -6583,7 +6588,9 @@ violation(context, site, "top_k", cat("top_k input last axis size must be greate
 .decl fourier(operation: symbol)
 fourier("Nx.fft"). fourier("Nx.ifft"). fourier("Nx.rfft"). fourier("Nx.irfft").
 
-operand_slot(operation, arity, 1, 0) :- fourier(operation), ( arity = 1 ; arity = 2 ).
+nx_members("argument", "first_operand", cat(
+  " Nx.rfft/1:0 Nx.rfft/2:0 Nx.irfft/1:0 Nx.irfft/2:0 Nx.fft/1:0 Nx.fft/2:0 Nx.ifft/1:0",
+  " Nx.ifft/2:0 ")).
 option_default(site, "axis", -1) :- operation_site(site, operation, _), fourier(operation).
 axis_option_demand(site, "axis", -1, first) :-
   site_instance(site, operation, _, [first, _, _]),
@@ -6662,7 +6669,7 @@ violation(context, site, "rank", "expected a tensor with rank > 0, got tensor wi
 .decl fourier2(operation: symbol)
 fourier2("Nx.fft2"). fourier2("Nx.ifft2").
 
-operand_slot(operation, arity, 1, 0) :- fourier2(operation), ( arity = 1 ; arity = 2 ).
+nx_members("argument", "first_operand", " Nx.fft2/1:0 Nx.fft2/2:0 Nx.ifft2/1:0 Nx.ifft2/2:0 ").
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, operation, _, [first, _, _]),
@@ -6754,7 +6761,7 @@ violation(context, site, "rank", cat("expected a tensor with rank > 1, got tenso
   rank < 2.
 
 // `Nx.diff/2` shortens the axis by the order of the difference.
-operand_slot("Nx.diff", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.diff/1:0 Nx.diff/2:0 ").
 option_default(site, "order", 1) :- operation_site(site, "Nx.diff", _).
 option_default(site, "axis", -1) :- operation_site(site, "Nx.diff", _).
 axis_option_demand(site, "axis", -1, first) :-
@@ -6827,17 +6834,12 @@ square_operation("Nx.LinAlg.cholesky"). square_operation("Nx.LinAlg.lu").
 square_operation("Nx.LinAlg.invert"). square_operation("Nx.LinAlg.matrix_power").
 square_operation("Nx.LinAlg.determinant"). square_operation("Nx.LinAlg.eigh").
 
-operand_slot("Nx.LinAlg.cholesky", 1, 1, 0).
-operand_slot("Nx.LinAlg.invert", 1, 1, 0).
-operand_slot("Nx.LinAlg.matrix_power", 2, 1, 0).
-operand_slot("Nx.LinAlg.lu", 1, 1, 0).
-operand_slot("Nx.LinAlg.determinant", 1, 1, 0).
-operand_slot("Nx.LinAlg.eigh", arity, 1, 0) :- arity = 1 ; arity = 2.
-operand_slot("Nx.LinAlg.qr", arity, 1, 0) :- arity = 1 ; arity = 2.
-operand_slot("Nx.LinAlg.svd", arity, 1, 0) :- arity = 1 ; arity = 2.
-operand_slot("Nx.LinAlg.pinv", arity, 1, 0) :- arity = 1 ; arity = 2.
-operand_slot("Nx.LinAlg.adjoint", 1, 1, 0).
-operand_slot("Nx.LinAlg.matrix_rank", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", cat(
+  " Nx.LinAlg.cholesky/1:0 Nx.LinAlg.invert/1:0 Nx.LinAlg.matrix_power/2:0 Nx.LinAlg.lu/1:0",
+  " Nx.LinAlg.determinant/1:0 Nx.LinAlg.eigh/1:0 Nx.LinAlg.eigh/2:0 Nx.LinAlg.qr/1:0",
+  " Nx.LinAlg.qr/2:0 Nx.LinAlg.svd/1:0 Nx.LinAlg.svd/2:0 Nx.LinAlg.pinv/1:0",
+  " Nx.LinAlg.pinv/2:0 Nx.LinAlg.adjoint/1:0 Nx.LinAlg.matrix_rank/1:0",
+  " Nx.LinAlg.matrix_rank/2:0 ")).
 
 violation(context, site, "square", cat(prefix, spelled)) :-
   site_instance(site, operation, _, [first, second, third]),
@@ -6950,10 +6952,10 @@ result_axes(site, [first, second, third], first) :-
 
 // `Nx.LinAlg.solve/2` solves square systems for right-hand sides of the
 // same batch: a vector or a matrix of as many rows.
-operand_slot("Nx.LinAlg.solve", 2, 1, 0).
-operand_slot("Nx.LinAlg.solve", 2, 2, 1).
-operand_slot("Nx.LinAlg.triangular_solve", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.LinAlg.triangular_solve", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", cat(
+  " Nx.LinAlg.solve/2:0 Nx.LinAlg.triangular_solve/2:0 Nx.LinAlg.triangular_solve/3:0 ")).
+nx_members("argument", "second_operand", cat(
+  " Nx.LinAlg.solve/2:1 Nx.LinAlg.triangular_solve/2:1 Nx.LinAlg.triangular_solve/3:1 ")).
 option_default(site, "left_side", 1) :- operation_site(site, "Nx.LinAlg.triangular_solve", _).
 
 // The right-hand side fits the square system: as a vector, it is as long
@@ -7051,8 +7053,8 @@ violation(context, site, "solve", cat("`b` tensor has incompatible dimensions fo
 
 // `Nx.LinAlg.least_squares/3` fits a matrix to a vector of as many rows,
 // giving a vector as long as the matrix is wide.
-operand_slot("Nx.LinAlg.least_squares", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.LinAlg.least_squares", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.LinAlg.least_squares/2:0 Nx.LinAlg.least_squares/3:0 ").
+nx_members("argument", "second_operand", " Nx.LinAlg.least_squares/2:1 Nx.LinAlg.least_squares/3:1 ").
 
 result_axes(site, [first, second, third], [columns, "nil", nil]) :-
   site_instance(site, "Nx.LinAlg.least_squares", _, [first, second, third]),
@@ -7076,8 +7078,8 @@ violation(context, site, "least_squares", detail) :-
 
 // `Nx.covariance/3` of observations along the second to last axis: a
 // square matrix of the last axis, for each batch, with no names.
-operand_slot("Nx.covariance", arity, 1, 0) :- arity = 1 ; arity = 2 ; arity = 3.
-operand_slot("Nx.covariance", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.covariance/1:0 Nx.covariance/2:0 Nx.covariance/3:0 ").
+nx_members("argument", "second_operand", " Nx.covariance/2:1 Nx.covariance/3:1 ").
 
 // `Nx.covariance/2` takes options where `Nx.covariance/3` takes the mean.
 slot_value(context, site, 2, nil, nil) :-
@@ -7170,7 +7172,7 @@ violation(context, site, "broadcast", cat("cannot broadcast the mean of shape ",
 // `Nx.take_diagonal/2`: the batch axes, then the diagonal of the last two,
 // shifted right by a positive `:offset` and down by a negative one; no
 // names.
-operand_slot("Nx.take_diagonal", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.take_diagonal/1:0 Nx.take_diagonal/2:0 ").
 option_default(site, "offset", 0) :- operation_site(site, operation, _), diagonal_operation(operation).
 
 .decl diagonal_operation(operation: symbol)
@@ -7241,7 +7243,7 @@ violation(context, site, "diagonal", detail) :-
 
 // `Nx.make_diagonal/2` makes a square matrix of a vector, as wide as the
 // vector is long and the offset.
-operand_slot("Nx.make_diagonal", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.make_diagonal/1:0 Nx.make_diagonal/2:0 ").
 
 result_axes(site, [first, second, third], [[width, nil], "nil", [[width, nil], "nil", nil]]) :-
   site_instance(site, "Nx.make_diagonal", _, [first, second, third]),
@@ -7259,8 +7261,8 @@ violation(context, site, "rank", cat("make_diagonal/2 expects tensor of rank 1, 
   rank != 1.
 
 // `Nx.put_diagonal/3` writes a diagonal as long as the matrix's.
-operand_slot("Nx.put_diagonal", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.put_diagonal", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.put_diagonal/2:0 Nx.put_diagonal/3:0 ").
+nx_members("argument", "second_operand", " Nx.put_diagonal/2:1 Nx.put_diagonal/3:1 ").
 
 result_axes(site, [first, second, third], first) :-
   site_instance(site, "Nx.put_diagonal", _, [first, second, third]),
@@ -7324,7 +7326,9 @@ creation(site, axes) :-
   argument_literal(site, 0, text),
   data_axes(text, 0, axes).
 
-operand_slot(operation, arity, 1, 0) :- tensor_constructor(operation, arity).
+nx_argument(operation, arity, 0, "first_operand") :-
+  tensor_constructor(operation, arity),
+  nx_named(operation, arity).
 
 // `Nx.eye/2` of an integer, `Nx.tri/3` of two.
 creation(site, [[size, nil], "nil", [[size, nil], "nil", nil]]) :-
@@ -7373,9 +7377,8 @@ shaped_creation("Nx.iota").
 shaped_creation("Nx.template").
 shaped_creation("Nx.eye").
 
-shape_slot("Nx.iota", arity, 1, 0) :- arity = 1 ; arity = 2.
-shape_slot("Nx.template", arity, 1, 0) :- arity = 2 ; arity = 3.
-shape_slot("Nx.eye", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_shape", cat(
+  " Nx.iota/1:0 Nx.iota/2:0 Nx.template/2:0 Nx.template/3:0 Nx.eye/1:0 Nx.eye/2:0 ")).
 
 // A site whose result is a shape named by its `:names` option alone.
 .decl named_by_option(site: symbol, base: Axes)
@@ -7467,8 +7470,8 @@ violation(context, site, "names", cat("invalid names for tensor of rank ", to_st
 
 // `Nx.linspace/3`: `:n` points between two tensors of one shape, along a
 // new last axis named `:name`.
-operand_slot("Nx.linspace", arity, 1, 0) :- arity = 2 ; arity = 3.
-operand_slot("Nx.linspace", arity, 2, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.linspace/2:0 Nx.linspace/3:0 ").
+nx_members("argument", "second_operand", " Nx.linspace/2:1 Nx.linspace/3:1 ").
 
 .decl linspace_axis(site: symbol, size: number, name: symbol)
 linspace_axis(site, size, name) :-
@@ -7510,7 +7513,7 @@ violation(context, site, "linspace", "expected n to be a non-negative integer, g
 // ══ Operations: names and vectorization ═════════════════════════════
 
 // `Nx.rename/2` gives every axis a name.
-operand_slot("Nx.rename", 2, 1, 0).
+nx_members("argument", "first_operand", " Nx.rename/2:0 ").
 
 .decl rename_names(site: symbol, index: number, name: symbol)
 rename_names(site, index, name) :-
@@ -7576,7 +7579,7 @@ vectorized_suffix_name([other, size, rest], name) :-
 
 // `Nx.vectorize/2` moves the leading axes, one per name it is given, into
 // the vectorized axes, after those the tensor has.
-operand_slot("Nx.vectorize", 2, 1, 0).
+nx_members("argument", "first_operand", " Nx.vectorize/2:0 ").
 
 // The vectorized axis at `index` asked for: a name, and a size or -1.
 .decl vectorize_request(site: symbol, index: number, name: symbol, size: Size)
@@ -7701,7 +7704,7 @@ violation(context, site, "vectorize", cat("cannot use name ", name, " for new ve
 // `Nx.revectorize/3` regroups every element under new vectorized axes and
 // a new shape (the tensor's own without `:target_shape`), one size of all
 // of them at most `:auto`.
-operand_slot("Nx.revectorize", arity, 1, 0) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.revectorize/2:0 Nx.revectorize/3:0 ").
 trailing_options("Nx.revectorize", 2).
 option_key("target_shape"). option_key("target_names").
 vectorizing("Nx.revectorize").
@@ -7869,7 +7872,7 @@ spelling_demand(combined) :- revectorize_combined(_, _, combined).
 
 // `Nx.devectorize/2` moves the vectorized axes back in front of the
 // others, keeping their names unless `keep_names: false`.
-operand_slot("Nx.devectorize", arity, 1, 0) :- arity = 1 ; arity = 2.
+nx_members("argument", "first_operand", " Nx.devectorize/1:0 Nx.devectorize/2:0 ").
 
 .decl devectorize_keep(site: symbol, keep: number)
 devectorize_keep(site, 1) :- operation_site(site, "Nx.devectorize", _), option_absent(site, "keep_names").
@@ -7917,7 +7920,7 @@ result_tensor(context, site, [nil, result]) :-
   devectorized(existing, keep, first, result).
 .plan 1:(4,1,2,3)
 
-operand_slot("Nx.shape", 1, 1, 0).
+nx_members("argument", "first_operand", " Nx.shape/1:0 ").
 
 // ══ Axes a site names that its operands lack ════════════════════════
 
@@ -8042,7 +8045,7 @@ vectorize_renaming(context, site, detail) :-
 .decl broadcast_meeting(context: Context, site: symbol, axis: number, left: Size, left_name: symbol, right: Size, right_name: symbol)
 broadcast_meeting(context, site, axis, left, left_name, right, right_name) :-
   site_instance(site, operation, 2, [first, second, third]),
-  ( broadcasts(operation) ; operation = "Nx.all_close" ),
+  ( nx_trait(operation, "broadcasts") ; operation = "Nx.all_close" ),
   instance(context, site, [first, second, third], _),
   broadcast_axis(first, second, axis, left, left_name, right, right_name).
 broadcast_meeting(context, site, axis, left, left_name, right, right_name) :-
@@ -9710,7 +9713,8 @@ ratio_demand(site) :- unit_call(_, site, _, "ratio").
 inner_product(site, function, left_kind, left, right_kind, right) :-
   inner_demand(site),
   operation_site(site, "Nx.dot", arity),
-  inner_operands(arity, left_position, right_position),
+  nx_argument("Nx.dot", arity, left_position, "first_operand"),
+  nx_argument("Nx.dot", arity, right_position, "second_operand"),
   flow_argument(site, function, left_position, left_kind, left),
   flow_argument(site, function, right_position, right_kind, right).
 inner_product(site, function, left_kind, left, right_kind, right) :-
@@ -9733,9 +9737,6 @@ inner_demand(product) :-
   norm_demand(site, function),
   operation_site(site, "Nx.sqrt", 1),
   flow_argument(site, function, 0, "result", product).
-
-.decl inner_operands(arity: number, left: number, right: number)
-inner_operands(2, 0, 1). inner_operands(4, 0, 2). inner_operands(6, 0, 3).
 
 // The norm of a value: `Nx.LinAlg.norm`, or the square root of its inner
 // product with itself.

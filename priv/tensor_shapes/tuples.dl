@@ -74,7 +74,7 @@ spelling_demand(axes) :-
 
 // `Nx.Random.fold_in/2` folds each element of its data into the key: a
 // key for each, the data's shape then {2}, with no names.
-operand_slot("Nx.Random.fold_in", 2, 1, 1).
+nx_members("argument", "first_operand", " Nx.Random.fold_in/2:1 ").
 result_axes(site, [first, second, third], axes) :-
   site_instance(site, "Nx.Random.fold_in", 2, [first, second, third]),
   unnamed(first, data),
@@ -147,8 +147,12 @@ tuple_element(context, site, "{0}", [nil, sample]) :-
 
 .decl normal_sampler(operation: symbol)
 normal_sampler("Nx.Random.normal"). normal_sampler("Nx.Random.normal_split").
-operand_slot(operation, arity, 1, 1) :- normal_sampler(operation), ( arity = 3 ; arity = 4 ).
-operand_slot(operation, arity, 2, 2) :- normal_sampler(operation), ( arity = 3 ; arity = 4 ).
+nx_members("argument", "first_operand", cat(
+  " Nx.Random.normal_split/3:1 Nx.Random.normal_split/4:1 Nx.Random.normal/3:1",
+  " Nx.Random.normal/4:1 ")).
+nx_members("argument", "second_operand", cat(
+  " Nx.Random.normal_split/3:2 Nx.Random.normal_split/4:2 Nx.Random.normal/3:2",
+  " Nx.Random.normal/4:2 ")).
 
 // The draw a normal sampler scales.
 .decl normal_draw(site: symbol, operands: Operands, draw: Axes)
@@ -279,7 +283,7 @@ violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of d
 
 // `Nx.Random.shuffle/3` permutes the tensor along `:axis`: the sample
 // has its shape and names.
-operand_slot("Nx.Random.shuffle", arity, 1, 1) :- arity = 2 ; arity = 3.
+nx_members("argument", "first_operand", " Nx.Random.shuffle/2:1 Nx.Random.shuffle/3:1 ").
 axis_option_demand(site, "axis", 0, first) :- site_instance(site, "Nx.Random.shuffle", _, [first, _, _]).
 
 tuple_element(context, site, "{0}", [vectorized, first]) :-
@@ -291,8 +295,8 @@ tuple_element(context, site, "{0}", [vectorized, first]) :-
 // `Nx.Random.choice/4` takes `:samples` elements along `:axis`, or from
 // the tensor flattened where it has none, given the probability of each
 // (`p`) or not. What it returns has no names.
-operand_slot("Nx.Random.choice", arity, 1, 1) :- arity = range(2, 5).
-operand_slot("Nx.Random.choice", 4, 2, 2).
+nx_members("argument", "first_operand", " Nx.Random.choice/2:1 Nx.Random.choice/3:1 Nx.Random.choice/4:1 ").
+nx_members("argument", "second_operand", " Nx.Random.choice/4:2 ").
 trailing_options("Nx.Random.choice", 2).
 options_at("Nx.Random.choice", 4, 3).
 option_default(site, "samples", 1) :- operation_site(site, "Nx.Random.choice", _).
@@ -378,8 +382,12 @@ violation(context, site, "choice", cat("probability tensor of size ", to_string(
 .decl multivariate_sampler(operation: symbol)
 multivariate_sampler("Nx.Random.multivariate_normal").
 multivariate_sampler("Nx.Random.multivariate_normal_split").
-operand_slot(operation, arity, 1, 1) :- multivariate_sampler(operation), ( arity = 3 ; arity = 4 ).
-operand_slot(operation, arity, 2, 2) :- multivariate_sampler(operation), ( arity = 3 ; arity = 4 ).
+nx_members("argument", "first_operand", cat(
+  " Nx.Random.multivariate_normal/3:1 Nx.Random.multivariate_normal/4:1",
+  " Nx.Random.multivariate_normal_split/3:1 Nx.Random.multivariate_normal_split/4:1 ")).
+nx_members("argument", "second_operand", cat(
+  " Nx.Random.multivariate_normal/3:2 Nx.Random.multivariate_normal/4:2",
+  " Nx.Random.multivariate_normal_split/3:2 Nx.Random.multivariate_normal_split/4:2 ")).
 
 .decl multivariate_sample(site: symbol, operands: Operands, sample: Axes)
 multivariate_sample(site, [[size, name, nil], covariance, third], sample) :-

@@ -432,7 +432,7 @@ call_error(context, site, "atom_operand", "nil", "") :-
 .decl operator_operand(site: symbol, position: number)
 operator_operand(site, position) :-
   operation_site(site, operation, 2),
-  broadcasts(operation),
+  nx_trait(operation, "broadcasts"),
   position = range(0, 2).
 operator_operand(site, 0) :- operation_site(site, "Nx.Defn.Kernel.__not__", 1).
 operator_operand(site, 0) :- operation_site(site, "Nx.Defn.Kernel.__unary_minus__", 1).

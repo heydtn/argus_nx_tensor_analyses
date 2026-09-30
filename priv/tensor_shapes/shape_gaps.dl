@@ -590,8 +590,7 @@ operand_misfit(site, [first, second, third], "names", cat("cannot merge name ", 
 
 // ── Element-wise logarithms ────────────────────────────────────────
 
-preserves_shape("Nx.log2", 1).
-preserves_shape("Nx.log10", 1).
+nx_members("argument", "shape_kept", " Nx.log2/1:0 Nx.log10/1:0 ").
 
 // ── Vectorized axes of a list ──────────────────────────────────────
 
@@ -688,7 +687,7 @@ spectrum_source(site, source) :-
 spectrum_source(site, next) :-
   spectrum_source(site, source),
   operation_site(source, operation, arity),
-  ( broadcasts(operation), arity = 2 ; preserves_shape(operation, arity) ),
+  ( nx_trait(operation, "broadcasts"), arity = 2 ; nx_argument(operation, arity, 0, "shape_kept") ),
   flow_argument(source, _, _, "result", next).
 
 // An `Nx.rfft/2` over an odd length: its `:length`, or its axis's size.
