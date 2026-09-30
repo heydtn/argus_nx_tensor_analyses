@@ -776,6 +776,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds_none, :accepted},
      "Nx.Defn.jit(fn x -> Nx.add(x, Nx.to_number(Nx.bit_size(x))) end).(t)"},
     {{:finds, {"tensor_call_error", "tensor_arithmetic", "*"}, :raises}, "Nx.to_template(t) * 8"},
+    # a sampler's `{sample, key}`, which is no tensor
+    {{:finds_none, :accepted},
+     "Nx.Random.multivariate_normal(Nx.Random.key(1), Nx.tensor([0.0, 0.0]), Nx.eye(2)) > 0"},
+    {{:finds_none, :accepted}, "Nx.Random.normal(Nx.Random.key(1)) > 0"},
     # a jitted function run while Nx traces another, and compiled templates
     {{:finds, {"tensor_call_error", "jit_in_trace", "jit"}, :raises},
      "inner = Nx.Defn.jit(fn y -> Nx.add(y, 1) end)\nNx.Defn.jit(fn x -> inner.(x) end).(t)"},
