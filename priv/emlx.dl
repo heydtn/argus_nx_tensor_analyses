@@ -240,11 +240,11 @@ sign_site(context, site) :- sign_rule(site, "power"), site_active(context, site)
 // integers, an integer plus a half.
 
 // A round of a value the code's math can put exactly on a half.
-.decl rounds_half(context: Context, site: symbol, cause: symbol, origin: symbol)
-rounds_half(context, site, cause, origin) :-
+.decl rounds_half(context: Context, site: symbol, cause: symbol, origin: symbol, how: symbol)
+rounds_half(context, site, cause, origin, how) :-
   rounds_to_nearest(site),
   rounded_operand(site, origin),
-  lands_on_half(context, origin, cause).
+  lands_on_half(context, origin, cause, how).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -262,29 +262,31 @@ rounded_operand(site, operand) :-
 // by a written even number, or times a written half ("halved"); an
 // integer plus or minus a written half ("half_added"); a mean of
 // integers, which lies on a half where it averages an even number of
-// them ("mean").
-.decl lands_on_half(context: Context, site: symbol, cause: symbol)
-lands_on_half(context, site, "halved") :-
+// them ("mean"). `how` is the call's sign class and the number written
+// (`divide 2`, `add 0.5`), empty for a mean.
+.decl lands_on_half(context: Context, site: symbol, cause: symbol, how: symbol)
+lands_on_half(context, site, "halved", cat("divide ", text)) :-
   rounded_operand(_, site),
   sign_rule(site, "divide"),
   written_operand(site, 1, text),
   written_number(text, "parity", "even"),
   argument_class(context, site, 0, "integer", _).
-lands_on_half(context, site, "halved") :-
+lands_on_half(context, site, "halved", cat("multiply ", text)) :-
   rounded_operand(_, site),
   sign_rule(site, "multiply"),
   written_operand(site, written, text),
   written_number(text, "fraction", "half"),
   written <= 1,
   argument_class(context, site, 1 - written, "integer", _).
-lands_on_half(context, site, "half_added") :-
+lands_on_half(context, site, "half_added", cat(class, " ", text)) :-
   rounded_operand(_, site),
-  ( sign_rule(site, "add") ; sign_rule(site, "subtract") ),
+  sign_rule(site, class),
+  ( class = "add" ; class = "subtract" ),
   written_operand(site, written, text),
   written_number(text, "fraction", "half"),
   written <= 1,
   argument_class(context, site, 1 - written, "integer", _).
-lands_on_half(context, site, "mean") :-
+lands_on_half(context, site, "mean", "") :-
   rounded_operand(_, site),
   operation_site(site, "Nx.mean", _),
   argument_class(context, site, 0, "integer", _).
@@ -715,8 +717,9 @@ nx_members("set", "leaves_backend", " shape struct template host moved backend "
 // amount: `s32 33`). `certain` is 1 where the code's own math causes
 // it, 0 where only an input may; `cause` is how, where a finding shows
 // it: how a negative operand is negative (its number where it is
-// written, `-1`, else `subtract`, `input`, ...); `origin` is the call
-// whose math does, "" for none or a written number.
+// written, `-1`, else `subtract`, `input`, ...), and the class and
+// number that put a round's operand on a half (`divide 2`); `origin` is
+// the call whose math does, "" for none or a written number.
 .decl emlx_divergence(context: Context, site: symbol, kind: symbol, detail: symbol, certain: number, cause: symbol, origin: symbol)
 emlx_divergence(context, site, "narrowed_type", name, 1, "", "") :- narrowed_type(context, site, name).
 emlx_divergence(context, site, "narrowed_transfer", name, 1, "", origin) :-
@@ -725,8 +728,8 @@ emlx_divergence(context, site, "negative_remainder", operand, certain, cause, or
   negative_remainder(context, site, operand, certain, origin, cause).
 emlx_divergence(context, site, "negative_integer_power", "exponent", certain, cause, origin) :-
   hanging_integer_power(context, site, certain, origin, cause).
-emlx_divergence(context, site, "round_half", cause, 1, "", origin) :-
-  rounds_half(context, site, cause, origin).
+emlx_divergence(context, site, "round_half", cause, 1, how, origin) :-
+  rounds_half(context, site, cause, origin, how).
 emlx_divergence(context, site, "wrapped_shift", cat(type, " ", amount), 1, "", "") :-
   wrapped_shift(context, site, type, amount).
 

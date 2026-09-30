@@ -148,16 +148,17 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
     }
   end
 
-  def divergence("round_half", cause, _how, _operation) do
+  def divergence("round_half", cause, how, _operation) do
     %{
       title: "rounds values that can lie on a half, which EMLX rounds to even",
       detail:
-        "EMLX rounds a value halfway between two integers to the even one (0.5 to 0, 2.5 to 2), " <>
-          "BinaryBackend and EXLA away from zero (to 1 and 3), and #{half_cause(cause)}.",
-      label: "rounds here",
+        "EMLX rounds a value halfway between two integers to the even one, and BinaryBackend " <>
+          "and EXLA away from zero: 2.5 rounds to 2 on EMLX and to 3 on them, and 0.5 to 0 and " <>
+          "to 1. #{half_cause(cause)}.",
+      label: "rounds #{rounded(cause, how)}",
       help:
         "round the halves the way you mean explicitly, such as Nx.floor(Nx.add(x, 0.5)) to round them up",
-      frame: "puts it on a half:"
+      frame: "can put the rounded value on a half:"
     }
   end
 
@@ -217,6 +218,30 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
     if dividend < 0, do: floored - divisor, else: floored
   end
 
+  # What a round rounds, by the class and number that put it on a half.
+  defp rounded("mean", _how), do: "a mean of integers"
+
+  defp rounded(_cause, how) do
+    case String.split(how, " ", parts: 2) do
+      ["divide", number] -> "an integer divided by #{number}"
+      ["multiply", number] -> "an integer times #{number}"
+      ["add", number] -> "an integer plus #{number}"
+      ["subtract", number] -> "the difference of an integer and #{number}"
+      _unread -> "a value that can lie on a half"
+    end
+  end
+
+  # How the rounded value lands on a half, by the cause the program names.
+  defp half_cause("halved"),
+    do: "An integer halved lies on a half where it is odd, as 5 / 2 is 2.5"
+
+  defp half_cause("half_added"), do: "An integer plus a half always lies on a half"
+
+  defp half_cause("mean"),
+    do: "A mean of an even count of integers can lie on a half, as the mean of 2 and 3 is 2.5"
+
+  defp half_cause(_cause), do: "The value rounded can lie on a half"
+
   # A shift's amount as EMLX takes it, modulo the width it shifts in.
   defp wrapped(amount, width) do
     case Integer.parse(amount) do
@@ -224,13 +249,4 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
       _unread -> "one by its amount modulo #{width}"
     end
   end
-
-  # How the rounded value lands on a half, by the cause the program names.
-  defp half_cause("halved"), do: "the value rounded is an integer halved, which lies on halves"
-  defp half_cause("half_added"), do: "the value rounded is an integer plus a half, always a half"
-
-  defp half_cause("mean"),
-    do: "the value rounded is a mean of integers, which lies on a half for an even count"
-
-  defp half_cause(_cause), do: "the value rounded can lie on a half"
 end

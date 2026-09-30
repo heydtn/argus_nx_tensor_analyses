@@ -86,7 +86,7 @@ defmodule ArgusNxTensorAnalyses.EMLX do
           {:certain, :number,
            "1 where the code's own math causes it, 0 where only an input the analysis does not follow may"},
           {:cause, :symbol,
-           "how, where a label shows it: the number written for an operand that can be negative (-1), or how it can be (subtract, input); else empty"},
+           "how, where a label shows it: the number written for an operand that can be negative (-1), or how it can be (subtract, input), or the class and number that put a round's operand on a half (divide 2, add 0.5); else empty"},
           {:origin, :symbol, "the Nx call whose math causes it, or empty"},
           {:origin_operation, :symbol, "that call's function, as Nx.subtract/2"}
         ],
