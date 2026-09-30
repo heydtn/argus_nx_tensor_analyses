@@ -406,28 +406,20 @@ freed_tensor_used(use, freed, origin, function, kind, how) :-
   runs_later(freed, use).
 
 // ══ Findings ═════════════════════════════════════════════════════════
-//
-// Each in the context of its function over its own names.
 
-call_error(context, second, "reused_key", cat(shown, " after ", first_shown), origin) :-
+call_error(second, "reused_key", cat(shown, " after ", first_shown), origin) :-
   reused_key(first, second, function),
   consumes_key(second, function, _, _, shown),
   consumes_key(first, function, _, _, first_shown),
-  draw_origin(first, origin),
-  own_context(function, context).
-call_error(context, draw, "captured_loop_key", shown, loop) :-
+  draw_origin(first, origin).
+call_error(draw, "captured_loop_key", shown, loop) :-
   key_captured_by_loop(draw, loop, body),
-  consumes_key(draw, body, _, _, shown),
-  own_context(body, context).
-call_error(context, draw, "passed_back_key", shown, loop) :-
+  consumes_key(draw, body, _, _, shown).
+call_error(draw, "passed_back_key", shown, loop) :-
   key_passed_back(draw, loop, body),
-  consumes_key(draw, body, _, _, shown),
-  own_context(body, context).
-call_error(context, return, "spent_key_returned", shown, origin) :-
+  consumes_key(draw, body, _, _, shown).
+call_error(return, "spent_key_returned", shown, origin) :-
   spent_key_returned(return, draw, function),
   consumes_key(draw, function, _, _, shown),
-  draw_origin(draw, origin),
-  own_context(function, context).
-call_error(context, use, kind, how, origin) :-
-  freed_tensor_used(use, _, origin, function, kind, how),
-  own_context(function, context).
+  draw_origin(draw, origin).
+call_error(use, kind, how, origin) :- freed_tensor_used(use, _, origin, _, kind, how).

@@ -13,14 +13,14 @@
 // ══ Findings ════════════════════════════════════════════════════════
 
 // A scalar tensor indexed: it has no axis to index.
-call_error(context, site, "access_scalar", "cannot use the tensor[index] syntax on scalar tensor", "") :-
-  indexed_tensor(context, site, [_, nil]).
+call_error(site, "access_scalar", "cannot use the tensor[index] syntax on scalar tensor", "") :-
+  indexed_tensor(_, site, [_, nil]).
 
 // An index, or a range's bound, past either end of the axis it indexes, as
 // Nx checks them: the first bound, then the last. An index within an axis
 // of `extent` lies in [-extent, extent).
-call_error(context, site, "access_out_of_bounds", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_out_of_bounds", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, _, index, _, step),
   step > 0,
   axis_extent(axes, axis, extent),
@@ -28,8 +28,8 @@ call_error(context, site, "access_out_of_bounds", detail, "") :-
   max(index + 1 - extent, 0 - extent - index) > 0,
   sizes_spelled(axes, spelled),
   detail = cat("index ", to_string(index), " is out of bounds for axis ", to_string(axis), " in shape ", spelled).
-call_error(context, site, "access_out_of_bounds", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_out_of_bounds", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, _, first, index, step),
   step > 0,
   axis_extent(axes, axis, extent),
@@ -42,8 +42,8 @@ spelling_demand(axes) :- indexed_tensor(_, _, [_, axes]).
 
 // A range with a negative step, which Nx rejects before it reads the
 // bounds (and, for a step of -1, suggests the step of 1 meant).
-call_error(context, site, "access_negative_step", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_negative_step", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, _, "span", first, last, step),
   step < 0,
   detail = cat("range step must be positive, got range: ", to_string(first), "..", to_string(last), "//", to_string(step)).
@@ -51,8 +51,8 @@ call_error(context, site, "access_negative_step", detail, "") :-
 // A range that holds no index of its axis, its bounds as Nx counts them
 // from the start: where the axis's size is known, or both bounds already
 // count from the start.
-call_error(context, site, "access_empty_range", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_empty_range", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, "span", first, last, step),
   step > 0,
   axis_extent(axes, axis, extent),
@@ -63,8 +63,8 @@ call_error(context, site, "access_empty_range", detail, "") :-
   stop = (last + extent) % max(extent, 1),
   stop < start,
   detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(start), "..", to_string(stop), "//", to_string(step)).
-call_error(context, site, "access_empty_range", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_empty_range", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, axis, "span", first, last, step),
   step > 0,
   last >= 0,
@@ -73,8 +73,8 @@ call_error(context, site, "access_empty_range", detail, "") :-
   detail = cat("slicing a tensor requires a non-empty range, got: ", to_string(first), "..", to_string(last), "//", to_string(step)).
 
 // A list of more indices than the tensor has axes.
-call_error(context, site, "access_too_many_indices", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_too_many_indices", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   key_entry(key, 0, "", _),
   key_length(key, length),
   axes_rank(axes, rank),
@@ -84,8 +84,8 @@ call_error(context, site, "access_too_many_indices", detail, "") :-
   detail = cat("unknown or duplicate axis ", to_string(length - 1), " found when slicing shape ", spelled).
 
 // A keyword list naming one axis twice.
-call_error(context, site, "access_duplicate_name", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_duplicate_name", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   entry_axis(key, axes, slot, axis),
   entry_axis(key, axes, other, axis),
   slot < other,
@@ -93,8 +93,8 @@ call_error(context, site, "access_duplicate_name", detail, "") :-
   detail = cat("unknown or duplicate axis ", to_string(axis), " found when slicing shape ", spelled).
 
 // A keyword list naming an axis the tensor does not have.
-call_error(context, site, "access_unknown_name", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_unknown_name", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   key_entry(key, _, name, _),
   name != "",
   !axes_axis(axes, _, _, name),
@@ -103,13 +103,13 @@ call_error(context, site, "access_unknown_name", detail, "") :-
 
 // A float the code writes as the key, or as the index of an axis in a
 // list.
-call_error(context, site, "access_float_index", detail, "") :-
-  tensor_indexed_by(context, site, _, $Term(text, start)),
+call_error(site, "access_float_index", detail, "") :-
+  tensor_indexed_by(_, site, _, $Term(text, start)),
   entry_index($Term(text, start), "float", _, _, _),
   term_spelling(text, start, spelled),
   detail = cat("tensor[slice] expects slice to be an integer, a scalar tensor, a range, or a list or keyword list of them. Got ", spelled).
-call_error(context, site, "access_float_index", detail, "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_float_index", detail, "") :-
+  tensor_indexed_by(_, site, axes, key),
   entry_axis(key, axes, slot, _),
   key_entry(key, slot, _, $Term(text, start)),
   key != $Term(text, start),
@@ -120,14 +120,14 @@ call_error(context, site, "access_float_index", detail, "") :-
 // A tensor key that is an integer tensor on no path in some context: a
 // scalar Nx slices at, or indices it takes. `origin` is the call that
 // makes it a float or complex tensor.
-call_error(context, site, "access_float_index_tensor", detail, origin) :-
+call_error(site, "access_float_index_tensor", detail, origin) :-
   indexed_tensor(context, site, _),
   argument_value(context, site, 1, $Tensor([_, nil])),
   argument_class(context, site, 1, class, origin),
   class != "integer",
   !argument_class(context, site, 1, "integer", _),
   detail = cat("index must be integer type, got a ", class, " type for axis 0").
-call_error(context, site, "access_float_index_tensor", detail, origin) :-
+call_error(site, "access_float_index_tensor", detail, origin) :-
   indexed_tensor(context, site, _),
   argument_value(context, site, 1, $Tensor([_, [_, _, _]])),
   argument_class(context, site, 1, class, origin),
@@ -136,20 +136,20 @@ call_error(context, site, "access_float_index_tensor", detail, origin) :-
   detail = cat("indices must be an integer tensor, got a ", class, " type").
 
 // A tensor with axes where a list indexes one axis.
-call_error(context, site, "access_tensor_in_list", "tensor must be a scalar when accessing a list/keyword of dimensions", "") :-
-  tensor_indexed_by(context, site, axes, key),
+call_error(site, "access_tensor_in_list", "tensor must be a scalar when accessing a list/keyword of dimensions", "") :-
+  tensor_indexed_by(_, site, axes, key),
   axis_entry(key, axes, _, "tensor", _, _, _).
 
 // `put_in/2`, `update_in/2`, `get_and_update_in/2` and `pop_in/1` on a
 // tensor's index, and the functions they compile to: `Nx.Tensor`
 // implements neither `get_and_update/3` nor `pop/2`.
-call_error(context, site, "access_update", "Access.get_and_update/3 is not supported. Please use Nx.put_slice/3 instead", "") :-
+call_error(site, "access_update", "Access.get_and_update/3 is not supported. Please use Nx.put_slice/3 instead", "") :-
   site_active(context, site),
   remote_call(site, function, module, name, 3),
   match("Access\\.get_and_update|Kernel\\.(put_in|update_in|get_and_update_in)", cat(module, ".", name)),
   flow_argument(site, function, 0, kind, source),
   value_of(context, function, kind, source, $Tensor(_)).
-call_error(context, site, "access_update", "Access.pop/2 is not yet supported by Nx.Tensor", "") :-
+call_error(site, "access_update", "Access.pop/2 is not yet supported by Nx.Tensor", "") :-
   site_active(context, site),
   remote_call(site, function, module, name, 2),
   match("Access\\.pop|Kernel\\.pop_in", cat(module, ".", name)),
@@ -160,8 +160,8 @@ call_error(context, site, "access_update", "Access.pop/2 is not yet supported by
 // does not fit the first axis: Nx slices at a tensor index clamped into
 // the axis, so it reads the nearest end (`read`), where an integer index
 // would raise or count from the end.
-call_error(context, site, "access_index_clamped", detail, "") :-
-  tensor_indexed_by(context, site, axes, _),
+call_error(site, "access_index_clamped", detail, "") :-
+  tensor_indexed_by(_, site, axes, _),
   flow_argument(site, _, 1, "result", made),
   operation_site(made, "Nx.tensor", _),
   argument_literal(made, 0, text),
@@ -177,18 +177,18 @@ call_error(context, site, "access_index_clamped", detail, "") :-
 // tensors, or no clause of the call takes a tuple. `detail` is the
 // argument's position; `origin` the Nx call that returns the tuple, ""
 // where the code builds it or it comes through a call of the program.
-call_error(context, site, "tuple_as_tensor", to_string(position), origin) :-
+call_error(site, "tuple_as_tensor", to_string(position), origin) :-
   takes_tensor(site, position),
-  site_active(context, site),
+  active_site(site),
   flow_argument(site, _, position, "result", origin),
   makes_tuple(origin).
-call_error(context, site, "tuple_as_tensor", to_string(position), "") :-
+call_error(site, "tuple_as_tensor", to_string(position), "") :-
   takes_tensor(site, position),
   site_active(context, site),
   flow_argument(site, function, position, kind, source),
   !makes_tuple(source),
   value_of(context, function, kind, source, $Uniform(_)).
-call_error(context, site, "tuple_as_tensor", to_string(position), "") :-
+call_error(site, "tuple_as_tensor", to_string(position), "") :-
   takes_tensor(site, position),
   site_active(context, site),
   flow_argument(site, function, position, kind, source),
@@ -198,8 +198,8 @@ call_error(context, site, "tuple_as_tensor", to_string(position), "") :-
 
 // `Nx.tensor/2` handed a list with a tensor in it, or in a list it holds:
 // it builds tensors from numbers.
-call_error(context, site, "tensors_in_tensor_data", "invalid value given to Nx.tensor/1", "") :-
-  argument_value(context, site, 0, root),
+call_error(site, "tensors_in_tensor_data", "invalid value given to Nx.tensor/1", "") :-
+  argument_value(_, site, 0, root),
   operation_site(site, "Nx.tensor", _),
   data_cell(root, cell),
   field_value(cell, "head", $Tensor(_)).
@@ -207,10 +207,10 @@ call_error(context, site, "tensors_in_tensor_data", "invalid value given to Nx.t
 // `Nx.squeeze/1` with no `:axes` over an axis whose size the code reads
 // from an input's shape: it removes the axis wherever that size is 1, so
 // the result's rank depends on the input (a batch or a sequence of one).
-call_error(context, site, "squeeze_input_size", detail, "") :-
+call_error(site, "squeeze_input_size", detail, "") :-
   site_instance(site, "Nx.squeeze", _, [first, second, third]),
   option_absent(site, "axes"),
-  instance(context, site, [first, second, third], _),
+  instance(_, site, [first, second, third], _),
   axes_axis(first, axis, [1, [factor, nil]], _),
   contains("#", factor),
   size_spelled([1, [factor, nil]], spelled),

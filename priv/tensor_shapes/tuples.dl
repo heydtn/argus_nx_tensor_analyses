@@ -213,9 +213,9 @@ violation(context, site, "sampler_parameters", cat("cannot broadcast tensor of d
 // that adds axes the draw repeats along, so the elements along them share
 // one draw. `Nx.Random.normal(key, mean, deviation)` with a tensor mean
 // and no `:shape` draws a single value for all of them.
-call_error(context, site, "shared_draw", cat("draws ", draw_spelled, " and returns ", sample_spelled), "") :-
+call_error(site, "shared_draw", cat("draws ", draw_spelled, " and returns ", sample_spelled), "") :-
   normal_sample(site, operands, sample),
-  instance(context, site, operands, _),
+  instance(_, site, operands, _),
   normal_draw(site, operands, draw),
   axes_product(sample, sample_count),
   axes_product(draw, draw_count),
@@ -636,14 +636,14 @@ violation(context, site, "axis", cat("given axis (", to_string(value), ") invali
 // A matrix norm handed `:axes`, which Nx applies to the vector the
 // matrix is reduced to, or ignores: it returns the norm of the whole
 // matrix, not one for each row or column.
-call_error(context, site, "norm_axes", order, "") :-
+call_error(site, "norm_axes", order, "") :-
   norm_vector_reduced(site, operands, _),
-  instance(context, site, operands, _),
+  instance(_, site, operands, _),
   option_given(site, "axes"),
   option(site, "ord", text, start),
   term_spelling(text, start, order).
-call_error(context, site, "norm_axes", ":nuclear", "") :-
-  instance(context, site, [[_, _, [_, _, nil]], _, _], _),
+call_error(site, "norm_axes", ":nuclear", "") :-
+  instance(_, site, [[_, _, [_, _, nil]], _, _], _),
   operation_site(site, "Nx.LinAlg.norm", _),
   option_atom(site, "ord", ":nuclear"),
   option_given(site, "axes").

@@ -215,7 +215,7 @@ negative_asked(context, function, kind, source) :-
   site_active(context, site),
   flow_argument(site, function, 1, kind, source).
 
-call_error(context, site, "negative_index", cause, origin) :- negative_index(context, site, origin, cause).
+call_error(site, "negative_index", cause, origin) :- negative_index(_, site, origin, cause).
 
 // ══ Slice starts ════════════════════════════════════════════════════
 //
@@ -352,9 +352,9 @@ known_start(context, site, axis, begin) :-
   value_of(context, function, kind, source, $Integer([begin, nil])),
   begin > 0.
 
-call_error(context, site, "negative_slice_start", cause, origin) :-
-  negative_slice_start(context, site, origin, cause).
-call_error(context, site, "slice_past_end", detail, "") :- slice_past_end(context, site, detail).
+call_error(site, "negative_slice_start", cause, origin) :-
+  negative_slice_start(_, site, origin, cause).
+call_error(site, "slice_past_end", detail, "") :- slice_past_end(_, site, detail).
 
 // A start Nx rejects for its type: slices start at integers, and Nx raises
 // for a float or complex one.
@@ -383,18 +383,14 @@ sign_demand(context, function, kind, source) :- start_value(context, _, function
 
 // `certain` is 1 where a start is never an integer in some context, which
 // Nx rejects on every path there.
-tensor_type_error(site, function, operation, "non_integer_start", class, 1, min(certain, 1), origin, origin_operation) :-
+type_error(site, "non_integer_start", class, 1, min(certain, 1), origin) :-
   non_integer_start(_, site, _, _, _, class, origin),
   certain = count : {
     non_integer_start(context, site, start_function, kind, source, _, _),
     !value_class(context, start_function, kind, source, "integer", _)
   },
-  finding_call(site, function, operation),
-  call_spelled(origin, origin_operation),
   operation_site(site, _, _),
   nx_origin(origin).
-named_call(site) :- non_integer_start(_, site, _, _, _, _, _).
-named_call(origin) :- non_integer_start(_, _, _, _, _, _, origin).
 
 // ══ ddof ════════════════════════════════════════════════════════════
 //
@@ -464,13 +460,13 @@ quotient_demand(total, rest) :-
   axes_product(first, total),
   axes_product(kept, rest).
 
-nonfinite(context, site, "ddof_not_below_count", how, "") :- ddof_past_count(context, site, how, _).
+nonfinite(site, "ddof_not_below_count", how, "") :- ddof_past_count(_, site, how, _).
 
 // A negative `ddof`, which Nx takes: it divides by more than the count.
-call_error(context, site, "negative_ddof", to_string(ddof), "") :-
+call_error(site, "negative_ddof", to_string(ddof), "") :-
   written_ddof(site, ddof),
   ddof < 0,
-  site_active(context, site).
+  active_site(site).
 
 // ══ Random ranges ═══════════════════════════════════════════════════
 //
@@ -483,14 +479,14 @@ call_error(context, site, "negative_ddof", to_string(ddof), "") :-
 // reversed range gives `min` alone.
 
 // A randint over an empty range: `min` equal to `max`, which is exclusive.
-call_error(context, site, "random_range_empty", cat(low, " to ", high), "") :-
+call_error(site, "random_range_empty", cat(low, " to ", high), "") :-
   random_sampling(site, "randint"),
   random_bound(context, site, 1, minimum, low),
   random_bound(context, site, 2, maximum, high),
   minimum = maximum.
 
 // A random range whose minimum is above its maximum.
-call_error(context, site, "random_range_reversed", cat(low, " to ", high), "") :-
+call_error(site, "random_range_reversed", cat(low, " to ", high), "") :-
   random_sampling(site, _),
   random_bound(context, site, 1, minimum, low),
   random_bound(context, site, 2, maximum, high),
@@ -500,7 +496,7 @@ call_error(context, site, "random_range_reversed", cat(low, " to ", high), "") :
 // the type holds the range where its smallest value is at most the
 // minimum, its largest at least the maximum less one, and the span is
 // narrower than its width (a span as wide wraps to zero).
-call_error(context, site, "random_range_outside_type", cat(low, " to ", high, " as ", name), "") :-
+call_error(site, "random_range_outside_type", cat(low, " to ", high, " as ", name), "") :-
   random_sampling(site, "randint"),
   random_bound(context, site, 1, minimum, low),
   random_bound(context, site, 2, maximum, high),
@@ -510,18 +506,18 @@ call_error(context, site, "random_range_outside_type", cat(low, " to ", high, " 
 
 // A randint that makes a tensor of a type other than an integer, which Nx
 // rejects: given one, or given none and a bound written as a float.
-call_error(context, site, "random_type_not_integer", class, "") :-
+call_error(site, "random_type_not_integer", class, "") :-
   random_sampling(site, "randint"),
-  given_type(context, site, _, class),
+  given_type(_, site, _, class),
   class != "integer".
-call_error(context, site, "random_type_not_integer", "float", "") :-
+call_error(site, "random_type_not_integer", "float", "") :-
   random_sampling(site, "randint"),
   !type_given(site),
-  float_bound(context, site).
+  float_bound(_, site).
 
 // A randint given an integer type with a bound written as a float, which
 // it truncates.
-call_error(context, site, "random_bound_truncated", "float", "") :-
+call_error(site, "random_bound_truncated", "float", "") :-
   random_sampling(site, "randint"),
   given_type(context, site, _, "integer"),
   float_bound(context, site).
@@ -679,16 +675,12 @@ value_class(context, function, "result", site, "float", site) :-
 
 // `certain` is 1 where an operand is never anything but complex in some
 // context, which Nx rejects on every path there.
-tensor_type_error(site, function, operation, kind, "complex", position, min(certain, 1), origin, origin_operation) :-
+type_error(site, kind, "complex", position, min(certain, 1), origin) :-
   complex_operand(_, site, position, kind, origin),
   certain = count : {
     complex_operand(context, site, position, _, _),
     !operand_class(context, site, position, "integer", _),
     !operand_class(context, site, position, "float", _)
   },
-  finding_call(site, function, operation),
-  call_spelled(origin, origin_operation),
   operation_site(site, _, _),
   nx_origin(origin).
-named_call(site) :- complex_operand(_, site, _, _, _).
-named_call(origin) :- complex_operand(_, _, _, _, origin).

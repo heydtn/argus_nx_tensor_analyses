@@ -240,19 +240,19 @@ jitted_struct_result(context, call, caller, struct) :-
   path = cat("$", to_string(position)),
   struct_built(object, struct).
 
-call_error(context, read, "dropped_field_read", detail, "") :-
-  dropped_field_read(context, read, struct, field),
+call_error(read, "dropped_field_read", detail, "") :-
+  dropped_field_read(_, read, struct, field),
   dropped_field(struct, field, default),
   detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
 // The call that returns the struct is the finding's origin where it is a
 // remote call, which a finding can name.
-call_error(context, read, "dropped_field_returned", detail, call) :-
-  dropped_field_returned(context, read, struct, field, call),
+call_error(read, "dropped_field_returned", detail, call) :-
+  dropped_field_returned(_, read, struct, field, call),
   remote_call(call, _, _, _, _),
   dropped_field(struct, field, default),
   detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
-call_error(context, read, "dropped_field_returned", detail, "") :-
-  dropped_field_returned(context, read, struct, field, call),
+call_error(read, "dropped_field_returned", detail, "") :-
+  dropped_field_returned(_, read, struct, field, call),
   !remote_call(call, _, _, _, _),
   dropped_field(struct, field, default),
   detail = cat(struct, ".", substr(field, 1, strlen(field) - 1), "=", default).
@@ -520,11 +520,11 @@ sole_cell(site, next) :-
   flow_field(_, cell, "tail", "object", next),
   1 = count : { flow_field(_, cell, "tail", _, _) }.
 
-call_error(context, site, "container_leaf", cat(leaf, " at ", root, path), "") :-
-  untraceable_leaf(context, site, root, path, leaf, object, selector),
+call_error(site, "container_leaf", cat(leaf, " at ", root, path), "") :-
+  untraceable_leaf(_, site, root, path, leaf, object, selector),
   written_leaf(site, object, selector).
-call_error(context, site, "container_leaf", cat("possibly ", leaf, " at ", root, path), "") :-
-  untraceable_leaf(context, site, root, path, leaf, object, selector),
+call_error(site, "container_leaf", cat("possibly ", leaf, " at ", root, path), "") :-
+  untraceable_leaf(_, site, root, path, leaf, object, selector),
   !written_leaf(site, object, selector).
 
 // ══ Values a gradient's function captures ═══════════════════════════
@@ -571,10 +571,7 @@ differentiates(site, caller, "load", load, cat(path, suffix)) :-
   flow_load(caller, load, selector, kind, source),
   selector_suffix(selector, suffix).
 
-call_error(context, site, "captured_gradient", path, "") :-
-  captured_gradient(site, path),
-  site_function(site, function),
-  own_context(function, context).
+call_error(site, "captured_gradient", path, "") :- captured_gradient(site, path).
 
 // ══ Fields visited in two orders ════════════════════════════════════
 
@@ -610,8 +607,6 @@ visit_call(function, field, visit, index) :-
   flow_load(function, load, field, "param", "0"),
   instruction(visit, function, index, _).
 
-call_error(context, visit, "container_order", detail, "") :-
+call_error(visit, "container_order", detail, "") :-
   misordered_field(visit, struct, field),
-  instruction(visit, function, _, _),
-  own_context(function, context),
   detail = cat(struct, ".", substr(field, 1, strlen(field) - 1)).

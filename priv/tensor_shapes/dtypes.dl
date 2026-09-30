@@ -50,48 +50,44 @@
 
 // ══ Findings ════════════════════════════════════════════════════════
 
-call_error(context, site, "unsigned_wraparound", type, origin) :-
-  unsigned_wraparound(context, site, type, origin).
-call_error(context, site, "count_wraparound", cat(type, " ", length), origin) :-
-  count_wraparound(context, site, type, length, origin).
-call_error(context, site, "narrow_wraparound", type, origin) :-
-  narrow_wraparound(context, site, type, origin).
-call_error(context, site, "index_wraparound", cat(type, " ", counted), "") :-
-  index_wraparound(context, site, type, counted).
-call_error(context, site, "sequence_precision", cat(type, " ", counted), origin) :-
-  sequence_precision(context, site, type, counted, origin).
-call_error(context, site, "cast_wraparound", type, "") :-
-  cast_wraparound(context, site, type).
-call_error(context, site, "unchecked_cast_wraparound", type, "") :-
-  unchecked_cast_wraparound(context, site, type).
-call_error(context, site, "complex_to_real", cat(from, " ", to), origin) :-
-  drops_imaginary_part(context, site, from, to, origin).
-call_error(context, site, "float_truncation", cat(from, " ", to), origin) :-
-  truncates_float(context, site, from, to, origin).
-call_error(context, site, "literal_underflow", cat(number, " ", type), "") :-
-  literal_underflow(context, site, number, type).
-call_error(context, site, "pad_type_mismatch", cat(from, " ", to), "") :-
-  pad_type_mismatch(context, site, from, to).
-call_error(context, site, "integer_determinant", type, origin) :-
-  integer_determinant(context, site, type, origin).
-call_error(context, site, "f32_precision", "f64", "") :-
-  f32_precision(context, site).
+call_error(site, "unsigned_wraparound", type, origin) :-
+  unsigned_wraparound(_, site, type, origin).
+call_error(site, "count_wraparound", cat(type, " ", length), origin) :-
+  count_wraparound(_, site, type, length, origin).
+call_error(site, "narrow_wraparound", type, origin) :-
+  narrow_wraparound(_, site, type, origin).
+call_error(site, "index_wraparound", cat(type, " ", counted), "") :-
+  index_wraparound(_, site, type, counted).
+call_error(site, "sequence_precision", cat(type, " ", counted), origin) :-
+  sequence_precision(_, site, type, counted, origin).
+call_error(site, "cast_wraparound", type, "") :-
+  cast_wraparound(_, site, type).
+call_error(site, "unchecked_cast_wraparound", type, "") :-
+  unchecked_cast_wraparound(_, site, type).
+call_error(site, "complex_to_real", cat(from, " ", to), origin) :-
+  drops_imaginary_part(_, site, from, to, origin).
+call_error(site, "float_truncation", cat(from, " ", to), origin) :-
+  truncates_float(_, site, from, to, origin).
+call_error(site, "literal_underflow", cat(number, " ", type), "") :-
+  literal_underflow(_, site, number, type).
+call_error(site, "pad_type_mismatch", cat(from, " ", to), "") :-
+  pad_type_mismatch(_, site, from, to).
+call_error(site, "integer_determinant", type, origin) :-
+  integer_determinant(_, site, type, origin).
+call_error(site, "f32_precision", "f64", "") :-
+  f32_precision(_, site).
 
-nonfinite(context, site, "literal_overflow", type, "") :- literal_overflow(context, site, type).
-nonfinite(context, site, "cast_overflow", type, origin) :- cast_overflow(context, site, type, origin).
-nonfinite(context, site, "float_sum_overflow", cat(type, " ", counted), "") :-
-  float_sum_overflow(context, site, type, counted).
-nonfinite(context, site, "unsigned_logsumexp", type, origin) :-
-  unsigned_logsumexp(context, site, type, origin).
+nonfinite(site, "literal_overflow", type, "") :- literal_overflow(_, site, type).
+nonfinite(site, "cast_overflow", type, origin) :- cast_overflow(_, site, type, origin).
+nonfinite(site, "float_sum_overflow", cat(type, " ", counted), "") :-
+  float_sum_overflow(_, site, type, counted).
+nonfinite(site, "unsigned_logsumexp", type, origin) :-
+  unsigned_logsumexp(_, site, type, origin).
 
-tensor_type_error(site, function, operation, kind, cat(from, " ", to), position, 0, origin, origin_operation) :-
+type_error(site, kind, cat(from, " ", to), position, 0, origin) :-
   type_meeting(site, kind, position, from, to, origin),
-  finding_call(site, function, operation),
-  call_spelled(origin, origin_operation),
   operation_site(site, _, _),
   nx_origin(origin).
-named_call(site) :- type_meeting(site, _, _, _, _, _).
-named_call(origin) :- type_meeting(_, _, _, _, _, origin).
 
 // The type findings: an upcast, a narrowing merge.
 .decl type_meeting(site: symbol, kind: symbol, position: number, from: symbol, to: symbol, origin: symbol)

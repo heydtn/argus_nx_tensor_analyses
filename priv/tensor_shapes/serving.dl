@@ -45,34 +45,34 @@
 // rest of the batch, other callers' entries and the zero rows padding it).
 
 // The computation returns a reduction over every axis.
-call_error(context, compile, "serving_scalar_output", "it returns a reduction over every axis", origin) :-
-  compiled_for_serving(context, compile, computation),
+call_error(compile, "serving_scalar_output", "it returns a reduction over every axis", origin) :-
+  compiled_for_serving(_, compile, computation),
   returns_reduction_of_every_axis(computation, origin).
 
 // Over a batch the program says the shape of, the computation's output is
 // a scalar.
-call_error(context, compile, "serving_scalar_output", "its output is a scalar", "") :-
-  batched_run(context, compile, computation, batched),
+call_error(compile, "serving_scalar_output", "its output is a scalar", "") :-
+  batched_run(_, compile, computation, batched),
   output_off_batch(batched, computation, nil),
   !returns_reduction_of_every_axis(computation, _).
 
 // The computation is one of Nx's reductions, which reduce every axis
 // given no options.
-call_error(context, serving, "serving_scalar_output", cat("it runs ", operation, ", which reduces every axis"), "") :-
+call_error(serving, "serving_scalar_output", cat("it runs ", operation, ", which reduces every axis"), "") :-
   serving_computation(_, serving, external, 0),
   nx_reduction_of_every_axis(external, operation),
-  site_active(context, serving).
+  active_site(serving).
 
 // Over a batch the program says the shape of, an output leaf's first axis
 // is another size than the batch's.
-call_error(context, compile, "serving_output_batch_axis", cat("its output's first axis is ", spelled, ", where the batch axis should be"), "") :-
-  batched_run(context, compile, computation, batched),
+call_error(compile, "serving_output_batch_axis", cat("its output's first axis is ", spelled, ", where the batch axis should be"), "") :-
+  batched_run(_, compile, computation, batched),
   output_off_batch(batched, computation, [first, _, _]),
   size_spelled(first, spelled).
 
 // Over a batch the program says the shape of, an operation runs along the
 // batch axis, and the output keeps it first.
-call_error(context, site, "serving_mixes_batch", detail, "") :-
+call_error(site, "serving_mixes_batch", detail, "") :-
   in_batched_run(batched, context, batch),
   operates_along(context, site, operand, axis, detail),
   axes_axis(operand, axis, batch, _),
@@ -80,7 +80,7 @@ call_error(context, site, "serving_mixes_batch", detail, "") :-
 
 // An operation runs along the first axis of the batch the computation is
 // handed, whatever its rank, and is not all it returns.
-call_error(context, site, "serving_mixes_batch", detail, "") :-
+call_error(site, "serving_mixes_batch", detail, "") :-
   batch_parameter(context, computation, path),
   runs_along_first_axis(context, site, path, detail),
   !returns_reduction_of_every_axis(computation, site),
@@ -104,8 +104,8 @@ call_error(context, site, "serving_mixes_batch", detail, "") :-
 
 // The computation is compiled for a batch size, and the serving runs over
 // a batch of another, which nothing pads.
-call_error(context, compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), " and runs over a batch of ", to_string(entries)), "") :-
-  serving_compiled_template(context, compile, serving, _, size),
+call_error(compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), " and runs over a batch of ", to_string(entries)), "") :-
+  serving_compiled_template(_, compile, serving, _, size),
   size > 0,
   serving_batch(serving, batch),
   listed_tensors(_, batch, "stack", entries, _),
@@ -115,48 +115,48 @@ call_error(context, compile, "serving_template_batch_size", cat("it is compiled 
 // The computation is compiled for a batch size, and a serving process
 // runs it, which runs smaller batches when its batch times out, and
 // nothing pads them.
-call_error(context, compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), ", and a serving process runs smaller ones when its batch times out"), "") :-
-  serving_compiled_template(context, compile, serving, _, size),
+call_error(compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), ", and a serving process runs smaller ones when its batch times out"), "") :-
+  serving_compiled_template(_, compile, serving, _, size),
   size > 1,
   started(serving),
   !padded(serving).
 
 // The computation is compiled for a type of number its batch's entries
 // are not.
-call_error(context, compile, "serving_template_type", cat("it is compiled for ", name, " and its batch's entries are ", class, "s"), "") :-
-  serving_compiled_template(context, compile, serving, template, _),
+call_error(compile, "serving_template_type", cat("it is compiled for ", name, " and its batch's entries are ", class, "s"), "") :-
+  serving_compiled_template(_, compile, serving, template, _),
   template_type(template, name, template_class),
   entry_class(serving, class),
   class != template_class.
 
 // A batch's entries do not share one template.
-call_error(context, site, "batch_incompatible_entries", cat("it gets entries of shapes ", first_shown, " and ", entry_shown), "") :-
-  entries_conflict(context, site, first, entry),
+call_error(site, "batch_incompatible_entries", cat("it gets entries of shapes ", first_shown, " and ", entry_shown), "") :-
+  entries_conflict(_, site, first, entry),
   shape_shown(first, first_shown),
   shape_shown(entry, entry_shown).
 
 // A batch concatenates a scalar, which has no first axis.
-call_error(context, site, "batch_scalar_entry", "it concatenates a scalar, which has no first axis to join", "") :-
-  entries_from(context, site, 1, _, [[nil, nil], _]).
+call_error(site, "batch_scalar_entry", "it concatenates a scalar, which has no first axis to join", "") :-
+  entries_from(_, site, 1, _, [[nil, nil], _]).
 
 // A serving with the default preprocessing runs a batch that has no
 // entries on its way from where it is made.
-call_error(context, run, "batch_empty", "it is handed a batch with no entries", empty) :-
+call_error(run, "batch_empty", "it is handed a batch with no entries", empty) :-
   run_without_preprocessing(run, _),
   run_argument(run, 1, function, kind, source),
   batch_without_entries(function, kind, source, empty),
-  site_active(context, run).
+  active_site(run).
 
 // A serving process's preprocessing makes its batch of the request as it
 // comes, under the one batch key.
-call_error(context, setting, "serving_entry_shape_varies", "its batch's entry is the request, whose shape the caller decides, so requests of other shapes meet in one batch", batch) :-
+call_error(setting, "serving_entry_shape_varies", "its batch's entry is the request, whose shape the caller decides, so requests of other shapes meet in one batch", batch) :-
   started(serving),
   serving_preprocessing(serving, setting, function),
   returns_first(function, kind, source),
   comes_from(function, kind, source, batch),
   batches_request(setting, batch),
   !on_its_way(function, kind, source, "key", _),
-  site_active(context, setting).
+  active_site(setting).
 
 // ══ The serving API ═════════════════════════════════════════════════
 
@@ -167,42 +167,42 @@ call_error(context, setting, "serving_entry_shape_varies", "its batch's entry is
 
 // A serving with the default preprocessing, which takes only batches, is
 // run on a tensor.
-call_error(context, run, "serving_run_input", "it is handed a tensor, and the serving has no client preprocessing to make a batch of it", "") :-
+call_error(run, "serving_run_input", "it is handed a tensor, and the serving has no client preprocessing to make a batch of it", "") :-
   run_without_preprocessing(run, _),
   run_argument(run, 1, _, "result", made),
   operation_site(made, _, _),
-  site_active(context, run).
+  active_site(run).
 
 // A preprocessing returns a batch, not a `{batch, info}` pair.
-call_error(context, setting, "serving_preprocessing_result", "the preprocessing returns a batch, not a {batch, info} pair", "") :-
+call_error(setting, "serving_preprocessing_result", "the preprocessing returns a batch, not a {batch, info} pair", "") :-
   serving_callback(setting, "client_preprocessing", function),
   returns_batch(function),
-  site_active(context, setting).
+  active_site(setting).
 
 // A preprocessing returns a tensor first in its pair, where the batch
 // goes.
-call_error(context, setting, "serving_preprocessing_result", "the preprocessing returns a tensor first in its pair, where the batch goes", "") :-
+call_error(setting, "serving_preprocessing_result", "the preprocessing returns a tensor first in its pair, where the batch goes", "") :-
   serving_callback(setting, "client_preprocessing", function),
   returns_first(function, "result", made),
   operation_site(made, _, _),
-  site_active(context, setting).
+  active_site(setting).
 
 // A builder returns a tensor, not a jitted or compiled function.
-call_error(context, serving, "serving_builder_result", "its builder returns a tensor, not a jitted or compiled function", "") :-
+call_error(serving, "serving_builder_result", "its builder returns a tensor, not a jitted or compiled function", "") :-
   builder_returns(serving, made),
   operation_site(made, _, _),
-  site_active(context, serving).
+  active_site(serving).
 
 // The computation takes more than the batch, after its captures.
-call_error(context, compile, "serving_computation_arity", cat("it compiles a function of ", to_string(arity - captured), " arguments, and a serving hands its computation one, the batch"), "") :-
+call_error(compile, "serving_computation_arity", cat("it compiles a function of ", to_string(arity - captured), " arguments, and a serving hands its computation one, the batch"), "") :-
   serving_computation(_, compile, function, captured),
   function_def(function, _, _, arity, _),
   arity != captured + 1,
-  site_active(context, compile).
+  active_site(compile).
 
 // A two-argument postprocessing takes the `{output, metadata}` pair it is
 // handed as a tensor.
-call_error(context, site, "serving_postprocessing_input", "the postprocessing takes the output as a tensor, where it is handed an {output, metadata} pair", "") :-
+call_error(site, "serving_postprocessing_input", "the postprocessing takes the output as a tensor, where it is handed an {output, metadata} pair", "") :-
   callback_input(_, "client_postprocessing", context, path),
   argument_unshaped(context, site, _, path).
 

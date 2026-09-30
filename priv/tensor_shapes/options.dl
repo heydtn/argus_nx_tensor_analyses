@@ -20,13 +20,13 @@
 
 // ── Findings ───────────────────────────────────────────────────────
 
-call_error(context, site, "unknown_option", key, "") :- unknown_option(context, site, key).
-call_error(context, site, "options_not_keyword", list, "") :- positional_options(context, site, list).
-call_error(context, site, "option_form", cat(key, ": ", spelled), "") :-
-  option_of_wrong_form(context, site, key, spelled).
-call_error(context, site, "option_value", cat(key, ": ", atom), "") :-
-  rejected_option_value(context, site, key, atom).
-call_error(context, site, "option_value", atom, "") :- unknown_padding_type(context, site, atom).
+call_error(site, "unknown_option", key, "") :- unknown_option(_, site, key).
+call_error(site, "options_not_keyword", list, "") :- positional_options(_, site, list).
+call_error(site, "option_form", cat(key, ": ", spelled), "") :-
+  option_of_wrong_form(_, site, key, spelled).
+call_error(site, "option_value", cat(key, ": ", atom), "") :-
+  rejected_option_value(_, site, key, atom).
+call_error(site, "option_value", atom, "") :- unknown_padding_type(_, site, atom).
 
 // ── What goes wrong ────────────────────────────────────────────────
 

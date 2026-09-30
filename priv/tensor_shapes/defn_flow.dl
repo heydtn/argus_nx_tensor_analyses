@@ -29,21 +29,21 @@
 
 // A `cond`, `if` or `while` decides on a tensor that is not a scalar, as
 // `if x > 0` of a vector does, and Nx raises.
-call_error(context, place, "predicate_shape", spelled, "") :-
-  decides_on(context, place, $Tensor([_, axes])),
+call_error(place, "predicate_shape", spelled, "") :-
+  decides_on(_, place, $Tensor([_, axes])),
   axes != nil,
   sizes_spelled(axes, spelled).
 spelling_demand(axes) :- decides_on(_, _, $Tensor([_, axes])), axes != nil.
 
 // A `cond` or `if` decides on nil, an atom or a list, which is no tensor:
 // `if opts[:training]` where the options lack the key. Nx raises.
-call_error(context, place, "predicate_value", spelled, "") :-
-  decides_on(context, place, $Term(text, start)),
+call_error(place, "predicate_value", spelled, "") :-
+  decides_on(_, place, $Term(text, start)),
   ( term_atom(text, start, _), !term_scalar(text, start) ; term_list(text, start) ),
   term_spelling(text, start, spelled).
-call_error(context, pair, "predicate_value", "nil", "") :-
+call_error(pair, "predicate_value", "nil", "") :-
   clause_predicate(_, function, pair, _, kind, source),
-  misses_key(context, function, kind, source).
+  misses_key(_, function, kind, source).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -94,8 +94,8 @@ declared_key("*") :-
 
 // Two branches of a `cond` or `if` give tensors whose shapes do not
 // broadcast together, and Nx raises merging them.
-call_error(context, pair, "branch_shapes", cat("cannot broadcast tensor of dimensions ", later_spelled, " to ", earlier_spelled), "") :-
-  branch_meeting(context, pair, earlier, later),
+call_error(pair, "branch_shapes", cat("cannot broadcast tensor of dimensions ", later_spelled, " to ", earlier_spelled), "") :-
+  branch_meeting(_, pair, earlier, later),
   broadcast_axis(later, earlier, _, later_size, _, earlier_size, _),
   broadcast_conflict(later_size, earlier_size),
   sizes_spelled(later, later_spelled),
@@ -103,8 +103,8 @@ call_error(context, pair, "branch_shapes", cat("cannot broadcast tensor of dimen
 
 // Two branches give tensors of known shapes that broadcast to one neither
 // has, which Nx gives without a word: `{3}` and `{3, 1}` make `{3, 3}`.
-call_error(context, pair, "branch_broadcast", cat(earlier_spelled, " and ", later_spelled, " broadcast to ", merged_spelled), "") :-
-  branch_meeting(context, pair, earlier, later),
+call_error(pair, "branch_broadcast", cat(earlier_spelled, " and ", later_spelled, " broadcast to ", merged_spelled), "") :-
+  branch_meeting(_, pair, earlier, later),
   axes_sized(earlier),
   axes_sized(later),
   broadcast(later, earlier, merged),
@@ -117,7 +117,7 @@ spelling_demand(merged) :- branch_meeting(_, _, earlier, later), broadcast(later
 
 // Two branches give values of different structures, a tuple and a
 // tensor or tuples of different sizes, and Nx raises.
-call_error(context, pair, "branch_structure", cat(earlier, " and ", later), "") :-
+call_error(pair, "branch_structure", cat(earlier, " and ", later), "") :-
   branch_form(context, site, one, earlier),
   branch_form(context, site, other, later),
   one < other,
@@ -126,16 +126,16 @@ call_error(context, pair, "branch_structure", cat(earlier, " and ", later), "") 
 
 // A `cond`'s last clause decides on a tensor its public `defn` computes
 // from its inputs, so no clause always holds, and Nx raises.
-call_error(context, pair, "cond_fallthrough", "", "") :-
-  entry_body(body, context),
+call_error(pair, "cond_fallthrough", "", "") :-
+  entry_body(body),
   clause_predicate(_, body, pair, "last", kind, source),
   traced_source(body, kind, source).
 
 // A branch of an `if` or `cond` raises, and a clause decides on a tensor
 // its public `defn` computes from its inputs: Nx builds every branch of
 // such a `cond`, so the raise runs whatever the data.
-call_error(context, pair, "traced_raise", "", "") :-
-  entry_body(body, context),
+call_error(pair, "traced_raise", "", "") :-
+  entry_body(body),
   clause_predicate(site, body, _, _, kind, source),
   traced_source(body, kind, source),
   branch_closure(site, _, pair, callee),
@@ -246,7 +246,7 @@ returns_normally(callee) :-
 
 // A `while`'s body gives a leaf of its state another shape than it starts
 // with, and Nx raises.
-call_error(context, site, "while_shape", cat(place, " starts as ", initial_spelled, " and the body makes it ", body_spelled), "") :-
+call_error(site, "while_shape", cat(place, " starts as ", initial_spelled, " and the body makes it ", body_spelled), "") :-
   loop_state_axes(context, site, "initial", place, initial),
   loop_state_axes(context, site, "body", place, body),
   agree_conflict(initial, body, -1),
@@ -256,7 +256,7 @@ call_error(context, site, "while_shape", cat(place, " starts as ", initial_spell
 // A `while`'s body makes a float of a leaf of its state that starts as an
 // integer the code writes or a size, as `acc = 0` does with a body adding
 // a mean, and Nx raises.
-call_error(context, site, "while_type", cat(place, " starts as an integer and the body makes it a ", class), "") :-
+call_error(site, "while_type", cat(place, " starts as an integer and the body makes it a ", class), "") :-
   loop_state(context, site, "initial", place, initial),
   ( initial = $Term(text, start), term_integer(text, start, _) ; initial = $Integer(_) ),
   loop_body_leaf(context, site, place, body_context, body_function, kind, source),
@@ -370,8 +370,8 @@ sign_demand(body_context, function, kind, source) :- loop_body_leaf(_, _, _, bod
 // tensor its public `defn` computes from its inputs, and computes with
 // it: Nx builds the closure in a scope of its own, and raises on a tensor
 // from outside it.
-call_error(context, site, "closure_captures_tensor", "", "") :-
-  entry_body(body, context),
+call_error(site, "closure_captures_tensor", "", "") :-
+  entry_body(body),
   captured_use(site, body, kind, source),
   traced_source(body, kind, source).
 
@@ -413,12 +413,12 @@ nx_members("argument", "scoped_fun", cat(
 // A Kernel operator or element-wise Nx function gets an atom, as in
 // `opts[:mode] == :train`, or `x + opts[:bias]` where the options lack the
 // key. Nx makes no tensor of an atom but true and false, and raises.
-call_error(context, site, "atom_operand", spelled, "") :-
+call_error(site, "atom_operand", spelled, "") :-
   operator_operand(site, position),
-  argument_value(context, site, position, $Term(text, start)),
+  argument_value(_, site, position, $Term(text, start)),
   term_atom(text, start, spelled),
   !term_scalar(text, start).
-call_error(context, site, "atom_operand", "nil", "") :-
+call_error(site, "atom_operand", "nil", "") :-
   operator_operand(site, position),
   flow_argument(site, function, position, kind, source),
   misses_key(context, function, kind, source),
@@ -441,21 +441,20 @@ operator_operand(site, 0) :- operation_site(site, "Nx.Defn.Kernel.__unary_minus_
 // A public `defn` hands a tensor it computes from its inputs to an Nx
 // call where Nx needs an integer while it builds the expression: a size of
 // a shape, an axis, a slice's length, a range's bound.
-call_error(context, site, "tensor_as_integer", slot, "") :-
-  entry_body(body, context),
+call_error(site, "tensor_as_integer", slot, "") :-
+  entry_body(body),
   integer_part(site, body, kind, source, slot),
   traced_source(body, kind, source).
 
 // ── Words ──────────────────────────────────────────────────────────
 
-// A public `defn`'s body over its own parameters: the context its wrapper
-// runs it in when called from outside a `defn`, where `defn` makes every
-// argument a tensor but a list or a function.
-.decl entry_body(body: symbol, context: Context)
-entry_body(body, context) :-
+// A public `defn`'s body, which its wrapper runs over its own parameters
+// when called from outside a `defn`, where `defn` makes every argument a
+// tensor but a list or a function.
+.decl entry_body(body: symbol)
+entry_body(body) :-
   defn_wrapper(wrapper, body),
-  function_def(wrapper, _, _, _, 1),
-  own_context(body, context).
+  function_def(wrapper, _, _, _, 1).
 
 // A source of such a body that holds a tensor made of its arguments: a
 // parameter, an element of a tuple one holds, and what an Nx call computes
@@ -464,7 +463,7 @@ entry_body(body, context) :-
 // back or looking a key up.
 .decl traced_source(body: symbol, kind: symbol, source: symbol)
 traced_source(body, "param", to_string(position)) :-
-  entry_body(body, _),
+  entry_body(body),
   function_def(body, _, _, arity, _),
   position = range(0, arity).
 traced_source(body, "load", load) :-
@@ -479,10 +478,11 @@ traced_source(body, "result", site) :-
   !modeled_call(site).
 
 // An element of a tuple a public `defn` builds that holds such a tensor,
-// which is no size.
+// which is no size, in the body's context over its own parameters.
 .decl traced_element(context: Context, tuple: symbol, selector: symbol)
 traced_element(context, tuple, selector) :-
-  entry_body(body, context),
+  entry_body(body),
+  own_context(body, context),
   flow_field(body, tuple, selector, kind, source),
   traced_source(body, kind, source).
 
@@ -493,22 +493,22 @@ traced_element(context, tuple, selector) :-
 integer_part(site, function, kind, source, "the shape") :-
   shape_position(site, position),
   flow_argument(site, function, position, kind, source),
-  entry_body(function, _).
+  entry_body(function).
 integer_part(site, function, kind, source, "the window dimensions") :-
   operation_site(site, operation, arity),
   nx_argument(operation, arity, position, "window_dimensions"),
   flow_argument(site, function, position, kind, source),
-  entry_body(function, _).
+  entry_body(function).
 integer_part(site, function, kind, source, slot) :-
   operation_site(site, operation, arity),
   nx_argument(operation, arity, position, "integer_part"),
   nx_class(operation, "integer_part", slot),
   flow_argument(site, function, position, kind, source),
-  entry_body(function, _).
+  entry_body(function).
 integer_part(site, function, kind, source, cat("the :", key, " option")) :-
   option_pair(site, key, function, kind, source),
   integer_option(key),
-  entry_body(function, _).
+  entry_body(function).
 integer_part(site, function, kind, source, slot) :-
   integer_part(site, function, "object", object, slot),
   flow_field(function, object, _, kind, source).
@@ -536,10 +536,10 @@ integer_option("parts"). integer_option("strides").
 // A `print_value` or `io_call` whose result the `defn` never uses: Nx
 // builds only what the output depends on, so it never prints or calls
 // back.
-call_error(context, site, "dropped_print", "", "") :-
+call_error(site, "dropped_print", "", "") :-
   calls_back(site),
   !result_used(site),
-  site_active(context, site).
+  active_site(site).
 
 // ── Words ──────────────────────────────────────────────────────────
 

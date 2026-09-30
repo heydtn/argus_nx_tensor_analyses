@@ -50,12 +50,12 @@ underflowing_log_sigmoid(context, site, sigmoid) :-
   site_active(context, site),
   argument_sign(context, sigmoid, 0, "negative", _, _).
 
-nonfinite(context, site, "exp_overflow", "softplus", exponential) :-
-  overflowing_softplus(context, site, exponential).
-nonfinite(context, site, "exp_overflow", "logistic", exponential) :-
-  overflowing_logistic(context, site, exponential).
-nonfinite(context, site, "log_of_zero", "sigmoid", sigmoid) :-
-  underflowing_log_sigmoid(context, site, sigmoid).
+nonfinite(site, "exp_overflow", "softplus", exponential) :-
+  overflowing_softplus(_, site, exponential).
+nonfinite(site, "exp_overflow", "logistic", exponential) :-
+  overflowing_logistic(_, site, exponential).
+nonfinite(site, "log_of_zero", "sigmoid", sigmoid) :-
+  underflowing_log_sigmoid(_, site, sigmoid).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -351,8 +351,8 @@ logarithm_to_base_one(context, site, origin, cause) :-
   argument_region(context, site, 1, "one", origin, cause),
   known_region_cause(cause).
 
-nonfinite(context, site, "log_base_one", cause, origin) :-
-  logarithm_to_base_one(context, site, origin, cause).
+nonfinite(site, "log_base_one", cause, origin) :-
+  logarithm_to_base_one(_, site, origin, cause).
 
 // A logarithm to a base the code hands, `Nx.log/2`.
 .decl logarithm_with_base(site: symbol)
@@ -388,10 +388,10 @@ unchecked_scaling(context, site, origin, cause) :-
   !partial_zero(cause),
   !definite_site(site).
 
-nonfinite(context, site, "log_of_zero", cause, origin) :-
-  zero_scaled_exponentials(context, site, origin, cause).
-unchecked(context, site, "unchecked_logarithm", cause, origin) :-
-  unchecked_scaling(context, site, origin, cause).
+nonfinite(site, "log_of_zero", cause, origin) :-
+  zero_scaled_exponentials(_, site, origin, cause).
+unchecked(site, "unchecked_logarithm", cause, origin) :-
+  unchecked_scaling(_, site, origin, cause).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -441,16 +441,16 @@ rounded_logarithm(site, rounding, logarithm) :-
   rounds_to_integer(site, rounding),
   rounds_logarithm_to_base(site, logarithm).
 
-call_error(context, site, "nan_comparison", relation, origin) :-
+call_error(site, "nan_comparison", relation, origin) :-
   compares_with_nan(site, relation, origin),
-  site_active(context, site).
-call_error(context, site, "integer_negative_power", "integer", "") :-
-  negative_integer_power(context, site).
-call_error(context, site, "constant_type", name, "") :-
-  constant_without_type(context, site, name).
-call_error(context, site, "rounded_logarithm", rounding, logarithm) :-
+  active_site(site).
+call_error(site, "integer_negative_power", "integer", "") :-
+  negative_integer_power(_, site).
+call_error(site, "constant_type", name, "") :-
+  constant_without_type(_, site, name).
+call_error(site, "rounded_logarithm", rounding, logarithm) :-
   rounded_logarithm(site, rounding, logarithm),
-  site_active(context, site).
+  active_site(site).
 
 // ── Words ──────────────────────────────────────────────────────────
 

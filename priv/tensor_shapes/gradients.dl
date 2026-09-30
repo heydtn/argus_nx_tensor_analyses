@@ -19,10 +19,10 @@
 
 // ══ Findings ═══════════════════════════════════════════════════════════
 
-nonfinite(context, site, kind, cause, origin) :- gradient_hazard(context, site, kind, cause, origin).
-call_error(context, site, kind, detail, origin) :-
+nonfinite(site, kind, cause, origin) :- gradient_hazard(_, site, kind, cause, origin).
+call_error(site, kind, detail, origin) :-
   gradient_call_error(site, kind, detail, origin),
-  site_active(context, site).
+  active_site(site).
 
 // A result these rules find can be infinite or NaN, by kind.
 .decl gradient_hazard(context: Context, site: symbol, kind: symbol, cause: symbol, origin: symbol)

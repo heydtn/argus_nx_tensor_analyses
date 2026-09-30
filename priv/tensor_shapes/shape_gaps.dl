@@ -522,13 +522,13 @@ operand_misfit(site, [first, second, third], "weighted_mean", cat("cannot broadc
 
 // Weights over two or more axes that Nx takes: arranged to broadcast,
 // they are transposed from the axes the code lines them up with.
-call_error(context, site, "transposed_weights", cat(weights, " over axes ", axes), "") :-
+call_error(site, "transposed_weights", cat(weights, " over axes ", axes), "") :-
   weights_arranging(site, [first, second, third], _, _),
   axes_rank(second, weights_rank),
   weights_rank >= 2,
   built(cat("weights ", site), [first, second, third], arranged),
   broadcast(first, arranged, _),
-  instance(context, site, [first, second, third], _),
+  instance(_, site, [first, second, third], _),
   sizes_spelled(second, weights),
   option(site, "axes", text, start),
   term_spelling(text, start, axes).
@@ -629,13 +629,13 @@ violation(context, site, "tensor_as_shape", "vectorization is only supported for
 
 // `Nx.iota/2` given a number, which it takes as a scalar's shape: it
 // makes a scalar 0, not a range.
-call_error(context, site, "scalar_iota", to_string(value), "") :-
+call_error(site, "scalar_iota", to_string(value), "") :-
   operation_site(site, "Nx.iota", _),
-  argument_value(context, site, 0, $Integer([value, nil])),
+  argument_value(_, site, 0, $Integer([value, nil])),
   value > 0.
-call_error(context, site, "scalar_iota", spelled, "") :-
+call_error(site, "scalar_iota", spelled, "") :-
   operation_site(site, "Nx.iota", _),
-  argument_value(context, site, 0, $Term(text, start)),
+  argument_value(_, site, 0, $Term(text, start)),
   term_scalar(text, start),
   term_spelling(text, start, spelled).
 
@@ -668,13 +668,13 @@ operand_misfit(site, [first, second, third], "irfft", cat("length at axis ", to_
 // An `Nx.irfft/2` with no `:length`, of the spectrum an `Nx.rfft/2` makes
 // of a signal of odd length along the same axis: it assumes an even one,
 // and gives a signal one shorter, of other values.
-call_error(context, site, "odd_irfft", to_string(length), origin) :-
+call_error(site, "odd_irfft", to_string(length), origin) :-
   spectrum_source(site, origin),
   operation_site(origin, "Nx.rfft", _),
   odd_transform(origin, length),
   option_absent(site, "axis"),
   option_absent(origin, "axis"),
-  site_active(context, site).
+  active_site(site).
 
 // A call whose result the operand of an `Nx.irfft/2` with no `:length`
 // is, or is made from by element-wise calls, which keep the transformed
@@ -710,7 +710,7 @@ odd_transform(site, size) :-
 // broadcast with them, before it sums them over `:axes`: a factor of more
 // axes than the tensor makes those axes index their broadcast shape, and
 // the sum runs over other axes than the tensor's.
-call_error(context, site, "scaling_factor_rank", cat(factor_spelled, " scaling ", tensor_spelled), "") :-
+call_error(site, "scaling_factor_rank", cat(factor_spelled, " scaling ", tensor_spelled), "") :-
   scaling_factor_axes(context, site, factor),
   instance(context, site, [first, _, _], _),
   axes_rank(factor, factor_rank),

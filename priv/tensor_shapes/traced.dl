@@ -666,49 +666,41 @@ reported_function(function) :- jit_in_trace(_, function, _).
 reported_function(function) :- tensor_truth_tested(_, function, _).
 reported_function(function) :- template_computed(_, function, _, _).
 
-// The findings, in the context they hold in: a data read's origin is the
-// Nx call that makes what it reads, or none.
-call_error(context, site, "data_read_in_trace", how, origin) :-
+// The findings: a data read's origin is the Nx call that makes what it
+// reads, or none.
+call_error(site, "data_read_in_trace", how, origin) :-
   data_read_in_trace(site, function),
   traced_first_as(function, how),
   flow_argument(site, function, 0, "result", origin),
-  operation_site(origin, _, _),
-  own_context(function, context).
-call_error(context, site, "data_read_in_trace", how, "") :-
+  operation_site(origin, _, _).
+call_error(site, "data_read_in_trace", how, "") :-
   data_read_in_trace(site, function),
   traced_first_as(function, how),
   flow_argument(site, function, 0, kind, source),
-  ( kind != "result" ; !operation_site(source, _, _) ),
-  own_context(function, context).
-call_error(context, site, "jit_in_trace", how, maker) :-
+  ( kind != "result" ; !operation_site(source, _, _) ).
+call_error(site, "jit_in_trace", how, maker) :-
   jit_in_trace(site, function, maker),
-  traced_first_as(function, how),
-  own_context(function, context).
-call_error(context, site, "tensor_arithmetic", operator, origin) :-
-  operator_on_tensor(context, site, "arithmetic", operator, origin).
-call_error(context, site, "tensor_boolean", operator, origin) :-
-  operator_on_tensor(context, site, "boolean", operator, origin).
-call_error(context, site, "tensor_comparison", other, origin) :-
-  tensor_compared(context, site, other, origin).
-call_error(context, site, "tensor_truth", "", origin) :-
-  tensor_truth_tested(site, function, origin),
-  own_context(function, context).
-call_error(context, site, "compiled_template", cat("argument at position ", to_string(position + 1), " is not compatible with compiled function template: got ", got, ", expected ", expected), template) :-
-  template_misfit(context, site, position, template, got, expected).
-call_error(context, site, "captured_tensor", how, origin) :-
-  captured_in_trace(site, function, how, origin),
-  own_context(function, context).
-call_error(context, site, "template_computed", to_string(position), template) :-
-  template_computed(site, function, position, template),
-  own_context(function, context).
+  traced_first_as(function, how).
+call_error(site, "tensor_arithmetic", operator, origin) :-
+  operator_on_tensor(_, site, "arithmetic", operator, origin).
+call_error(site, "tensor_boolean", operator, origin) :-
+  operator_on_tensor(_, site, "boolean", operator, origin).
+call_error(site, "tensor_comparison", other, origin) :-
+  tensor_compared(_, site, other, origin).
+call_error(site, "tensor_truth", "", origin) :- tensor_truth_tested(site, _, origin).
+call_error(site, "compiled_template", cat("argument at position ", to_string(position + 1), " is not compatible with compiled function template: got ", got, ", expected ", expected), template) :-
+  template_misfit(_, site, position, template, got, expected).
+call_error(site, "captured_tensor", how, origin) :- captured_in_trace(site, _, how, origin).
+call_error(site, "template_computed", to_string(position), template) :-
+  template_computed(site, _, position, template).
 
 // A batch size `Nx.to_batched/3` has no clause for: an integer below 1,
 // a float, an atom.
-call_error(context, site, "batch_size", text, "") :-
+call_error(site, "batch_size", text, "") :-
   operation_site(site, "Nx.to_batched", _),
   argument_literal(site, 1, text),
   ( term_integer(text, 0, size), size < 1 ; term_float(text, 0) ; term_atom(text, 0, _) ),
-  site_active(context, site).
+  active_site(site).
 
 violation(context, site, "scalar", cat("cannot convert tensor of shape ", spelled, " to number")) :-
   conversion_rejected(context, site, "Nx.to_number", [nil, axes]),

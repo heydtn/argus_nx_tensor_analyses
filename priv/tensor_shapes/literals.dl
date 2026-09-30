@@ -28,15 +28,13 @@
 
 // ══ Reported ════════════════════════════════════════════════════════
 
-// Each finding as a `tensor_type_error`, always certain, from no other
+// Each finding as a `type_error`, always certain, from no other
 // call. `subject` is the literal as written, with the type Nx makes it in
 // for the literal kinds (`300 as u8`); `position` is the argument it is
 // in, -1 for an option.
-tensor_type_error(site, function, operation, kind, subject, position, 1, "", "") :-
+type_error(site, kind, subject, position, 1, "") :-
   literal_misread(site, kind, subject, position),
-  finding_call(site, function, operation),
   remote_call(site, _, _, _, _).
-named_call(site) :- literal_misread(site, _, _, _).
 
 // What goes wrong, by kind:
 //

@@ -622,6 +622,10 @@ site_active(context, site) :-
   feasible(context, site).
 .plan 1:(3,1,2)
 
+// A call made in some context whose path's tests its values may pass.
+.decl active_site(site: symbol)
+active_site(site) :- site_active(_, site).
+
 // ── Paths ──────────────────────────────────────────────────────────
 //
 // A call or a return runs in a context only where the values it is tested
@@ -8355,7 +8359,7 @@ unchecked_division(context, site, origin, cause) :-
 // A call with a definite finding in some context, which an unchecked one
 // at the call would only repeat.
 .decl definite_site(site: symbol)
-definite_site(site) :- nonfinite(_, site, _, _, _).
+definite_site(site) :- nonfinite(site, _, _, _).
 
 // A logarithm of a value nothing keeps positive.
 .decl unchecked_logarithm(context: Context, site: symbol, origin: symbol, cause: symbol)
@@ -10206,30 +10210,35 @@ entered_from(origin, caller, depth + 1) :-
 context_call(origin, call) :- entered_from(origin, context, _), invocation(_, call, _, context).
 
 // A call Nx rejects for its operand's type, or that makes a tensor of a
-// type the backend does not support. `kind` names what goes wrong:
+// type the backend does not support: `kind` names what goes wrong (the
+// files included below add kinds), `subject` what it goes wrong with, at
+// the argument at `position` (-1 for none or an option); `certain` is 1
+// where it goes wrong on every path in some context, and `origin` is the
+// call that makes it so, "" for none. Here:
 //
-//   * "non_integer_operand": an operand at `position` of a call that
-//     takes only integers can be a float or complex number (`subject`,
-//     its class), from `origin`, the call that makes it so; `certain` is 1
-//     where it is never an integer in some context;
+//   * "non_integer_operand": an operand of a call that takes only
+//     integers can be a float or complex number (`subject`, its class);
+//     certain where it is never an integer in some context;
 //   * "unsupported_type": the call makes a tensor of type `subject`, which
 //     the analysis is told the backend does not support.
-.decl tensor_type_error(id: symbol, func: symbol, operation: symbol, kind: symbol, subject: symbol, position: number, certain: number, origin: symbol, origin_operation: symbol)
-.output tensor_type_error
-tensor_type_error(site, function, operation, "non_integer_operand", class, position, certain, origin, origin_operation) :-
+.decl type_error(site: symbol, kind: symbol, subject: symbol, position: number, certain: number, origin: symbol)
+type_error(site, "non_integer_operand", class, position, certain, origin) :-
   non_integer_operand(_, site, position, class, origin),
   type_certainty(site, position, certain),
-  finding_call(site, function, operation),
-  call_spelled(origin, origin_operation),
   operation_site(site, _, _),
   nx_origin(origin).
-tensor_type_error(site, function, operation, "unsupported_type", name, -1, 1, "", "") :-
+type_error(site, "unsupported_type", name, -1, 1, "") :-
   makes_unsupported_type(_, site, name),
-  finding_call(site, function, operation),
   nx_origin(site).
-named_call(site) :- non_integer_operand(_, site, _, _, _).
-named_call(origin) :- non_integer_operand(_, _, _, _, origin).
-named_call(site) :- makes_unsupported_type(_, site, _).
+
+.decl tensor_type_error(id: symbol, func: symbol, operation: symbol, kind: symbol, subject: symbol, position: number, certain: number, origin: symbol, origin_operation: symbol)
+.output tensor_type_error
+tensor_type_error(site, function, operation, kind, subject, position, certain, origin, origin_operation) :-
+  type_error(site, kind, subject, position, certain, origin),
+  finding_call(site, function, operation),
+  call_spelled(origin, origin_operation).
+named_call(site) :- type_error(site, _, _, _, _, _).
+named_call(origin) :- type_error(_, _, _, _, _, origin).
 
 .decl type_certainty(site: symbol, position: number, certain: number)
 type_certainty(site, position, 1) :- never_integer(site, position).
@@ -10412,35 +10421,35 @@ tensor_axis_misalignment_via(site, kind, order, at, function, how, subject, posi
 
 // A call whose result the code's own math can make infinite or NaN, by
 // kind, with how and where.
-.decl nonfinite(context: Context, site: symbol, kind: symbol, cause: symbol, origin: symbol)
-nonfinite(context, site, "divide_by_zero", cause, origin) :- divides_by_zero(context, site, origin, cause).
-nonfinite(context, site, "log_of_zero", cause, origin) :- logarithm_of_zero(context, site, origin, cause).
-nonfinite(context, site, kind, "cancellation", difference) :-
-  root_of_cancellation(context, site, kind, difference).
-nonfinite(context, site, "log_of_zero", "underflow", softmax) :-
+.decl nonfinite(site: symbol, kind: symbol, cause: symbol, origin: symbol)
+nonfinite(site, "divide_by_zero", cause, origin) :- divides_by_zero(_, site, origin, cause).
+nonfinite(site, "log_of_zero", cause, origin) :- logarithm_of_zero(_, site, origin, cause).
+nonfinite(site, kind, "cancellation", difference) :-
+  root_of_cancellation(_, site, kind, difference).
+nonfinite(site, "log_of_zero", "underflow", softmax) :-
   logarithm_of_softmax(site, softmax),
-  site_active(context, site).
-nonfinite(context, site, "exp_overflow", "unshifted", exponential) :-
+  active_site(site).
+nonfinite(site, "exp_overflow", "unshifted", exponential) :-
   unshifted_exponentials(site, exponential),
-  site_active(context, site).
-nonfinite(context, site, "infinite_gradient", cause, origin) :-
-  infinite_gradient(context, site, origin, cause).
-nonfinite(context, site, "outside_domain", cause, origin) :-
-  outside_domain(context, site, origin, cause).
-nonfinite(context, site, "infinite_at_edge", cause, origin) :-
-  infinite_at_edge(context, site, origin, cause).
+  active_site(site).
+nonfinite(site, "infinite_gradient", cause, origin) :-
+  infinite_gradient(_, site, origin, cause).
+nonfinite(site, "outside_domain", cause, origin) :-
+  outside_domain(_, site, origin, cause).
+nonfinite(site, "infinite_at_edge", cause, origin) :-
+  infinite_at_edge(_, site, origin, cause).
 
 // A call whose operand nothing keeps where the call is defined, by kind:
 // noisier than `nonfinite`, and reported apart.
-.decl unchecked(context: Context, site: symbol, kind: symbol, cause: symbol, origin: symbol)
-unchecked(context, site, "unchecked_divisor", cause, origin) :-
-  unchecked_division(context, site, origin, cause).
-unchecked(context, site, "unchecked_logarithm", cause, origin) :-
-  unchecked_logarithm(context, site, origin, cause).
-unchecked(context, site, "unchecked_root", cause, origin) :-
-  unchecked_root(context, site, origin, cause).
-unchecked(context, site, "unchecked_domain", cause, origin) :-
-  unchecked_domain(context, site, origin, cause).
+.decl unchecked(site: symbol, kind: symbol, cause: symbol, origin: symbol)
+unchecked(site, "unchecked_divisor", cause, origin) :-
+  unchecked_division(_, site, origin, cause).
+unchecked(site, "unchecked_logarithm", cause, origin) :-
+  unchecked_logarithm(_, site, origin, cause).
+unchecked(site, "unchecked_root", cause, origin) :-
+  unchecked_root(_, site, origin, cause).
+unchecked(site, "unchecked_domain", cause, origin) :-
+  unchecked_domain(_, site, origin, cause).
 
 // An Nx call whose result the code's own math can make infinite or NaN,
 // or whose operand nothing keeps where it is defined. `kind` names what
@@ -10480,39 +10489,39 @@ unchecked(context, site, "unchecked_domain", cause, origin) :-
 // with its function as `origin_operation`.
 .decl tensor_nonfinite_result(id: symbol, func: symbol, operation: symbol, kind: symbol, cause: symbol, origin: symbol, origin_operation: symbol)
 tensor_nonfinite_result(site, function, operation, kind, cause, origin, origin_operation) :-
-  nonfinite(_, site, kind, cause, origin),
+  nonfinite(site, kind, cause, origin),
   finding_call(site, function, operation),
   call_spelled(origin, origin_operation),
   operation_site(site, _, _),
   nx_origin(origin).
 tensor_nonfinite_result(site, function, operation, kind, cause, origin, origin_operation) :-
-  unchecked(_, site, kind, cause, origin),
+  unchecked(site, kind, cause, origin),
   finding_call(site, function, operation),
   call_spelled(origin, origin_operation),
   operation_site(site, _, _),
   nx_origin(origin),
   !remote_call(origin, _, "Nx.Constants", _, _).
 .output tensor_nonfinite_result
-named_call(site) :- nonfinite(_, site, _, _, _).
-named_call(origin) :- nonfinite(_, _, _, _, origin).
-named_call(site) :- unchecked(_, site, _, _, _).
-named_call(origin) :- unchecked(_, _, _, _, origin).
+named_call(site) :- nonfinite(site, _, _, _).
+named_call(origin) :- nonfinite(_, _, _, origin).
+named_call(site) :- unchecked(site, _, _, _).
+named_call(origin) :- unchecked(_, _, _, origin).
 
 // A call Nx rejects, or that computes something other than what the code
 // means, for a reason other than its operands' shapes, its math or its
 // types: `kind` names the rule (the files included below add them),
 // `detail` says what, and `origin` is the call it comes from, "" for none.
-.decl call_error(context: Context, site: symbol, kind: symbol, detail: symbol, origin: symbol)
+.decl call_error(site: symbol, kind: symbol, detail: symbol, origin: symbol)
 
 .decl tensor_call_error(id: symbol, func: symbol, operation: symbol, kind: symbol, detail: symbol, origin: symbol, origin_operation: symbol)
 .output tensor_call_error
 tensor_call_error(site, function, operation, kind, detail, origin, origin_operation) :-
-  call_error(_, site, kind, detail, origin),
+  call_error(site, kind, detail, origin),
   finding_call(site, function, operation),
   call_spelled(origin, origin_operation),
   remote_origin(origin).
-named_call(site) :- call_error(_, site, _, _, _).
-named_call(origin) :- call_error(_, _, _, _, origin).
+named_call(site) :- call_error(site, _, _, _).
+named_call(origin) :- call_error(_, _, _, origin).
 
 // ── Naming calls ───────────────────────────────────────────────────
 
