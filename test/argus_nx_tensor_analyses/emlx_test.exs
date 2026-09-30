@@ -98,6 +98,7 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     {:quiet,
      "Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), Nx.tensor([1.0], backend: Nx.BinaryBackend))"},
     {:quiet, "Nx.add(Nx.tensor([1.0], backend: EXLA.Backend), 1)"},
+    {:quiet, "Nx.add(Nx.iota({2}), Nx.bit_size(Nx.tensor([1.0], backend: EXLA.Backend)))"},
     {:quiet,
      "Nx.add(Nx.backend_transfer(Nx.iota({2}), EXLA.Backend), Nx.tensor([1, 2], backend: EXLA.Backend))"},
     {:quiet,

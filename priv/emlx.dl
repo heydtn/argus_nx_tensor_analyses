@@ -640,12 +640,11 @@ keeps_backend(site) :-
   !nx_trait(operation, "leaves_backend").
 
 // The calls whose result is no tensor on their operands' backend: those
-// that answer about a tensor's shape, give a template or the data on the
-// host, move a tensor to another backend, or answer about or change the
-// backend, and `Nx.type`, `Nx.byte_size` and `Nx.axes`.
+// that answer about a tensor's shape or struct, give a template or the
+// data on the host, move a tensor to another backend, or answer about or
+// change the backend.
 nx_trait(operation, "leaves_backend") :- nx_class(operation, "gives", gives), in_set("leaves_backend", gives).
-nx_members("set", "leaves_backend", " shape template host moved backend ").
-nx_members("trait", "leaves_backend", " Nx.type Nx.byte_size Nx.axes ").
+nx_members("set", "leaves_backend", " shape struct template host moved backend ").
 
 // ══ Findings ════════════════════════════════════════════════════════
 
