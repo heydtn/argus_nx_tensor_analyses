@@ -52,13 +52,10 @@ reshape_sides(context, site, tensor, result) :-
 .decl reshape_pair(tensor: Axes, result: Axes)
 reshape_pair(tensor, result) :- reshape_sides(_, _, tensor, result).
 
-.decl reshaped_axes(axes: Axes)
-reshaped_axes(tensor) :- reshape_pair(tensor, _).
-reshaped_axes(result) :- reshape_pair(_, result).
-
 // The axes of a side from `axis` on, counted from the first.
 .decl reshaped_axis_from(axes: Axes, axis: number, rest: Axes)
-reshaped_axis_from(axes, 0, axes) :- reshaped_axes(axes).
+reshaped_axis_from(tensor, 0, tensor) :- reshape_pair(tensor, _).
+reshaped_axis_from(result, 0, result) :- reshape_pair(_, result).
 reshaped_axis_from(axes, axis + 1, rest) :-
   reshaped_axis_from(axes, axis, [_, _, rest]),
   rest != nil.
@@ -87,15 +84,11 @@ reshaped_factors_from(factors, rest) :-
   reshaped_factors_from(factors, [_, rest]),
   rest != nil.
 
-// A variable among a size's factors.
-.decl reshaped_factor(factors: Factors, variable: symbol)
-reshaped_factor(factors, variable) :- reshaped_factors_from(factors, [variable, _]).
-
 // A variable the size of an axis of a side multiplies.
 .decl reshaped_variable(axes: Axes, axis: number, variable: symbol)
 reshaped_variable(axes, axis, variable) :-
   reshaped_axis(axes, axis, [_, factors]),
-  reshaped_factor(factors, variable).
+  reshaped_factors_from(factors, [variable, _rest]).
 
 .decl variable_on_two_axes(axes: Axes, variable: symbol)
 variable_on_two_axes(axes, variable) :-
