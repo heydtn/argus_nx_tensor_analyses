@@ -1098,30 +1098,28 @@ aggregate_of(type, type) :- floating_of(type, type).
 
 // ── Numbers ────────────────────────────────────────────────────────
 
-// A number an operand of a typed call is: as the code writes it, a size
-// in digits, or "integer" for a whole number of no known value.
+// A number an operand of a typed call is (`held_number`).
 .decl argument_number(context: Context, site: symbol, position: number, number: symbol)
-argument_number(context, site, position, spelled) :-
+argument_number(context, site, position, number) :-
   typed_site(context, site),
   dtype_operand(site, position),
-  argument_value(context, site, position, $Term(text, start)),
+  argument_value(context, site, position, value),
+  held_number(value, number).
+
+// The number a value is, as a typed call reads it: a written one as the
+// code writes it, a size in digits, or "integer" for a whole number of no
+// known value.
+.decl held_number(value: Value, number: symbol) inline
+held_number(value, spelled) :-
+  value = $Term(text, start),
   term_scalar(text, start),
   term_spelling(text, start, spelled).
-argument_number(context, site, position, to_string(value)) :-
-  typed_site(context, site),
-  dtype_operand(site, position),
-  argument_value(context, site, position, $Integer([value, nil])),
-  value > 0.
-argument_number(context, site, position, "integer") :-
-  typed_site(context, site),
-  dtype_operand(site, position),
-  argument_value(context, site, position, $Integer([coefficient, factors])),
+held_number(value, to_string(known)) :- value = $Integer([known, nil]), known > 0.
+held_number(value, "integer") :-
+  value = $Integer([coefficient, factors]),
   factors != nil,
   coefficient > 0.
-argument_number(context, site, position, "integer") :-
-  typed_site(context, site),
-  dtype_operand(site, position),
-  argument_value(context, site, position, $Integer([0, nil])).
+held_number(value, "integer") :- value = $Integer([0, nil]).
 
 // The numbers typed calls take as operands, whose spellings are asked
 // about.
