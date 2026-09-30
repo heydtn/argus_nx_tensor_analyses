@@ -311,13 +311,14 @@ written_operand(site, position, text) :-
 // 32, gives 0 on all three.
 
 // A shift by a written amount at or past the width EMLX shifts its type
-// in, which EMLX wraps around.
+// in, which EMLX wraps around to an amount that still shifts within the
+// type.
 .decl wrapped_shift(context: Context, site: symbol, type: symbol, amount: symbol)
 wrapped_shift(context, site, type, amount) :-
   shifts_bits(site),
   call_type(context, site, type, _),
   argument_number(context, site, 1, amount),
-  reaches_shift_width(amount, type).
+  shift_wraps_within(site, amount, type).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -325,22 +326,38 @@ wrapped_shift(context, site, type, amount) :-
 shifts_bits(site) :- operation_site(site, operation, 2), nx_trait(operation, "shifts_bits").
 
 nx_members("trait", "shifts_bits", " Nx.left_shift Nx.right_shift Nx.Defn.Kernel.<<< Nx.Defn.Kernel.>>> ").
+nx_members("trait", "shifts_right", " Nx.right_shift Nx.Defn.Kernel.>>> ").
 
-// A written amount at or past the width EMLX shifts an integer type in:
-// 64 bits for u32 and the 64-bit types, and 32 for the others, which it
-// widens.
-.decl reaches_shift_width(amount: symbol, type: symbol) inline
-reaches_shift_width(amount, type) :-
+// A written amount at or past the width EMLX shifts the type in, which
+// EMLX takes modulo that width to an amount below the bits the shift
+// keeps: past those, EMLX gives what BinaryBackend and EXLA give.
+.decl shift_wraps_within(site: symbol, amount: symbol, type: symbol) inline
+shift_wraps_within(site, amount, type) :-
   number_value(amount, value),
-  nx_dtype(type, _, 64, "integer"),
-  value >= 64.
-reaches_shift_width(amount, "u32") :- number_value(amount, value), value >= 64.
-reaches_shift_width(amount, type) :-
-  number_value(amount, value),
-  nx_dtype(type, _, size, "integer"),
-  size <= 32,
-  type != "u32",
-  value >= 32.
+  shift_width(type, width),
+  value >= width,
+  shift_kept_bits(site, type, kept),
+  value % width < kept.
+
+// The width EMLX shifts an integer type in: 64 bits for u32 and the
+// 64-bit types, and 32 for the others, which it widens.
+.decl shift_width(type: symbol, width: number) inline
+shift_width(type, 64) :- nx_dtype(type, _, 64, "integer").
+shift_width("u32", 64).
+shift_width(type, 32) :- nx_dtype(type, _, size, "integer"), size <= 32, type != "u32".
+
+// The bits a shift of the type keeps: its size, but one less for a signed
+// right shift, where any larger amount leaves only copies of the sign.
+.decl shift_kept_bits(site: symbol, type: symbol, bits: number) inline
+shift_kept_bits(site, type, size) :- nx_dtype(type, "u", size, "integer"), operation_site(site, _, _).
+shift_kept_bits(site, type, size) :-
+  nx_dtype(type, "s", size, "integer"),
+  operation_site(site, operation, _),
+  !nx_trait(operation, "shifts_right").
+shift_kept_bits(site, type, size - 1) :-
+  nx_dtype(type, "s", size, "integer"),
+  operation_site(site, operation, _),
+  nx_trait(operation, "shifts_right").
 
 // ══ Tensors of two backends ═════════════════════════════════════════
 //

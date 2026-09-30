@@ -91,6 +91,11 @@ defmodule ArgusNxTensorAnalyses.EMLXTest do
     {{:finds, "wrapped_shift", "u8 32", "1"}, "Nx.left_shift(Nx.tensor(1, type: :u8), 32)"},
     {{:finds, "wrapped_shift", "s64 64", "1"}, "Nx.left_shift(Nx.tensor(1, type: :s64), 64)"},
     {{:finds, "wrapped_shift", "u32 65", "1"}, "Nx.left_shift(Nx.tensor(1, type: :u32), 65)"},
+    {{:finds, "wrapped_shift", "u16 40", "1"}, "Nx.left_shift(Nx.tensor(1, type: :u16), 40)"},
+    # wrapped to an amount the type shifts every bit out at, as the others do
+    {:quiet, "Nx.left_shift(Nx.tensor(1, type: :u8), 40)"},
+    {:quiet, "Nx.left_shift(Nx.tensor(1, type: :u32), 96)"},
+    {:quiet, "Nx.right_shift(Nx.tensor(-8), 63)"},
     {:quiet, "Nx.left_shift(Nx.tensor(1), 31)"},
     {:quiet, "Nx.left_shift(Nx.tensor(1, type: :u8), 8)"},
     {:quiet, "Nx.left_shift(Nx.tensor(1, type: :u32), 32)"},
