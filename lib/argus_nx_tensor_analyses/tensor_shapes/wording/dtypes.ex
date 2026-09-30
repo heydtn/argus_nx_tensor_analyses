@@ -37,7 +37,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     %{
       title: "can go below zero in #{type}, which wraps around",
       detail: wraparound_detail(without_arity(operation), type),
-      label: "wraps around here",
+      label: wraparound_label(operation, type),
       help: wraparound_help(without_arity(operation)),
       frame: "makes it #{type}:",
       severity: :warning
@@ -53,7 +53,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
         "It adds up zeros and ones (a mask) in #{type}, which Nx keeps for this operation " <>
           "rather than widening it as Nx.sum/2 does, over #{elements(length)}: past " <>
           "#{limit(type)} the count wraps around (300 ones count to 44 in u8).",
-      label: "counts here",
+      label: "#{counts(length)} in #{type}, which wraps past #{limit(type)}",
       help:
         "count in a wider type: make the mask s32 first, as in Nx.cumulative_sum(Nx.as_type(mask, :s32))",
       frame: "makes the mask:",
@@ -62,13 +62,14 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def call_error("narrow_wraparound", type, operation) do
+    name = without_arity(operation)
+
     %{
       title: "adds up or multiplies #{type} values in #{type}",
       detail:
-        "#{without_arity(operation)} keeps #{type} for its sums and products, where Nx.sum/2 would " <>
-          "widen it: past #{limit(type)} they wrap around (the dot product of s8 [100, 100] " <>
-          "and [2, 2] is -112).",
-      label: "wraps around here",
+        "#{name} keeps #{type} for its sums and products, where Nx.sum/2 would widen it: past " <>
+          "#{limit(type)} they wrap around (#{narrow_example(name, type)}).",
+      label: "#{narrow_verb(name)} in #{type}, where #{one_past(type)}",
       help: "widen the operands first, as in Nx.as_type(t, :s32), or make them f32",
       frame: "makes it #{type}:",
       severity: :warning
@@ -82,9 +83,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       title: "returns indices in a type too small for them",
       detail:
         "It is given type #{type}, whose largest value is #{limit(type)}, and searches " <>
-          "#{elements(length)}: an index past #{limit(type)} wraps around (the argmax of 300 " <>
-          "values in u8 is 43, not 299).",
-      label: "returns #{type} indices here",
+          "#{elements(length)}: an index past #{limit(type)} wraps around " <>
+          "(#{last_index(length, type)}).",
+      label: "returns #{type} indices, where #{last_index(length, type)}",
       help: "give a type that holds every index, such as the default :s32",
       frame: "",
       severity: written_severity(length)
@@ -101,10 +102,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       detail:
         "A run of #{run(length)} whole numbers (an iota, a linspace's points) is made in, " <>
           "or brought into, #{shown}, #{sequence_effect(names)}",
-      label: "in #{shown} here",
+      label: "#{length} positions in #{shown}, #{exact_to(names)}",
       help:
         "count in s32, or f32, and keep positions in it until they meet the values they scale",
-      frame: "the count is made here:",
+      frame: "makes the count:",
       severity: written_severity(length)
     }
   end
@@ -116,7 +117,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
         "A value that can be negative, or a written number outside #{type}'s range, is " <>
           "made #{type}: it wraps around rather than saturating (-1 becomes 255 in u8, and " <>
           "300 becomes 44).",
-      label: "made #{type} here",
+      label: "made #{type}, where #{out_of_range(type)}",
       help: "clip into the type's range first, as in Nx.clip(x, 0, 255), or use a signed type",
       frame: "",
       severity: :warning
@@ -145,7 +146,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       detail:
         "It makes a #{from} tensor #{to}: Nx keeps the real part and drops the imaginary one " <>
           "without a word (1+2i becomes 1.0).",
-      label: "made #{to} here",
+      label: "#{from} becomes #{to}, without its imaginary part",
       help: "take Nx.real/1, Nx.abs/1 or Nx.phase/1, whichever is meant",
       frame: "makes it #{from}:",
       severity: :warning
@@ -160,7 +161,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       detail:
         "It makes #{article(from)} #{from} tensor #{to}, which truncates toward zero (2.7 " <>
           "becomes 2, and -2.7 becomes -2).",
-      label: "made #{to} here",
+      label: "#{from} becomes #{to}, truncated toward zero",
       help: "round first, with Nx.round/1 or Nx.floor/1, where rounding is meant",
       frame: "makes it #{from}:",
       severity: :info
@@ -184,9 +185,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       title: "pads with a value of another type",
       detail:
         "It pads #{article(from)} #{from} tensor with a value whose type makes the result " <>
-          "#{to}. Nx's binary backend splices the value's raw bits into the #{from} tensor " <>
-          "(0.5 padded into s32 is 1056964608), and EMLX raises; only EXLA converts it.",
-      label: "pads here",
+          "#{to}. Nx's binary backend splices the value's raw bits, as #{article(to)} #{to}, " <>
+          "into the #{from} tensor (0.5 padded into s32 is 1056964608, and -1 padded onto u8 " <>
+          "[1] gives [255, 255]), and EMLX raises; only EXLA converts it.",
+      label: "pads #{article(from)} #{from} tensor with a value that makes it #{to}",
       help:
         "give the pad value the tensor's type, as in Nx.pad(t, Nx.tensor(0, type: Nx.type(t)), config)",
       frame: "",
@@ -201,20 +203,20 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
         "For 2×2 and 3×3 matrices Nx multiplies the entries out in the matrix's type: an " <>
           "unsigned type wraps where the determinant is negative (the determinant of u8 " <>
           "[[1, 2], [3, 4]] comes out 4.29e9), and a signed one overflows for large entries.",
-      label: "multiplies in #{type} here",
+      label: "multiplies #{type} entries in #{type}",
       help: "make the matrix a float first, as in Nx.as_type(m, :f32)",
       frame: "makes it #{type}:",
       severity: if(String.starts_with?(type, "u"), do: :warning, else: :info)
     }
   end
 
-  def call_error("f32_precision", type, _operation) do
+  def call_error("f32_precision", type, operation) do
     %{
       title: "computes #{article(type)} #{type} result with an f32 constant",
       detail:
         "It divides by the logarithm of its base computed as an f32 tensor, so its #{type} " <>
           "result is accurate only to about seven digits.",
-      label: "divides by an f32 here",
+      label: "divides the #{type} by #{base_logarithm(without_arity(operation))} in f32",
       help:
         "divide Nx.log/1 of the tensor by the base's logarithm in #{type}, as in Nx.divide(Nx.log(x), Nx.log(Nx.tensor(2, type: :#{type})))",
       frame: "",
@@ -227,12 +229,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   # A number the tensor's own type rounds to zero.
   defp underflow_in_type(number, type) do
     %{
-      title: "adds a number #{type} rounds to zero",
+      title: "gets #{number}, which #{type} rounds to zero",
       detail:
         "The number #{number} is below the smallest magnitude #{type} holds, and the tensor " <>
           "it meets is #{type}, which keeps its type: the number is 0 there, and an epsilon " <>
           "meant to keep a value from zero does not.",
-      label: "#{number} is 0 in #{type} here",
+      label: "#{number} is 0 in #{type}",
       help: "use an epsilon the type holds (1.0e-4 or larger for f16), or compute in f32",
       frame: "",
       severity: :warning
@@ -243,13 +245,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   # tensor of a type that would have held it.
   defp underflow_before_meeting(number, [name | _rest], type) do
     %{
-      title: "rounds a number to zero in f32 before it meets #{type}",
+      title: "rounds #{number} to zero in f32 before it meets #{type}",
       detail:
         "Outside traced code Nx makes a float number an f32 tensor before it meets another " <>
           "tensor, whatever that tensor's type: #{number} is below the smallest magnitude f32 " <>
           "holds, so it is 0 before it meets the #{type} tensor, which would have held it, and " <>
           "an epsilon meant to keep a value from zero does not.",
-      label: "#{number} is 0 in f32 here",
+      label: "#{number} is 0 in f32, before it meets #{type}",
       help:
         "make the number a tensor of the other's type first, as in Nx.tensor(#{number}, type: :#{name}), or compute it in a defn, where it keeps the merged type",
       frame: "",
@@ -266,7 +268,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
           "tensor, whatever that tensor's type: a number the code writes here is past f32's " <>
           "largest finite value, so it is infinite before it meets the #{type} tensor, which " <>
           "would have held it.",
-      label: "infinite in f32 here",
+      label: "a number past 3.4028235e38 is infinite in f32, before it meets #{type}",
       help:
         "make the number a tensor of the other's type first, as in Nx.tensor(1.0e39, type: :#{type}), or compute it in a defn, where it keeps the merged type",
       frame: "",
@@ -281,7 +283,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
         "A number the code writes here is past #{type}'s largest finite value" <>
           "#{largest(type)}, and the tensor's type is #{type}, which it keeps: the number " <>
           "becomes infinite there, so a -1.0e9 mask gives -Inf, and a softmax over it NaN.",
-      label: "infinite in #{type} here",
+      label: "a number #{past_largest(type)} is infinite in #{type}",
       help:
         "use a number the type holds, such as Nx.Constants.min_finite(Nx.type(x)), or compute in f32",
       frame: "",
@@ -296,10 +298,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
         "The value made #{type} holds a number past #{type}'s largest finite value" <>
           "#{largest(type)}: it becomes infinite (-1.0e9, or Nx.Constants.min_finite(:f32), " <>
           "is -Inf in f16), and a fully masked softmax row over it NaN.",
-      label: "infinite in #{type} here",
+      label: "a number #{past_largest(type)} is infinite in #{type}",
       help:
         "make the value in the target type, as with Nx.Constants.min_finite(:#{type}), or clip it into range first",
-      frame: "the value is made here:",
+      frame: "makes a number past #{type}'s range:",
       severity: :warning
     }
   end
@@ -313,7 +315,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
         "It sums #{elements(length)} in #{type}, which Nx keeps for the sums, means and " <>
           "variances of floats: a sum of values near 1 passes #{type}'s largest finite value" <>
           "#{largest(type)} and is infinite.",
-      label: "sums in #{type} here",
+      label: "#{sums(length)} in #{type}, where a sum of ones goes #{past_largest(type)}",
       help: "sum in f32, as in Nx.sum(Nx.as_type(t, :f32)), and convert the result back",
       frame: "",
       severity: written_severity(length)
@@ -326,7 +328,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       detail:
         "Nx.logsumexp/2 subtracts the maximum in the tensor's type, #{type}: every smaller " <>
           "element wraps around to a large positive number, and its exponential is infinite.",
-      label: "wraps around here",
+      label: "subtracts the maximum in #{type}, where #{zero_minus_one(type)}",
       help: "make the tensor a float first, as in Nx.logsumexp(Nx.as_type(t, :f32))",
       frame: "makes it #{type}:",
       severity: :warning
@@ -342,7 +344,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
     %{
       title: "turns #{article(from)} #{from} operand into #{to}",
       detail: upcast_detail(without_arity(operation), from, to),
-      label: "#{from} becomes #{to} here",
+      label: "#{from} becomes #{to}",
       help: upcast_help(without_arity(operation)),
       frame: "the #{to} operand:",
       severity: :warning
@@ -356,9 +358,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
       title: "merges #{article(from)} #{from} operand into #{to}, which holds less",
       detail:
         "Nx.Type.merge/2 takes #{to} for these operands, which has a smaller range or fewer " <>
-          "significand bits than #{from}: a bf16 past 65504 becomes infinite in f16, and a u64 " <>
-          "past 2^63 turns negative in s64.",
-      label: "#{from} becomes #{to} here",
+          "significand bits than #{from}#{narrowing_example(from, to)}.",
+      label: "#{from} becomes #{to}",
       help:
         "convert both operands to a type that holds either (f32, or s64 for integers) before they meet",
       frame: "makes it #{from}:",
@@ -367,6 +368,78 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   def type_error(_kind, _subject, _operation, _position, _certain), do: nil
+
+  defp wraparound_label(operation, type) do
+    case {without_arity(operation), String.ends_with?(operation, "/1")} do
+      {"Nx.diff", _unary} -> "subtracts neighbors in #{type}, where #{zero_minus_one(type)}"
+      {"Nx.linspace", _unary} -> "steps down in #{type}, where #{zero_minus_one(type)}"
+      {"Nx.all_close", _unary} -> "subtracts in #{type}, where #{zero_minus_one(type)}"
+      {_name, true} -> "negates in #{type}, where -1 is #{wrapped_integer(-1, type)}"
+      {_name, false} -> "subtracts in #{type}, where #{zero_minus_one(type)}"
+    end
+  end
+
+  defp zero_minus_one(type), do: "0 - 1 is #{wrapped_integer(-1, type)}"
+
+  # What an integer type makes of the first integer past its range.
+  defp out_of_range(type) do
+    case integer_range(type) do
+      {0, _high} -> "-1 becomes #{wrapped_integer(-1, type)}"
+      {low, high} -> "#{high + 1} becomes #{low}"
+    end
+  end
+
+  # The first sum past a narrow integer type's largest value, as the type
+  # holds it.
+  defp one_past(type) do
+    {_low, high} = integer_range(type)
+    "#{high} + 1 is #{wrapped_integer(high + 1, type)}"
+  end
+
+  defp narrow_verb("Nx.median"), do: "adds the two middle values"
+  defp narrow_verb(_name), do: "sums and multiplies"
+
+  defp narrow_example("Nx.median", "u8"),
+    do: "the median of u8 [130, 140, 150, 160] is 17.0, not 145.0"
+
+  defp narrow_example("Nx.dot", "s8"), do: "the dot product of s8 [100, 100] and [2, 2] is -112"
+  defp narrow_example(_name, type), do: one_past(type)
+
+  # What the last index of a written length comes out as in an index type,
+  # or the first index past the type's range where the length is not
+  # written.
+  defp last_index(length, type) do
+    index =
+      case Integer.parse(length) do
+        {count, ""} -> count - 1
+        _symbolic -> elem(integer_range(type), 1) + 1
+      end
+
+    "index #{index} comes out #{wrapped_integer(index, type)}"
+  end
+
+  # How far a type holds a run of whole numbers.
+  defp exact_to([type | _rest] = names) do
+    if String.starts_with?(type, ["u", "s"]),
+      do: "which holds up to #{limits(names)}",
+      else: "exact only to #{limits(names)}"
+  end
+
+  # A count, a sum, as a label writes it: over a written length, one the
+  # code reads, or an axis it does not show.
+  defp counts("?"), do: "counts along an axis of unknown length"
+  defp counts(length), do: "counts up to #{length}"
+
+  defp sums("?"), do: "sums an axis of unknown length"
+  defp sums(length), do: "sums #{length} elements"
+
+  defp base_logarithm("Nx.log2"), do: "ln 2"
+  defp base_logarithm("Nx.log10"), do: "ln 10"
+  defp base_logarithm(_name), do: "the base's logarithm"
+
+  defp narrowing_example("u64", _to), do: ": a u64 past 2^63 turns negative in s64"
+  defp narrowing_example("bf16", "f16"), do: ": a bf16 past 65504 becomes infinite in f16"
+  defp narrowing_example(_from, _to), do: ""
 
   defp wraparound_detail("Nx.diff", type),
     do:
@@ -486,6 +559,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Dtypes do
   end
 
   defp limit(type), do: Map.get(@limits, type, "its largest value")
+
+  defp past_largest(type) do
+    case Map.fetch(@largest, type) do
+      {:ok, value} -> "past #{value}"
+      :error -> "past #{type}'s largest value"
+    end
+  end
 
   defp largest(type) do
     case Map.fetch(@largest, type) do
