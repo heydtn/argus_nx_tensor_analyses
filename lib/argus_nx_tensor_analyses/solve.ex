@@ -6,6 +6,7 @@ defmodule ArgusNxTensorAnalyses.Solve do
   # the solve reads, and each finding is placed at its call's line.
 
   alias Argus.Findings
+  alias ArgusNxTensorAnalyses.Graph
 
   # The options that configure the rules, each by the input relation it
   # fills with the types it lists.
@@ -79,19 +80,20 @@ defmodule ArgusNxTensorAnalyses.Solve do
   defp type_name(type) when is_atom(type), do: Atom.to_string(type)
   defp type_name(type) when is_binary(type), do: type
 
+  # Every relation's file, extracted through the query graph
+  # (`ArgusNxTensorAnalyses.Graph`) in a session that keeps nothing.
   defp extract(analysis, modules, directory) do
-    extractors = analysis.extractors()
+    with {:ok, paths} <- Argus.Pipeline.Disassemble.resolve_paths(modules) do
+      session = Graph.open()
 
-    with {:ok, directory} <- Argus.Pipeline.run(modules, directory, extractors: extractors) do
-      # Souffle fails on a missing input file, and an extractor writes a
-      # relation's file only when it has rows.
-      for extractor <- extractors,
-          relation <- extractor.relations(),
-          path = Path.join(directory, "#{relation}.facts"),
-          not File.exists?(path),
-          do: File.write!(path, "")
-
-      {:ok, directory}
+      try do
+        paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq()
+        _sources = Graph.set_program(session.db, paths, analysis.extractors(), %{})
+        File.mkdir_p!(directory)
+        with :ok <- Graph.write_facts(session.db, directory), do: {:ok, directory}
+      after
+        Roux.Session.close(session)
+      end
     end
   end
 
