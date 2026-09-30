@@ -20,7 +20,7 @@ jobs:
         uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.19.4"
-          otp-version: "28.3"
+          otp-version: "28.5.0.7"
 
       - name: Restore dependencies cache
         uses: actions/cache@v4
@@ -41,9 +41,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # OTP 28 before 28.5.0.4, where its build has no C `_Float16` (as
+        # Hex's x86_64 builds do not), converts to f16 wrongly: 7.0e4
+        # becomes a NaN and 1.0e-8 a subnormal, where the tests hold what
+        # Nx makes of a literal to what its finding says.
         include:
           - elixir: "1.19.4"
-            otp: "28.3"
+            otp: "28.5.0.7"
           - elixir: "1.20.4"
             otp: "29.1"
     steps:
