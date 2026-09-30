@@ -2,9 +2,9 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
   @moduledoc false
   # A test module of the analyses: fixtures compiled into a directory of
   # their own and solved once, for the module's tests to read what the
-  # analysis finds in them and what Nx does running them. A solve's rows
-  # are cached under the build path, and a run whose facts, rules, Argus
-  # and solver are unchanged reads them back.
+  # analysis finds in them and what Nx does running them. A solve's facts
+  # and rows are kept under the build path, and a run reads back whatever
+  # nothing it reads has changed.
   #
   # Not async: compiling the fixtures loads them into the VM, and silences
   # the compiler by capturing `:stderr`, which every process shares.
@@ -33,8 +33,8 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
   # beams}`. Call it from `setup_all`.
   #
   # The directory is the checkout's, the same on every run: the path the
-  # fixtures are compiled from can reach their facts, which a solve's
-  # cache is keyed on.
+  # fixtures are compiled from is in their beams, by whose content the
+  # cache keeps each module's facts.
   @spec compile_fixtures(String.t(), String.t()) :: %{atom() => term()}
   def compile_fixtures(name, source) do
     directory = suite_path(["fixtures", name])
@@ -54,9 +54,9 @@ defmodule ArgusNxTensorAnalyses.TensorAnalysisCase do
 
   # Runs each solve at once, since each spends most of its time in Souffle
   # compiling its program, and gives each result by its name. A solve is a
-  # function of the directory to cache its rows in, giving `{:ok,
+  # function of the directory to keep its work in, giving `{:ok,
   # result}`; each has its own, named for `group` and the solve, since a
-  # cache keeps only its latest rows.
+  # cache holds one set of modules, program and options.
   @spec solve_concurrently(String.t(), keyword((Path.t() -> {:ok, term()}))) ::
           %{atom() => term()}
   def solve_concurrently(group, solves) do

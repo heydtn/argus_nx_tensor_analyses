@@ -1,8 +1,8 @@
 defmodule ArgusNxTensorAnalyses.Graph do
   @moduledoc false
-  # The analyses as a roux query graph: each module's facts a memoized
-  # query keyed by what it read, so a run computes again only what an edit
-  # reached.
+  # The analyses as a roux query graph: extraction, stage 0 and the solve,
+  # each a memoized query keyed by what it read, so a run computes again
+  # only what an edit reached.
   #
   #     program(:beams) ─ beam(path) ─ extraction(:all)   [Graph.Inputs]
   #          │
@@ -11,12 +11,19 @@ defmodule ArgusNxTensorAnalyses.Graph do
   #     program_relations(:beams)   a digest per relation, over the
   #          │                      program's modules as one fan-out
   #     relation({:beams, r})       ── cutoff: per relation
+  #          │
+  #     stage0(:beams) ─ stage0_output({:beams, r})   ── cutoff
+  #          │                      stage0_rules(:all), solver(:all)
+  #     solve(:beams)               rules(:all), options(:all): one
+  #                                 Souffle solve, kept by its key
   #
   # What a query is keyed by: the inputs it reads, the queries it demands,
   # and the code it runs. Each query module's code version is the digest
   # of the code it reaches (`use Roux.Query, code: true`); the code the
   # graph reaches only by name, the analysis's extractors, is an input
-  # (`extraction`), versioned the same way (`Roux.Code`).
+  # (`extraction`), versioned the same way (`Roux.Code`). A solve reads
+  # the relations its program loads, and not `line_info`, which moves with
+  # every comment in the code analyzed and which only placement reads.
 
   alias ArgusNxTensorAnalyses.Graph
   alias Roux.Blob
@@ -24,19 +31,49 @@ defmodule ArgusNxTensorAnalyses.Graph do
   alias Roux.Runtime
   alias Roux.Session
 
-  @modules [Graph.Inputs, Graph.Extraction, Graph.Relations]
+  @modules [Graph.Inputs, Graph.Extraction, Graph.Relations, Graph.Solve]
 
   # The program's id: a session holds one set of beams.
   @program :beams
 
   @doc false
+  # Runs `demand` over the graph, set for the analysis's extractors over
+  # `modules` (atoms or `.beam` paths) and the program made of `roots`
+  # (the files a solve includes, in order), with `options` as the
+  # relations the analysis's options fill: in a session kept under `cache`,
+  # or in one that keeps nothing.
+  @spec run(
+          module(),
+          [module() | Path.t()],
+          [Path.t()],
+          %{String.t() => String.t()},
+          Path.t() | nil,
+          (Roux.Database.t() -> result)
+        ) :: result | {:error, term()}
+        when result: var
+  def run(analysis, modules, roots, options, cache, demand) do
+    with {:ok, paths} <- Argus.Pipeline.Disassemble.resolve_paths(modules) do
+      session = open(cache)
+
+      try do
+        paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq()
+        sources = set_program(session.db, paths, analysis.extractors(), session.sources)
+        set_rules(session.db, roots, options)
+        result = demand.(session.db)
+        commit(session, sources)
+        result
+      after
+        Session.close(session)
+      end
+    end
+  end
+
   # Opens a session over the graph: kept under `cache` (its manifest, and
   # the blob store its facts and solves are kept in), or, for nil, in a
   # blob store of its own that closing it removes, which keeps nothing.
-  @spec open(Path.t() | nil) :: Session.t()
-  def open(nil), do: Session.open(modules: @modules, blob: Blob.temporary())
+  defp open(nil), do: Session.open(modules: @modules, blob: Blob.temporary())
 
-  def open(cache) do
+  defp open(cache) do
     File.mkdir_p!(cache)
 
     Session.open(
@@ -46,28 +83,24 @@ defmodule ArgusNxTensorAnalyses.Graph do
     )
   end
 
-  @doc false
   # Keeps what the session's run computed (`Roux.Session.commit/3`), with
   # `sources` as its beams' metadata. A kept store is collected at most
   # once a day (`Roux.Blob.maybe_gc/2`): what the manifest names stays, and
   # so does what a recent run used.
-  @spec commit(Session.t(), map()) :: :ok
-  def commit(%Session{manifest: nil}, _sources), do: :ok
+  defp commit(%Session{manifest: nil}, _sources), do: :ok
 
-  def commit(session, sources) do
+  defp commit(session, sources) do
     {_status, _session} = Session.commit(session, sources)
     _collected = Blob.maybe_gc(session.blob)
     :ok
   end
 
-  @doc false
   # Sets what the graph extracts: the beams at `paths` (absolute, in the
   # order their rows are written) and the analysis's extractors, with the
   # digest of the code extraction runs. `sources` is the beams' metadata
   # the session's last run left (`Roux.Sources`); returns the metadata to
   # commit.
-  @spec set_program(Roux.Database.t(), [Path.t()], [module()], map()) :: map()
-  def set_program(db, paths, extractors, sources) do
+  defp set_program(db, paths, extractors, sources) do
     %{meta: meta} =
       Roux.Sources.sync(db, :beam, Map.new(paths, &{&1, &1}), sources,
         hash: &hash/1,
@@ -130,29 +163,68 @@ defmodule ArgusNxTensorAnalyses.Graph do
     |> Enum.sort()
   end
 
-  @doc false
-  # Writes every relation's file into `directory`, as
-  # `Argus.Pipeline.run/3` writes them: one per relation extraction gives a
-  # file, and one per other relation a module has rows for.
-  @spec write_facts(Roux.Database.t(), Path.t()) :: :ok | {:error, term()}
-  def write_facts(db, directory) do
-    %{relations: extracted} = Input.get(db, :extraction, :all)
+  # Sets what the graph solves: the program and stage 0 as a solve reads
+  # them, the solver, and the options' relations.
+  defp set_rules(db, roots, options) do
+    :ok = Input.set(db, :rules, :all, Graph.Program.read(roots))
 
-    with {:ok, digests} <- Runtime.query(db, :program_relations, @program),
-         relations = Enum.uniq(extracted ++ Map.keys(digests)),
-         named = Enum.map(relations, &{&1, relation_digest(db, &1)}),
-         {:ok, files} <- Graph.Relations.files(db, @program, named) do
-      Enum.reduce_while(files, :ok, fn {relation, file}, :ok ->
-        case Blob.link(db.blob, file, Path.join(directory, relation <> ".facts")) do
-          :ok -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, {:write_failed, relation, reason}}}
-        end
-      end)
+    :ok =
+      Input.set(db, :stage0_rules, :all, Graph.Program.read([Argus.Analysis.stage0_rules_path()]))
+
+    :ok = Input.set(db, :solver, :all, solver(db.blob))
+    :ok = Input.set(db, :options, :all, options)
+  end
+
+  # The souffle on `PATH`, by its version, as Argus names it in its own
+  # keys, and by the file it runs: a build can print an empty version
+  # (`Version: `), and its file still tells it from another. Kept while
+  # the file's stamp holds (`Roux.Stamp`).
+  defp solver(store) do
+    case Argus.Souffle.executable() do
+      nil ->
+        nil
+
+      path ->
+        Roux.Stamp.memo(
+          {__MODULE__, :solver, path},
+          [path],
+          fn ->
+            %{
+              path: path,
+              version: Argus.Souffle.version(path),
+              digest: :crypto.hash(:sha256, File.read!(path))
+            }
+          end,
+          store: store
+        )
     end
   end
 
-  defp relation_digest(db, relation) do
-    {:ok, digest} = Runtime.query(db, :relation, {@program, relation})
-    digest
+  @doc false
+  # The rows of the program's output relations, by name.
+  @spec rows(Roux.Database.t()) :: {:ok, map()} | {:error, term()}
+  def rows(db) do
+    with {:ok, digest} <- Runtime.query(db, :solve, @program) do
+      case Blob.get_term(db.blob, digest) do
+        {:ok, rows} -> {:ok, rows}
+        :miss -> {:error, {:rows_missing, digest}}
+      end
+    end
+  end
+
+  @doc false
+  # Each instruction's line and each function's first (`Argus.Lines`), from
+  # the program's `line_info`.
+  @spec lines(Roux.Database.t()) :: {:ok, Argus.Lines.t()} | {:error, term()}
+  def lines(db) do
+    with {:ok, digest} <- Runtime.query(db, :relation, {@program, "line_info"}),
+         {:ok, %{"line_info" => file}} <-
+           Graph.Relations.files(db, @program, [{"line_info", digest}]),
+         {:ok, content} <- Blob.get(db.blob, file) do
+      {:ok, Argus.Lines.from_facts(%{line_info: Argus.Tsv.decode(content)})}
+    else
+      :miss -> {:error, {:relation_missing, "line_info"}}
+      {:error, _reason} = error -> error
+    end
   end
 end

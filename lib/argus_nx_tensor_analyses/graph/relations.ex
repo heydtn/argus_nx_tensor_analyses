@@ -57,6 +57,11 @@ defmodule ArgusNxTensorAnalyses.Graph.Relations do
          do: {:ok, Map.get(digests, relation, @empty)}
   end
 
+  @doc false
+  # The digest of a relation no module has rows for.
+  @spec empty() :: String.t()
+  def empty, do: @empty
+
   defp merkle(digests) do
     digests
     |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))

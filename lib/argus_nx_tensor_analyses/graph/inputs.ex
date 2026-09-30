@@ -15,6 +15,16 @@ defmodule ArgusNxTensorAnalyses.Graph.Inputs do
   #     (`Roux.Code`: `Argus.Pipeline`, the extractors, which the pipeline
   #     reaches only by name, and Argus's schema, which it reads by name),
   #     and every relation extraction gives a file, rows or not.
+  #   * `rules` (`:all`) — the program the analysis solves, after the Argus
+  #     files it builds on (`ArgusNxTensorAnalyses.Solve.argus_includes/0`),
+  #     as a solve reads it (`ArgusNxTensorAnalyses.Graph.Program`): its
+  #     files by their text without comments, and the relations it loads.
+  #   * `stage0_rules` (`:all`) — Argus's `stage0.dl`, likewise.
+  #   * `solver` (`:all`) — `%{path: executable, version: banner, digest:
+  #     digest}`, the souffle on `PATH` by its version and the SHA-256 of
+  #     its file, or nil without one.
+  #   * `options` (`:all`) — the relations the analysis's options fill
+  #     (`unsupported_type`, `float_type`), each by its file's text.
   #
   # Durability: `program` and `beam` move with the code analyzed and are
   # `:medium`; the rest move with the toolchain and are `:high`, so an
@@ -25,4 +35,8 @@ defmodule ArgusNxTensorAnalyses.Graph.Inputs do
   definput(:program, durability: :medium)
   definput(:beam, durability: :medium)
   definput(:extraction, durability: :high)
+  definput(:rules, durability: :high)
+  definput(:stage0_rules, durability: :high)
+  definput(:solver, durability: :high)
+  definput(:options, durability: :high)
 end

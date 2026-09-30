@@ -304,13 +304,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes do
 
   ## Options
 
-    * `:cache` — a directory to keep the rows in, under a digest of what
-      the solve reads (the facts extracted from the modules, the program
-      and every file it includes without their comments, Argus's version,
-      the solver's): a solve that would read the same reads them back
-      instead, so an edit that leaves the compiled code as it was (a
-      comment, a doc, a comment in the rules) solves nothing. Only the
-      latest rows are kept. Default: nil, no cache.
+    * `:cache` — a directory to keep the work in between runs: each
+      module's facts, by its beam and the code that extracts them, and
+      each solve, by what it reads (the relations the program loads, the
+      program and every file it includes without their comments, the
+      solver, the code that runs it). A run reads back what no edit
+      reached: an edit to one module extracts that module alone, and one
+      that leaves the relations the program reads as they were (a
+      comment, a doc, a comment in the rules) solves nothing. Default:
+      nil, a run that keeps nothing.
     * `:unsupported_types` — the tensor types the backend the code runs
       on does not support, as Nx names them (`:f64`, `{:f, 64}`): a call
       that makes a tensor of one is reported. EMLX, for one, computes f64
