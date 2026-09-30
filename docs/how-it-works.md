@@ -97,3 +97,7 @@ raises.
   function differentiated here.
 - A clip's bounds keep a value in range only where they are written
   numbers.
+- A padding configuration the code builds counts where each amount is a
+  number in a context. An amount of a size variable leaves the axis it
+  pads a size not known, and one the analysis has no value for, such as a
+  difference of two variables (`target - n`), leaves the call no shape.

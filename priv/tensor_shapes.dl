@@ -5118,18 +5118,26 @@ padded_from(context, site, first, axis, [size, name, rest]) :-
   axes_axis(first, axis, _, name).
 .plan 1:(2,1,3), 2:(3,1,2)
 
-// An axis grown as its entry says: a known size to the count of elements
-// the padding leaves it, where that is at least one, and a size not known,
-// or a size variable, to a size not known.
+// An axis grown as its entry says: a known size, by numbers, to the
+// elements it then holds, where it holds any; any size, by no padding at
+// all, to itself; and to a size not known, any size by padding that is not
+// all numbers, and a size not known or a size variable by some padding.
 .decl padded_axis(context: Context, site: symbol, first: Axes, axis: number, size: Size)
 padded_axis(context, site, first, axis, [elements, nil]) :-
   padded_count(context, site, first, axis, elements),
   elements > 0.
+padded_axis(context, site, first, axis, size) :-
+  pads_by(context, site, axis, 0, 0, 0, 1),
+  instance(context, site, [first, _, _], _),
+  axes_axis(first, axis, size, _).
+.plan 1:(2,1,3), 2:(3,2,1)
 padded_axis(context, site, first, axis, [0, nil]) :-
-  pads_by(context, site, axis, _, _, _, _),
+  pads_by(context, site, axis, low, high, interior, known),
   instance(context, site, [first, _, _], _),
   axes_axis(first, axis, size, _),
-  ( size = [0, nil] ; size_symbolic(size) ).
+  ( known = 0
+  ; size = [0, nil]
+  ; size_symbolic(size), max(low, 0 - low) + max(high, 0 - high) + interior > 0 ).
 .plan 1:(2,1,3), 2:(3,2,1)
 
 // The elements a known size keeps, padded by known numbers.
@@ -5167,21 +5175,30 @@ padding_given(context, site, axis, low, high, 0, min(low_known, high_known)) :-
   entry_amount(entry, 1, high, high_known).
 
 // An entry of the configuration a call gets, at `axis`, in a context: a
-// tuple it writes.
+// tuple the call's function builds or writes.
 .decl padding_entry(context: Context, site: symbol, axis: number, entry: Value)
-padding_entry(context, site, index, $Term(text, entry)) :-
+padding_entry(context, site, axis, entry) :-
   operation_site(site, operation, arity),
   nx_argument(operation, arity, position, "padding"),
-  handed_literal(site, position, _, 0, text),
+  handed_element(site, position, function, axis, kind, source),
+  site_active(context, site),
+  value_of(context, function, kind, source, entry).
+padding_entry(context, site, offset + index, $Term(text, entry)) :-
+  operation_site(site, operation, arity),
+  nx_argument(operation, arity, position, "padding"),
+  handed_literal(site, position, _, offset, text),
   term_child(text, 0, index, entry),
   site_active(context, site).
 
-// The configuration's number of entries.
+shape_tuple_demand($Object(object_context, tuple, mapping)) :-
+  padding_entry(_, _, _, $Object(object_context, tuple, mapping)).
+
+// The configuration's number of entries, where the list ends in a literal.
 .decl padding_length(site: symbol, length: number)
-padding_length(site, length) :-
+padding_length(site, offset + length) :-
   operation_site(site, operation, arity),
   nx_argument(operation, arity, position, "padding"),
-  handed_literal(site, position, _, 0, text),
+  handed_literal(site, position, _, offset, text),
   term_length(text, 0, length).
 
 // An entry's number of elements.
@@ -5190,13 +5207,24 @@ entry_length($Term(text, start), length) :-
   padding_entry(_, _, _, $Term(text, start)),
   term_tuple(text, start),
   term_length(text, start, length).
+entry_length($Object(object_context, tuple, mapping), length) :-
+  padding_entry(_, _, _, $Object(object_context, tuple, mapping)),
+  flow_object(_, tuple, "tuple", length).
 
 // What an entry pads by at `part` (low, high, interior): `amount`, which
-// is a number where `known` is 1.
+// is a number where `known` is 1. An element the code builds is a number
+// where it is a known size or written, and where it is a size variable or
+// a size not known, no number: `target - n` of two variables has no value
+// at all.
 .decl entry_amount(entry: Value, part: number, amount: number, known: number)
 entry_amount($Term(text, start), part, amount, 1) :-
   padding_entry(_, _, _, $Term(text, start)),
   term_element_integer(text, start, part, amount).
+entry_amount(entry, part, amount, 1) :- shape_element(entry, part, [amount, nil]), amount > 0.
+entry_amount(entry, part, 0, 0) :-
+  shape_element(entry, part, [coefficient, factors]),
+  ( coefficient = 0 ; factors != nil ).
+entry_amount(entry, part, amount, 1) :- written_element(entry, part, amount).
 
 // A configuration of another length than the tensor's rank, interior
 // padding below zero, a mode given negative padding, and a padding value
