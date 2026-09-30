@@ -3588,6 +3588,10 @@ option(site, substr(atom, 1, strlen(atom) - 1), text, value) :-
   keyed_pair(function, "literal", text),
   term_element_atom(text, 0, 0, atom),
   term_child(text, 0, 1, value).
+option(site, key, text, value) :-
+  options_source(site, _, "object", list),
+  list_rest(list, _, text),
+  term_keyword(text, 0, key, value).
 
 .decl option_given(site: symbol, key: symbol)
 option_given(site, key) :- option(site, key, _, _).
