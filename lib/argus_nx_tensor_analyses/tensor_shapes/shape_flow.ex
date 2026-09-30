@@ -97,6 +97,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       :flow_sets,
       :flow_load,
       :flow_operand,
+      :flow_literal_element,
       :flow_next
     ]
 
@@ -147,6 +148,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
 
     indexes
     |> Enum.reduce(facts, &emit_operands(&2, function, &1, outs))
+    |> literal_elements(function)
     |> call_order(function)
   end
 
@@ -912,6 +914,49 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.ShapeFlow do
       )
     end)
   end
+
+  # ── The elements of literal lists ────────────────────────────────────
+  #
+  # `flow_literal_element(literal, index, element)`: the literal, spelled
+  # as a `literal` source spells it, is a proper list whose element at
+  # `index` (0-based) is `element`, spelled the same way. For every literal
+  # list an instruction takes: the compiler folds the constant rest of a
+  # list the code builds into one (`[x, 0.0, 1.0]` is `x` in front of
+  # `[0.0, 1.0]`), and a list of constants into a single literal, whose
+  # elements a rule may read one at a time.
+
+  defp literal_elements(facts, function) do
+    function.code
+    |> Tuple.to_list()
+    |> Enum.flat_map(&literal_lists/1)
+    |> Enum.reduce(facts, fn list, acc ->
+      spelled = Terms.spell(list)
+
+      list
+      |> Enum.with_index()
+      |> Enum.reduce(acc, fn {element, index}, rows ->
+        Facts.add_fact(rows, :flow_literal_element, [
+          spelled,
+          Integer.to_string(index),
+          Terms.spell(element)
+        ])
+      end)
+    end)
+  end
+
+  # The literal lists an instruction's operands hold, but `[]`.
+  defp literal_lists({:literal, [_head | _tail] = list}),
+    do: if(Terms.proper_list?(list), do: [list], else: [])
+
+  defp literal_lists({:literal, _term}), do: []
+
+  defp literal_lists(operands) when is_tuple(operands),
+    do: operands |> Tuple.to_list() |> Enum.flat_map(&literal_lists/1)
+
+  defp literal_lists(operands) when is_list(operands),
+    do: operands |> Terms.list_elements() |> Enum.flat_map(&literal_lists/1)
+
+  defp literal_lists(_operand), do: []
 
   # ── The order of calls and returns ───────────────────────────────────
   #

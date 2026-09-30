@@ -86,9 +86,6 @@ raises.
 - Configuration is not in the compiled code. The EMLX analysis takes EMLX
   as the default backend unless the code calls `Nx.default_backend/1`, and
   which compiler runs a `defn` is not known.
-- Inside a `defn`, a call to an Nx function that is itself written as a
-  `defn` (such as `Nx.Random`'s samplers) compiles to
-  `Nx.Defn.Compiler.__remote__/4`, and most checks do not see it.
 - Branches that no literal test separates are merged, so a finding on
   such a path is reported as a warning rather than an error.
 - A check has to test the operand itself: `if n > 0` checks

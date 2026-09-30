@@ -1521,6 +1521,21 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     defn softplus(x), do: Nx.log(1 + Nx.exp(x))
     defn logistic(x), do: Nx.exp(x) / (1 + Nx.exp(x))
     defn stable_softplus(x), do: Nx.max(x, 0) + Nx.log1p(Nx.exp(-Nx.abs(x)))
+
+    defn log_of_sample(key) do
+      {sample, _key} = Nx.Random.uniform(key, shape: {8})
+      Nx.log(sample)
+    end
+
+    defn log_of_centered_sample(key) do
+      {sample, _key} = Nx.Random.uniform(key, -1.0, 1.0, shape: {8})
+      Nx.log(sample)
+    end
+
+    defn log_of_shifted_sample(key) do
+      {sample, _key} = Nx.Random.uniform(key, 1.0e-7, 1.0, shape: {8})
+      Nx.log(sample)
+    end
   end
   """
 
@@ -1645,6 +1660,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
     defn previous_class(labels), do: rem(labels - 1, 3)
     defn next_class(labels), do: rem(labels + 1, 3)
+
+    defn empty_range(key), do: Nx.Random.randint(key, 5, 5)
+    defn narrow_range(key), do: Nx.Random.randint(key, 0, 300, type: :u8)
+    defn fitting_range(key), do: Nx.Random.randint(key, 0, 255, type: :u8)
   end
   """
 
@@ -2150,8 +2169,36 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
   ]
   @fixture_modules_tuples """
   defmodule ArgusNxTensorAnalyses.TensorShapesTest.TupleHelpers do
+    import Nx.Defn
+
     def decompose(tensor), do: Nx.LinAlg.qr(tensor)
     def left_half({left, _right}), do: left
+
+    defn key_added(x), do: x + Nx.add(Nx.Random.key(42), Nx.iota({3}))
+    defn key_added_fits(x), do: x + Nx.add(Nx.Random.key(42), Nx.iota({2}))
+
+    defn sample_added(key) do
+      {sample, _key} = Nx.Random.uniform(key, shape: {2, 3})
+      sample + Nx.iota({4})
+    end
+
+    defn sample_added_fits(key) do
+      {sample, _key} = Nx.Random.uniform(key, shape: {2, 3})
+      sample + Nx.iota({3})
+    end
+
+    defn split_drawn(key), do: Nx.Random.uniform(Nx.Random.split(key))
+    defn uniform_over(key), do: Nx.Random.uniform(key, Nx.iota({3}, type: :f32), 5.0, shape: {2})
+
+    defn parts_added(x) do
+      {q, r} = Nx.LinAlg.qr(Nx.iota({4, 2}, type: :f32), mode: :complete)
+      x * (q + r)
+    end
+
+    defn parts_multiplied(x) do
+      {q, r} = Nx.LinAlg.qr(Nx.iota({4, 2}, type: :f32))
+      x * Nx.dot(q, r)
+    end
   end
   """
 
@@ -3068,6 +3115,18 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
         end
 
       rows
+    end
+
+    defn drawn_twice_in_defn(key) do
+      {first, _key} = Nx.Random.uniform(key, shape: {4})
+      {second, _key} = Nx.Random.uniform(key, shape: {4})
+      {first, second}
+    end
+
+    defn drawn_threaded_in_defn(key) do
+      {first, key} = Nx.Random.uniform(key, shape: {4})
+      {second, _key} = Nx.Random.uniform(key, shape: {4})
+      {first, second}
     end
 
     def spent(key) do
@@ -3989,6 +4048,44 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert kinds.(:stable_softplus) == []
   end
 
+  # Inside a `defn`, a sampler compiles to `Nx.Defn.Compiler.__remote__/4`,
+  # which hands it its bounds in a list, a literal where they are written.
+  test "a sample drawn in a defn has the signs its bounds give it", %{rows: rows} do
+    math_defn = ArgusNxTensorAnalyses.TensorShapesTest.MathDefn
+
+    findings = fn name ->
+      rows
+      |> findings_for("tensor_nonfinite_result", defn_id(math_defn, name, 1), [
+        :kind,
+        :cause,
+        :origin_operation
+      ])
+      |> Enum.uniq()
+      |> Enum.sort()
+    end
+
+    assert findings.(:log_of_sample) == [{"log_of_zero", "sample", "Nx.Random.uniform/2"}]
+
+    assert findings.(:log_of_centered_sample) == [
+             {"unchecked_logarithm", "cancel", "Nx.Random.uniform/4"},
+             {"unchecked_logarithm", "negative", ""}
+           ]
+
+    assert findings.(:log_of_shifted_sample) == []
+
+    key = Nx.Random.key(42)
+
+    assert {:returns, centered} =
+             outcome_on_binary_backend(math_defn, :log_of_centered_sample, [key])
+
+    assert nonfinite?(centered)
+
+    assert {:returns, shifted} =
+             outcome_on_binary_backend(math_defn, :log_of_shifted_sample, [key])
+
+    refute nonfinite?(shifted)
+  end
+
   # (end of Math tests)
 
   # ── Indices: tests of their own ──
@@ -4012,6 +4109,33 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
              "Nx.take/2 can get a negative index",
              "a remainder"
            )
+  end
+
+  # Inside a `defn`, `Nx.Random.randint` compiles to
+  # `Nx.Defn.Compiler.__remote__/4`, which hands it its written bounds and
+  # options in the one literal the compiler folds them into.
+  test "a random range written in a defn is checked as one written outside", %{rows: rows} do
+    helpers = ArgusNxTensorAnalyses.TensorShapesTest.IndicesHelpers
+
+    findings =
+      &findings_for(rows, "tensor_call_error", defn_id(helpers, &1, 1), [
+        :operation,
+        :kind,
+        :detail
+      ])
+
+    assert findings.(:empty_range) == [{"Nx.Random.randint/3", "random_range_empty", "5 to 5"}]
+
+    assert findings.(:narrow_range) == [
+             {"Nx.Random.randint/4", "random_range_outside_type", "0 to 300 as u8"}
+           ]
+
+    assert findings.(:fitting_range) == []
+
+    key = Nx.Random.key(42)
+    assert {:raises, _error} = outcome_on_binary_backend(helpers, :empty_range, [key])
+    assert {:returns, _sample} = outcome_on_binary_backend(helpers, :narrow_range, [key])
+    assert {:returns, _sample} = outcome_on_binary_backend(helpers, :fitting_range, [key])
   end
 
   # (end of Indices tests)
@@ -4257,6 +4381,57 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     assert shared.finding.severity == :warning
     assert shared.finding.title =~ "Nx.Random.normal/3"
     assert shared.finding.detail =~ "draws {} and returns {2, 3}"
+  end
+
+  # Inside a `defn`, `Nx.Random`'s functions compile to
+  # `Nx.Defn.Compiler.__remote__/4`, which hands them their arguments in a
+  # list (a single literal for `Nx.Random.key(42)`), and `Nx.LinAlg`'s to
+  # direct calls.
+  test "samplers and decompositions in a defn give the shapes they give outside one", %{
+    rows: rows
+  } do
+    helpers = ArgusNxTensorAnalyses.TensorShapesTest.TupleHelpers
+    key = Nx.Random.key(42)
+    scalar = Nx.tensor(1.0)
+
+    findings = fn name ->
+      rows
+      |> findings_for("tensor_shape_mismatch", defn_id(helpers, name, 1), [
+        :operation,
+        :kind,
+        :detail
+      ])
+      |> Enum.uniq()
+    end
+
+    for {name, argument, finding} <- [
+          {:key_added, scalar,
+           {"Nx.add/2", "broadcast", "cannot broadcast tensor of dimensions {2} to {3}"}},
+          {:sample_added, key,
+           {"Nx.Defn.Kernel.+/2", "broadcast",
+            "cannot broadcast tensor of dimensions {2, 3} to {4}"}},
+          {:split_drawn, key,
+           {"Nx.Random.uniform/1", "key",
+            "expected key to have shape {2}, got tensor with shape {2, 2}"}},
+          {:uniform_over, key,
+           {"Nx.Random.uniform/4", "sampler_parameters",
+            "cannot broadcast tensor of dimensions {2} to {3}"}},
+          {:parts_added, scalar,
+           {"Nx.Defn.Kernel.+/2", "broadcast",
+            "cannot broadcast tensor of dimensions {4, 4} to {4, 2}"}}
+        ] do
+      assert findings.(name) == [finding]
+      assert {:raises, _error} = outcome_on_binary_backend(helpers, name, [argument])
+    end
+
+    for {name, argument} <- [
+          key_added_fits: scalar,
+          sample_added_fits: key,
+          parts_multiplied: scalar
+        ] do
+      assert findings.(name) == []
+      assert {:returns, _value} = outcome_on_binary_backend(helpers, name, [argument])
+    end
   end
 
   # (end of Tuples tests)
@@ -4689,6 +4864,26 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {first, second} = consume(:drawn_threaded, [key])
     refute Nx.to_flat_list(first) == Nx.to_flat_list(second)
     assert consumption_findings(rows, "drawn_threaded") == []
+  end
+
+  # Inside a `defn`, `Nx.Random.uniform/2` compiles to
+  # `Nx.Defn.Compiler.__remote__/4`, which hands it the key in a list.
+  test "a key drawn from twice in a defn is one finding at the sampler it calls", %{rows: rows} do
+    key = Nx.Random.key(42)
+    {first, second} = consume(:drawn_twice_in_defn, [key])
+    assert Nx.to_flat_list(first) == Nx.to_flat_list(second)
+
+    function = defn_id(@consumption_fixtures, :drawn_twice_in_defn, 1)
+
+    assert findings_for(rows, "tensor_call_error", function, [
+             :operation,
+             :kind,
+             :origin_operation
+           ]) == [{"Nx.Random.uniform/2", "reused_key", "Nx.Random.uniform/2"}]
+
+    {first, second} = consume(:drawn_threaded_in_defn, [key])
+    refute Nx.to_flat_list(first) == Nx.to_flat_list(second)
+    assert consumption_findings(rows, "drawn_threaded_in_defn") == []
   end
 
   test "a normal drawn from a key a uniform drew from orders its samples as the uniform does",

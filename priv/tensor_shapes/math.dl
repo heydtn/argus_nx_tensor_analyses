@@ -191,9 +191,7 @@ product_length(context, site, size) :-
 // a range, as the split samplers' (a negative or computed `min` can make
 // it negative); from zero by default for `uniform/1,2`; any sign for a
 // normal, Gumbel or multivariate normal sample; its tensor's for a
-// shuffle or a choice. Inside a `defn`, a call to `Nx.Random` compiles to
-// `Nx.Defn.Compiler.__remote__/4`, which these rules do not read as a
-// sampler.
+// shuffle or a choice.
 
 nx_members("sign", "add", " Nx.Random.uniform_split Nx.Random.randint_split ").
 nx_members("argument", "sign_first", " Nx.Random.uniform_split:1 Nx.Random.randint_split:1 ").

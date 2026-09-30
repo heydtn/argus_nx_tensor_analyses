@@ -161,6 +161,8 @@
 .input flow_guard_node
 .decl flow_checked(site: symbol, func: symbol, position: number, literal: symbol, polarity: symbol)
 .input flow_checked
+.decl flow_literal_element(literal: symbol, index: number, element: symbol)
+.input flow_literal_element
 
 // The tensor types the backend the code targets does not support, as
 // the analysis is run with them (`f64`, `bf16`, ...).
@@ -245,7 +247,7 @@ nx_module("Nx.Random").
 // A call to an Nx function, named as `Nx.add` or `Nx.Defn.Kernel.+`.
 .decl operation_site(site: symbol, operation: symbol, arity: number)
 operation_site(site, cat(module, ".", name), arity) :-
-  remote_call(site, _, module, name, arity),
+  remote_function(site, module, name, arity),
   nx_module(module).
 
 // The function a call is in.
@@ -321,58 +323,72 @@ implementation_type(module, substr(module, strlen(protocol) + 1, strlen(module) 
   implementation(protocol, module).
 
 // `Nx.Defn.Compiler.__remote__/4` runs another module's `defn`, by the
-// name it compiled to (`:"__defn:name__"`), over a list of arguments.
+// name it compiled to (`:"__defn:name__"`), over a list of arguments: a
+// `defn`'s call of a function written as a `defn` elsewhere, the
+// program's or Nx's (`Nx.Random`'s).
 .decl remote_defn_site(site: symbol, caller: symbol)
 remote_defn_site(site, caller) :- remote_call(site, caller, "Nx.Defn.Compiler", "__remote__", 4).
 
 // The source a call hands the function it runs as its argument at
-// `position`. Read calls' arguments here, not in `flow_argument`.
+// `position`: its argument there, but for `__remote__`, the element at
+// `position` of the list it is handed, each element of a constant rest a
+// literal of its own. Read calls' arguments here, not in `flow_argument`.
 .decl argument_source(site: symbol, function: symbol, position: number, kind: symbol, source: symbol)
 argument_source(site, function, position, kind, source) :-
-  flow_argument(site, function, position, kind, source).
+  flow_argument(site, function, position, kind, source),
+  !remote_defn_site(site, function).
+argument_source(site, function, index, kind, source) :-
+  remote_cell(site, function, index, cell),
+  flow_field(function, cell, "head", kind, source).
+argument_source(site, function, offset + index, "literal", element) :-
+  remote_rest(site, function, offset, text),
+  flow_literal_element(text, index, element).
 
-list_asked(list) :- remote_defn_site(site, caller), flow_argument(site, caller, 3, "object", list).
-
-// The Nx function a `defn` of Nx that `__remote__` runs is named as, as a
-// call names it (`Nx.Random.uniform`): Nx writes `Nx.Random`'s samplers as
-// `defn`s.
-.decl remote_operation(site: symbol, caller: symbol, operation: symbol)
-remote_operation(site, caller, cat(module, ".", substr(atom, 1, strlen(atom) - 1))) :-
-  remote_defn_site(site, caller),
+// The function a remote call runs, by module, name and arity: the one it
+// calls, or for `__remote__`, the `defn` it runs, as the code calls it
+// (`Nx.Random.uniform/3`).
+.decl remote_function(site: symbol, module: symbol, name: symbol, arity: number)
+remote_function(site, module, name, arity) :-
+  remote_call(site, _, module, name, arity),
+  !remote_defn_site(site, _).
+remote_function(site, module, substr(atom, 1, strlen(atom) - 1), offset + length) :-
+  remote_rest(site, caller, offset, text),
+  length = count : { flow_literal_element(text, _, _) },
   flow_argument(site, caller, 0, "literal", module),
-  nx_module(module),
   flow_argument(site, caller, 1, "literal", atom),
   match(":[a-z_][a-zA-Z0-9_]*[?!]?", atom).
 
-// The argument at `index` of the list `__remote__` passes on.
-.decl remote_argument(site: symbol, caller: symbol, index: number, kind: symbol, source: symbol)
-remote_argument(site, caller, index, kind, source) :-
-  remote_defn_site(site, caller),
-  flow_argument(site, caller, 3, "object", list),
-  list_element(list, index, kind, source).
-
-// The literal list the arguments end in, where the compiler folded their
-// constant tail into one (`[]` when there is none), after `offset` of them.
-.decl remote_literal_tail(site: symbol, caller: symbol, offset: number, text: symbol)
-remote_literal_tail(site, caller, 0, text) :-
-  remote_defn_site(site, caller),
-  flow_argument(site, caller, 3, "literal", text),
-  term_list(text, 0).
-remote_literal_tail(site, caller, offset, text) :-
-  remote_defn_site(site, caller),
-  flow_argument(site, caller, 3, "object", list),
-  list_rest(list, offset, text),
-  term_list(text, 0).
-
+// A `defn` of the program a `__remote__` call runs.
 .decl remote_defn(site: symbol, caller: symbol, callee: symbol)
 remote_defn(site, caller, callee) :-
+  remote_function(site, module, name, arity),
   remote_defn_site(site, caller),
-  flow_argument(site, caller, 0, "literal", module),
-  flow_argument(site, caller, 2, "literal", spelled),
-  match(":\".*\"", spelled),
-  remote_literal_tail(site, caller, offset, text),
-  term_length(text, 0, length),
-  function_def(callee, module, substr(spelled, 2, strlen(spelled) - 3), offset + length, _).
+  function_def(callee, module, cat("__defn:", name, "__"), arity, _).
+
+// The cells of the list of arguments `__remote__` is handed, the list
+// itself first. A walk of its own, from the code alone: the rules that
+// ask `list_cell` for lists read calls' arguments, which these cells give,
+// and walking them there would make every call's arguments recursive with
+// those rules.
+.decl remote_cell(site: symbol, caller: symbol, index: number, cell: symbol)
+remote_cell(site, caller, 0, list) :-
+  remote_defn_site(site, caller),
+  flow_argument(site, caller, 3, "object", list).
+remote_cell(site, caller, index + 1, next) :-
+  remote_cell(site, caller, index, cell),
+  flow_field(caller, cell, "tail", "object", next),
+  flow_object(caller, next, "list", _).
+
+// The literal the list ends in after `offset` of its arguments: the
+// constant rest the compiler folds into one (`[]` where there is none),
+// or the whole list where every argument is a constant.
+.decl remote_rest(site: symbol, caller: symbol, offset: number, text: symbol)
+remote_rest(site, caller, 0, text) :-
+  remote_defn_site(site, caller),
+  flow_argument(site, caller, 3, "literal", text).
+remote_rest(site, caller, index + 1, text) :-
+  remote_cell(site, caller, index, cell),
+  flow_field(caller, cell, "tail", "literal", text).
 
 // `Nx.Defn.Expr.defn_cond/2` runs the closures of a `defn`'s `cond` or
 // `if`, one per branch.
@@ -385,9 +401,7 @@ runs_branches(site) :- remote_call(site, _, "Nx.Defn.Expr", "defn_cond", 2).
 // the calls that graph does not see, which run an implementation of a
 // protocol or another module's `defn`.
 .init tensor_reach = CallReachSet
-tensor_reach.seed(function) :-
-  remote_call(_, function, module, _, _),
-  nx_module(module).
+tensor_reach.seed(function) :- operation_site(site, _, _), site_function(site, function).
 tensor_reach.seed(function) :- defn_body(function).
 tensor_reach.seed(function) :- remote_call(_, function, "Nx.Constants", _, _).
 tensor_reach.seed(caller) :-
@@ -525,14 +539,12 @@ function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 .decl nx_members(facet: symbol, value: symbol, members: symbol)
 
 // The Nx functions the program names, by arity: those it calls, `Nx.Defn`'s
-// among them, those a `defn` calls through `__remote__` (arity -1: named,
-// not called, as the call hands the arguments in a list), and those of Nx
-// it hands as a literal external fun (`&Nx.sum/1`). Read from the code
-// alone, so that rules may negate what the views derive from it.
+// among them, and those of Nx it hands as a literal external fun
+// (`&Nx.sum/1`). Read from the code alone, so that rules may negate what
+// the views derive from it.
 .decl nx_named(operation: symbol, arity: number)
 nx_named(operation, arity) :- called_name(_, operation, arity).
 nx_named(cat("Nx.Defn.", name), arity) :- remote_call(_, _, "Nx.Defn", name, arity).
-nx_named(operation, -1) :- remote_operation(_, _, operation).
 nx_named(cat("Nx.", substr(function, 3, strlen(function) - 5)), 1) :-
   fun_handed(_, _, function, _),
   match("Nx:[a-z_]+/1", function).
@@ -739,6 +751,9 @@ context_depth($Called(site, context), depth) :-
 calls_directly(context, site, callee) :-
   site_active(context, site),
   static_call(site, _, callee).
+calls_directly(context, site, callee) :-
+  site_active(context, site),
+  remote_defn(site, _, callee).
 calls_directly(context, site, callee) :-
   dispatch_demand(context, site, module),
   protocol_site(site, _, name, arity),
@@ -1018,25 +1033,12 @@ field_demand($Object(object_context, object, mapping), selector) :-
   flow_field(_, object, selector, _, _).
 
 // What a call hands the function it runs, position by position: its
-// arguments; what a closure captured, then the call's arguments; the list
-// `__remote__` passes on.
+// arguments; what a closure captured, then the call's arguments.
 .decl call_argument(context: Context, site: symbol, callee: symbol, position: number, value: Value)
 call_argument(context, site, callee, position, value) :-
   calls_directly(context, site, callee),
   argument_value(context, site, position, value).
 .plan 1:(2,1)
-call_argument(context, site, callee, position, value) :-
-  site_active(context, site),
-  remote_defn(site, caller, callee),
-  remote_argument(site, caller, position, kind, source),
-  value_of(context, caller, kind, source, value).
-.plan 1:(4,3,1,2)
-call_argument(context, site, callee, offset + element, value) :-
-  site_active(context, site),
-  remote_defn(site, caller, callee),
-  remote_literal_tail(site, caller, offset, text),
-  term_child(text, 0, element, start),
-  term_value(text, start, value).
 call_argument(context, site, callee, position, value) :-
   calls_closure(context, site, callee, $Object(object_context, object, mapping)),
   captured_parameter(object, selector, callee, position),
@@ -1078,7 +1080,6 @@ fun_argument(site, position, function, 0) :-
 
 .decl call_made(context: Context, site: symbol, callee: symbol)
 call_made(context, site, callee) :- calls_directly(context, site, callee).
-call_made(context, site, callee) :- site_active(context, site), remote_defn(site, _, callee).
 call_made(context, site, callee) :- calls_closure(context, site, callee, _).
 
 // ── Memoized calls ─────────────────────────────────────────────────
@@ -3266,7 +3267,7 @@ option_key("type").
 // at its arity, and a constant's last, after its type.
 .decl options_source(site: symbol, function: symbol, kind: symbol, source: symbol)
 options_source(site, function, kind, source) :-
-  remote_call(site, _, module, name, arity),
+  remote_function(site, module, name, arity),
   nx_argument(cat(module, ".", name), arity, position, "options"),
   position < arity,
   argument_source(site, function, position, kind, source).
@@ -10310,12 +10311,6 @@ operand_source(origin, site, position, caller, caller_function, kind, source, de
   invocation(caller, call, function, context),
   calls_directly(caller, call, function),
   argument_source(call, caller_function, to_number(parameter), kind, source).
-operand_source(origin, site, position, caller, caller_function, kind, source, depth + 1) :-
-  operand_source(origin, site, position, context, function, "param", parameter, depth),
-  depth < 4,
-  invocation(caller, call, function, context),
-  remote_defn(call, caller_function, function),
-  remote_argument(call, caller_function, to_number(parameter), kind, source).
 operand_source(origin, site, position, context, function, kind, source, depth + 1) :-
   operand_source(origin, site, position, context, function, "load", load, depth),
   depth < 4,
@@ -10499,13 +10494,14 @@ named_call(origin) :- call_error(_, _, _, origin).
 // relations above and the files included below add, and "" for none.
 .decl named_call(site: symbol)
 
-// A call as a finding names it: the module, function and arity a remote
-// call or a built-in function calls (`Nx.dot/2`), the function a local
-// call runs, and "" for any other instruction, a fun's call, and none.
+// A call as a finding names it: the module, function and arity of the
+// function a remote call runs or a built-in function (`Nx.dot/2`), the
+// function a local call runs, and "" for any other instruction, a fun's
+// call, and none.
 .decl call_spelled(site: symbol, shown: symbol)
 call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
   named_call(site),
-  remote_call(site, _, module, name, arity).
+  remote_function(site, module, name, arity).
 call_spelled(site, cat(module, ".", name, "/", to_string(arity))) :-
   named_call(site),
   bif_call(site, _, module, name, arity, _).
@@ -10514,7 +10510,7 @@ call_spelled(site, target) :-
   local_call(site, _, target, _).
 call_spelled(site, "") :-
   named_call(site),
-  !remote_call(site, _, _, _, _),
+  !remote_function(site, _, _, _),
   !bif_call(site, _, _, _, _, _),
   !local_call(site, _, _, _).
 

@@ -211,7 +211,7 @@ carries_gradient(function, "result", site) :-
 carries_gradient(function, "result", site) :-
   carries_gradient(function, kind, source),
   argument_source(site, function, _, kind, source),
-  remote_call(site, _, module, _, _),
+  remote_function(site, module, _, _),
   !nx_module(module),
   !program_call(site, _, _).
 carries_gradient(function, "result", site) :-
@@ -229,7 +229,7 @@ carries_gradient(callee, "param", to_string(position)) :-
   invocation(context, site, callee, _).
 carries_gradient(callee, "param", to_string(index)) :-
   carries_gradient(function, kind, source),
-  remote_argument(site, function, index, kind, source),
+  argument_source(site, function, index, kind, source),
   remote_defn(site, function, callee).
 carries_gradient(function, "result", site) :-
   carries_gradient(callee, kind, source),

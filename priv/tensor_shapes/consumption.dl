@@ -126,29 +126,18 @@ value_named(function, "result", site, cat(name, suffix)) :-
 nx_trait(operation, "draws_key") :- nx_trait(operation, "takes_key"), operation != "Nx.Random.fold_in".
 
 // A call that draws from a key, the source of the key it is handed, and
-// the function it calls as a finding shows it: an `Nx.Random` function
-// called as a function, or in a `defn` (`Nx.Defn.Compiler.__remote__/4`,
-// which hands it its arguments in a list), or a function of the program
-// that draws from the key it is handed.
+// the function it calls as a finding shows it: an `Nx.Random` function,
+// or a function of the program that draws from the key it is handed.
 .decl consumes_key(site: symbol, function: symbol, kind: symbol, source: symbol, shown: symbol)
 consumes_key(site, function, kind, source, operation) :-
   operation_site(site, operation, _),
   nx_trait(operation, "draws_key"),
   argument_source(site, function, 0, kind, source).
-consumes_key(site, function, kind, source, operation) :-
-  remote_operation(site, function, operation),
-  nx_trait(operation, "draws_key"),
-  remote_argument(site, function, 0, kind, source).
 consumes_key(site, function, kind, source, cat(module, ".", name)) :-
   consumes_key_parameter(callee, position),
-  program_call(site, function, callee),
+  ( program_call(site, function, callee) ; remote_defn(site, function, callee) ),
   function_def(callee, module, name, _, _),
   argument_source(site, function, position, kind, source).
-consumes_key(site, function, kind, source, cat(module, ".", name)) :-
-  consumes_key_parameter(callee, position),
-  remote_defn(site, function, callee),
-  function_def(callee, module, name, _, _),
-  remote_argument(site, function, position, kind, source).
 
 // A function of the program that draws from the key it is handed at
 // `position`, as its `defn` wrapper does from what it hands the body.

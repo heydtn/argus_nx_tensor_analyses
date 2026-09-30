@@ -335,8 +335,7 @@ A struct or container is known only where the code builds it.
 `Nx.Random.fold_in/2` is no draw, draws on two branches are one draw on
 either path, and two keys from one written seed are not reported. EMLX and
 EXLA raise reading a freed tensor; the BinaryBackend frees nothing, so
-tests there pass. A draw inside a `defn` counts for the key checks, but
-what it samples is not followed.
+tests there pass. A draw inside a `defn` is checked as one outside it is.
 
 ### Servings and batches
 
