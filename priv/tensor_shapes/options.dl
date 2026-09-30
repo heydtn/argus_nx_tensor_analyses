@@ -274,13 +274,13 @@ handed_options(context, site, text, start) :-
 hands_down(context, function, "param", source, hand) :-
   hand_demand(context, function, source),
   invocation(_, hand, function, context),
-  flow_argument(hand, _, position, kind, _),
+  argument_source(hand, _, position, kind, _),
   source = to_string(position),
   kind != "param".
 hands_down(context, function, "param", source, hand) :-
   hands_down(caller_context, caller, "param", caller_source, hand),
   invocation(caller_context, call, function, context),
-  flow_argument(call, caller, position, "param", caller_source),
+  argument_source(call, caller, position, "param", caller_source),
   source = to_string(position),
   hand_demand(context, function, source).
 hands_down(fork, function, "param", source, hand) :-
@@ -297,7 +297,7 @@ hand_demand(context, function, source) :-
 hand_demand(caller_context, caller, caller_source) :-
   hand_demand(context, function, source),
   invocation(caller_context, call, function, context),
-  flow_argument(call, caller, position, "param", caller_source),
+  argument_source(call, caller, position, "param", caller_source),
   source = to_string(position).
 hand_demand(base, function, source) :-
   hand_demand(fork, function, source),
