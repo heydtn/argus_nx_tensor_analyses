@@ -109,10 +109,12 @@ reported_as_unsupported(name) :- unsupported_type(name).
 
 // A remainder whose divisor or dividend can be negative.
 .decl negative_remainder(context: Context, site: symbol, operand: symbol, certain: number, origin: symbol)
-negative_remainder(context, site, operand, certain, origin) :-
+negative_remainder(context, site, "dividend", certain, origin) :-
   takes_remainder(site),
-  remainder_operand(position, operand),
-  operand_can_be_negative(context, site, position, certain, origin).
+  operand_can_be_negative(context, site, 0, certain, origin).
+negative_remainder(context, site, "divisor", certain, origin) :-
+  takes_remainder(site),
+  operand_can_be_negative(context, site, 1, certain, origin).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -169,10 +171,6 @@ negative_cause(cause, origin) :-
   in_region(context, function, kind, source, region, origin, cause),
   region_order(region, order),
   order <= 1.
-
-// The operands of a remainder, by position.
-.decl remainder_operand(position: number, operand: symbol)
-remainder_operand(0, "dividend"). remainder_operand(1, "divisor").
 
 // The arguments whose negative values the rules ask about: a
 // remainder's operands and a power's exponent.
@@ -259,15 +257,15 @@ lands_on_half(context, site, "halved") :-
   sign_rule(site, "multiply"),
   written_operand(site, written, text),
   written_number(text, "fraction", "half"),
-  other_operand(written, position),
-  argument_class(context, site, position, "integer", _).
+  written <= 1,
+  argument_class(context, site, 1 - written, "integer", _).
 lands_on_half(context, site, "half_added") :-
   rounded_operand(_, site),
   ( sign_rule(site, "add") ; sign_rule(site, "subtract") ),
   written_operand(site, written, text),
   written_number(text, "fraction", "half"),
-  other_operand(written, position),
-  argument_class(context, site, position, "integer", _).
+  written <= 1,
+  argument_class(context, site, 1 - written, "integer", _).
 lands_on_half(context, site, "mean") :-
   rounded_operand(_, site),
   operation_site(site, "Nx.mean", _),
@@ -281,9 +279,6 @@ sign_site(context, site) :- rounded_operand(_, site), site_active(context, site)
 written_operand(site, position, text) :-
   rounded_operand(_, site),
   flow_argument(site, _, position, "literal", text).
-
-.decl other_operand(position: number, other: number)
-other_operand(0, 1). other_operand(1, 0).
 
 // ══ Tensors of two backends ═════════════════════════════════════════
 //

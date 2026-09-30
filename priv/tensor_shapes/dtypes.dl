@@ -416,7 +416,6 @@ nx_members("dtype_role", "indexes", " Nx.argmax Nx.argmin Nx.argsort ").
 nx_members("dtype_role", "sum", " Nx.sum Nx.mean Nx.variance Nx.standard_deviation Nx.dot ").
 nx_members("dtype_role", "rising", " Nx.cumulative_sum Nx.cumulative_max Nx.iota Nx.sort ").
 
-
 // What kind of number a type holds: "unsigned", "integer", "complex",
 // "floating" (a real float, the configured type among them), "byte" (an
 // integer of a byte or less), "narrow" (an integer a count the code does

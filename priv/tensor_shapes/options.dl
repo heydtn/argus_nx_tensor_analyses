@@ -260,7 +260,7 @@ gets_option(context, site, key) :-
 .decl checked_option(key: symbol)
 checked_option(key) :- rejected_form(key, _).
 checked_option(key) :- option_atoms(_, key, _).
-checked_option(key) :- requires_option(_, key).
+checked_option(key) :- nx_class(_, "requires_option", key).
 
 // A checked option's value in a context, where it is a literal term:
 // written at the call, in a list a caller hands down, or what a pair the
@@ -361,10 +361,9 @@ padded_window("Nx.window_max"). padded_window("Nx.window_min"). padded_window("N
 padded_window("Nx.window_reduce"). padded_window("Nx.window_scatter_max").
 padded_window("Nx.window_scatter_min").
 
-// An option Nx requires, raising "missing option" for nil or false.
-.decl requires_option(operation: symbol, key: symbol)
-requires_option("Nx.LinAlg.svd", "max_iter").
-requires_option("Nx.LinAlg.eigh", "max_iter").
+// An option Nx requires, raising "missing option" for nil or false (the
+// class "requires_option" of the functions that do).
+nx_members("requires_option", "max_iter", " Nx.LinAlg.svd Nx.LinAlg.eigh ").
 
 // The atoms `||` takes for no value.
 .decl falsy(atom: symbol)
@@ -376,7 +375,7 @@ rejects_atom(operation, key, atom) :-
   option_atoms(operation, key, atoms),
   !contains(cat(" ", atom, " "), atoms).
 rejects_atom(operation, key, atom) :-
-  requires_option(operation, key),
+  nx_class(operation, "requires_option", key),
   falsy(atom).
 
 // `Nx.pad_outer/3`'s padding type in a context, where it is an atom.

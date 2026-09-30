@@ -133,7 +133,8 @@ sigmoid_of_additive_mask(site, addition, cause) :-
 degenerate_decomposition(site, origin, cause, outcome) :-
   differentiated_decomposition(site, operation, origin),
   degenerate_operand(site, origin, cause),
-  fails_at_degenerate(operation, cause, outcome).
+  nx_class(operation, "degenerate", cause),
+  nx_class(operation, "degenerate_outcome", outcome).
 
 // A call Nx has no derivative for (`reduce`, `window_reduce`,
 // `window_product`, `quotient`, `map`), on the way back from what a grad
@@ -531,7 +532,7 @@ nx_argument(operation, arity, 0, "keeps_far_value") :-
 .decl differentiated_decomposition(site: symbol, operation: symbol, origin: symbol)
 differentiated_decomposition(site, operation, origin) :-
   operation_site(site, operation, _),
-  fails_at_degenerate(operation, _, _),
+  nx_class(operation, "degenerate_outcome", _),
   differentiated_operand(site, 0),
   flow_argument(site, _, 0, "result", origin).
 
@@ -560,24 +561,21 @@ degenerate_operand(site, origin, "scaled_identity") :-
   site_active(context, origin),
   argument_tensor(context, origin, 1 - position, [_, nil]).
 
-// What differentiating a decomposition of a degenerate matrix gives: NaN
-// from the gaps between repeated singular values or eigenvalues, or from
-// zero singular values; a raise from solving with a singular matrix.
-.decl fails_at_degenerate(operation: symbol, cause: symbol, outcome: symbol)
-fails_at_degenerate("Nx.LinAlg.svd", "rank_one", "nan"). fails_at_degenerate("Nx.LinAlg.svd", "low_rank", "nan").
-fails_at_degenerate("Nx.LinAlg.svd", "scaled_identity", "nan").
-fails_at_degenerate("Nx.LinAlg.pinv", "rank_one", "nan"). fails_at_degenerate("Nx.LinAlg.pinv", "low_rank", "nan").
-fails_at_degenerate("Nx.LinAlg.pinv", "scaled_identity", "nan").
-fails_at_degenerate("Nx.LinAlg.eigh", "scaled_identity", "nan").
-fails_at_degenerate("Nx.LinAlg.invert", "rank_one", "nan"). fails_at_degenerate("Nx.LinAlg.invert", "low_rank", "nan").
-fails_at_degenerate("Nx.LinAlg.least_squares", "rank_one", "nan").
-fails_at_degenerate("Nx.LinAlg.least_squares", "low_rank", "nan").
-fails_at_degenerate("Nx.LinAlg.cholesky", "rank_one", "raises").
-fails_at_degenerate("Nx.LinAlg.cholesky", "low_rank", "raises").
-fails_at_degenerate("Nx.LinAlg.qr", "rank_one", "raises"). fails_at_degenerate("Nx.LinAlg.qr", "low_rank", "raises").
-fails_at_degenerate("Nx.LinAlg.lu", "rank_one", "raises"). fails_at_degenerate("Nx.LinAlg.lu", "low_rank", "raises").
-fails_at_degenerate("Nx.LinAlg.solve", "rank_one", "raises").
-fails_at_degenerate("Nx.LinAlg.solve", "low_rank", "raises").
+// What differentiating a decomposition of a degenerate matrix gives (its
+// class "degenerate_outcome"): NaN from the gaps between repeated singular
+// values or eigenvalues, or from zero singular values; a raise from
+// solving with a singular matrix. It does at the degenerate operands of
+// its class "degenerate".
+nx_members("degenerate_outcome", "nan", cat(
+  " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.eigh Nx.LinAlg.invert Nx.LinAlg.least_squares ")).
+nx_members("degenerate_outcome", "raises", " Nx.LinAlg.cholesky Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve ").
+nx_members("degenerate", "rank_one", cat(
+  " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.invert Nx.LinAlg.least_squares Nx.LinAlg.cholesky",
+  " Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve ")).
+nx_members("degenerate", "low_rank", cat(
+  " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.invert Nx.LinAlg.least_squares Nx.LinAlg.cholesky",
+  " Nx.LinAlg.qr Nx.LinAlg.lu Nx.LinAlg.solve ")).
+nx_members("degenerate", "scaled_identity", " Nx.LinAlg.svd Nx.LinAlg.pinv Nx.LinAlg.eigh ").
 
 // ── Calls with no derivative ──────────────────────────────────────────
 

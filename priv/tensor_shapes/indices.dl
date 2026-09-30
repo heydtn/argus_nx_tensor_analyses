@@ -167,7 +167,7 @@ can_go_negative(context, function, "result", site, site, "ddof") :-
   negative_asked(context, function, "result", site),
   ddof_past_count(context, site, "greater", _),
   operation_site(site, operation, _),
-  spread(operation, _, 1).
+  nx_trait(operation, "sum_of_squares").
 
 // A value that arrives across a call (`arrives_from`): what makes the
 // value it arrives from negative.
@@ -416,16 +416,17 @@ ddof_past_count(context, site, how, ddof) :-
 .decl written_ddof(site: symbol, ddof: number)
 written_ddof(site, ddof) :-
   operation_site(site, operation, _),
-  spread(operation, _, _),
+  nx_class(operation, "spreads_over", _),
   option_integer(site, "ddof", ddof).
 
-// The spreads: what they reduce over (the `:axes` option's axes, or the
-// observations along the second to last axis), and 1 for those that are a
-// sum of squares over the count, which a negative count makes negative
-// (the standard deviation is its root, NaN).
-.decl spread(operation: symbol, over: symbol, squares: number)
-spread("Nx.variance", "axes", 1). spread("Nx.standard_deviation", "axes", 0).
-spread("Nx.covariance", "observations", 1).
+// The spreads, by what they reduce over (their class "spreads_over"):
+// the `:axes` option's axes, or the observations along the second to last
+// axis; and those that are a sum of squares over the count, which a
+// negative count makes negative (the standard deviation is its root,
+// NaN).
+nx_members("spreads_over", "axes", " Nx.variance Nx.standard_deviation ").
+nx_members("spreads_over", "observations", " Nx.covariance ").
+nx_members("trait", "sum_of_squares", " Nx.variance Nx.covariance ").
 
 // `Nx.covariance/2` takes options where `Nx.covariance/3` takes the mean.
 nx_members("argument", "options", " Nx.covariance/2:1 Nx.covariance/3:2 ").
@@ -442,7 +443,7 @@ spread_count(context, site, tally) :-
 spread_count(context, site, tally) :-
   written_ddof(site, _),
   operation_site(site, operation, _),
-  spread(operation, "observations", _),
+  nx_class(operation, "spreads_over", "observations"),
   slot_value(context, site, 1, _, first),
   axes_rank(first, rank),
   axes_axis(first, rank - 2, [tally, nil], _).
@@ -453,7 +454,7 @@ spread_count(context, site, tally) :-
 spread_reduces(context, site, first, kept) :-
   written_ddof(site, _),
   operation_site(site, operation, _),
-  spread(operation, "axes", _),
+  nx_class(operation, "spreads_over", "axes"),
   slot_value(context, site, 1, _, first),
   reduction_axes(site, first, mask, keep),
   contracted(first, mask, keep, kept).
@@ -602,7 +603,7 @@ complex_hazard(site, 0, "complex_operand") :-
   ( option_atom(site, "ord", ":nuclear") ; option_integer(site, "ord", -2) ).
 complex_hazard(site, 0, "complex_spread") :-
   operation_site(site, operation, _),
-  spread(operation, "axes", _).
+  nx_class(operation, "spreads_over", "axes").
 
 // The operands of the functions that order or round values, or take them
 // as real: Nx raises for a complex one.

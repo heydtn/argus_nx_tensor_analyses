@@ -431,7 +431,7 @@ negative_integer_power(context, site) :-
 constant_without_type(context, site, name) :-
   makes_constant(site, constant),
   given_type(context, site, name, class),
-  constant_lacks(constant, class).
+  nx_class(cat("Nx.Constants.", constant), "lacks", class).
 
 // A floor, ceiling or conversion to integers of a logarithm to base 2 or
 // 10: the logarithm of an exact power rounds just below or above the
@@ -497,19 +497,19 @@ computed_power(site) :-
 
 sign_site(context, site) :- computed_power(site), site_active(context, site).
 
-// The constants a class of types has no value of.
-.decl constant_lacks(constant: symbol, class: symbol)
-constant_lacks(constant, "integer") :- float_constant(constant).
-constant_lacks(constant, "complex") :- float_constant(constant).
-constant_lacks("max_finite", "complex"). constant_lacks("min_finite", "complex").
-constant_lacks("max", "complex"). constant_lacks("min", "complex").
-constant_lacks("i", "integer"). constant_lacks("i", "float").
+// The constants a class of types has no value of (their class "lacks").
+nx_members("lacks", "complex", cat(
+  " Nx.Constants.max_finite Nx.Constants.min_finite Nx.Constants.max Nx.Constants.min ")).
+nx_members("lacks", "integer", " Nx.Constants.i ").
+nx_members("lacks", "float", " Nx.Constants.i ").
+nx_class(operation, "lacks", "integer") :- nx_trait(operation, "float_constant").
+nx_class(operation, "lacks", "complex") :- nx_trait(operation, "float_constant").
 
 // The constants only floats have.
-.decl float_constant(constant: symbol)
-float_constant("nan"). float_constant("infinity"). float_constant("neg_infinity").
-float_constant("epsilon"). float_constant("smallest_positive_normal"). float_constant("pi").
-float_constant("e"). float_constant("euler_gamma").
+nx_members("trait", "float_constant", cat(
+  " Nx.Constants.nan Nx.Constants.infinity Nx.Constants.neg_infinity Nx.Constants.epsilon",
+  " Nx.Constants.smallest_positive_normal Nx.Constants.pi Nx.Constants.e",
+  " Nx.Constants.euler_gamma ")).
 
 // A call of `Nx.Constants`, by the constant it makes.
 .decl makes_constant(site: symbol, constant: symbol)
@@ -518,7 +518,7 @@ makes_constant(site, constant) :- remote_call(site, _, "Nx.Constants", constant,
 // The type of each constant given one, which some types lack.
 type_asked(context, site) :-
   makes_constant(site, constant),
-  constant_lacks(constant, _),
+  nx_class(cat("Nx.Constants.", constant), "lacks", _),
   type_position(site, _),
   site_active(context, site).
 
