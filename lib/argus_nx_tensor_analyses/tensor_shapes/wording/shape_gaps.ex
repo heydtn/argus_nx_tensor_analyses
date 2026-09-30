@@ -23,7 +23,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.ShapeGaps do
       title: "gets a size, count or stride below 1",
       why:
         "Nx takes dimensions, repetitions, counts, lengths and strides of at least 1: a shape has no empty axes, a transform no empty length, and a slice steps forward.",
-      help: "make it at least 1"
+      help: "make the size, count or stride at least 1"
     },
     "no_tensors" => %{
       title: "joins no tensors",
@@ -34,7 +34,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.ShapeGaps do
     "tensor_as_shape" => %{
       title: "gets a tensor where it takes a shape",
       why:
-        "Nx.iota/2 takes a shape tuple; handed a tensor, Nx 1.0 warns that this is deprecated, then raises whatever the tensor.",
+        "Nx.iota/2 takes a shape tuple; handed any tensor, Nx 1.0 warns that this is deprecated and then raises.",
       help: "pass the tensor's shape: Nx.iota(Nx.shape(tensor))"
     },
     "ragged_data" => %{
@@ -68,7 +68,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.ShapeGaps do
       detail:
         "Nx.iota/2 takes a number as a tensor whose shape it takes, and a number's shape is {}: " <>
           "Nx.iota(#{number}) is the scalar 0, not a range of #{number} values.",
-      label: "makes a scalar here",
+      label: "makes the scalar 0, not a range of #{number} values",
       help: "pass a shape tuple: Nx.iota({#{number}})",
       frame: "because of this",
       severity: :warning
@@ -82,7 +82,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.ShapeGaps do
         "Without :length, Nx.irfft/2 rebuilds a signal of even length, twice the spectrum's " <>
           "size less two, but the spectrum is an Nx.rfft/2's of a signal of length #{length}: " <>
           "it gives a signal one shorter, of other values.",
-      label: "rebuilds an even length here",
+      label: "rebuilds a signal of length #{String.to_integer(length) - 1}, not #{length}",
       help: "pass length: #{length}, the length of the signal the spectrum was taken of",
       frame: "the spectrum of the odd-length signal is taken by",
       severity: :warning
@@ -97,7 +97,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.ShapeGaps do
           "them to the input's rank, their axes last, and swapping the axis at the first " <>
           "reduced position with the last, so weights over two or more axes land transposed " <>
           "(here #{weights}): each element is weighed by another's weight.",
-      label: "weighs transposed axes here",
+      label: "weights #{weights} land transposed",
       help:
         "broadcast the weights to the input's shape first, Nx.broadcast(weights, Nx.shape(input), axes: axes), so they are used as they are",
       frame: "because of this",
@@ -106,13 +106,15 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.ShapeGaps do
   end
 
   def call_error("scaling_factor_rank", shapes, _operation) do
+    [factor, tensor] = String.split(shapes, " scaling ")
+
     %{
       title: "sums the scaled exponentials over other axes than the tensor's",
       detail:
-        "Its :exp_scaling_factor has more axes than the tensor (#{shapes}): Nx.logsumexp/2 " <>
+        "Its :exp_scaling_factor, #{factor}, has more axes than the tensor, #{tensor}: Nx.logsumexp/2 " <>
           "broadcasts the factor with the exponentials and then sums over the :axes of that " <>
           "broadcast shape, which are not the tensor's axes.",
-      label: "sums here",
+      label: "a #{factor} factor scales the #{tensor} tensor",
       help:
         "give the scaling factor at most the tensor's rank, or broadcast the tensor to the factor's shape first",
       frame: "because of this",
