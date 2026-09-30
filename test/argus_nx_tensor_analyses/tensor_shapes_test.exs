@@ -1673,12 +1673,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:type_error, "non_integer_start", "float"},
      "Nx.slice(Nx.iota({2, 6}), [1.5, if(config.a > 1, do: 1.5, else: 1)], [2, 2])"},
     # a ddof at or past the count a spread divides by
-    {{:finds, {"tensor_nonfinite_result", "ddof_not_below_count", "equal"}, :nonfinite},
-     "Nx.variance(Nx.iota({1, 2}, type: :f32), axes: [0], ddof: 1)"},
+    {{:finds, {"tensor_nonfinite_result", "ddof_not_below_count", "ddof: 1, count: 1"},
+      :nonfinite}, "Nx.variance(Nx.iota({1, 2}, type: :f32), axes: [0], ddof: 1)"},
     {:quiet, "Nx.variance(Nx.iota({2, 2}, type: :f32), axes: [0], ddof: 1)"},
-    {{:finds, {"tensor_nonfinite_result", "ddof_not_below_count", "equal"}, :nonfinite},
-     "Nx.standard_deviation(Nx.iota({3}, type: :f32), axes: [], ddof: 1)"},
-    {{:finds, {"tensor_nonfinite_result", "ddof_not_below_count", "greater"}, :finite},
+    {{:finds, {"tensor_nonfinite_result", "ddof_not_below_count", "ddof: 1, count: 1"},
+      :nonfinite}, "Nx.standard_deviation(Nx.iota({3}, type: :f32), axes: [], ddof: 1)"},
+    {{:finds, {"tensor_nonfinite_result", "ddof_not_below_count", "ddof: 3, count: 2"}, :finite},
      "Nx.covariance(Nx.iota({2, 2}, type: :f32), ddof: 3)"},
     {:quiet, "Nx.covariance(Nx.iota({3, 2}, type: :f32), ddof: 1)"},
     {{:finds, {"tensor_call_error", "negative_ddof", "-1"}, :accepted},
@@ -1700,11 +1700,11 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
     {{:finds, {"tensor_call_error", "random_range_outside_type", "-5 to 5 as u8"}, :accepted},
      "Nx.Random.randint(Nx.Random.key(1), -5, 5, type: :u8)"},
     {:quiet, "Nx.Random.randint(Nx.Random.key(1), 0, 255, type: :u8)"},
-    {{:finds, {"tensor_call_error", "random_type_not_integer", "float"}, :raises},
+    {{:finds, {"tensor_call_error", "random_type_not_integer", "f32"}, :raises},
      "Nx.Random.randint(Nx.Random.key(1), 0.0, 5.0)"},
-    {{:finds, {"tensor_call_error", "random_type_not_integer", "float"}, :raises},
+    {{:finds, {"tensor_call_error", "random_type_not_integer", "f32"}, :raises},
      "Nx.Random.randint(Nx.Random.key(1), 0, 5, type: :f32)"},
-    {{:finds, {"tensor_call_error", "random_bound_truncated", "float"}, :accepted},
+    {{:finds, {"tensor_call_error", "random_bound_truncated", "2.5 as s32"}, :accepted},
      "Nx.Random.randint(Nx.Random.key(1), 0, 2.5, type: :s32)"},
     # complex operands to calls that reject them
     {{:type_error, "complex_operand", "complex"}, "Nx.argmax(Nx.fft(Nx.iota({4})))"},
@@ -4461,12 +4461,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
           do: {finding.severity, frame.label}
     end
 
-    assert {:warning, "the index can go negative because of this Nx.select/3"} in labels.(
+    assert {:warning, "can make an index negative: Nx.select/3"} in labels.(
              "Nx.take_along_axis/3 can get a negative index",
              "a written negative number"
            )
 
-    assert {:warning, "the index can go negative because of this Nx.Defn.Kernel.rem/2"} in labels.(
+    assert {:warning, "can make an index negative: Nx.Defn.Kernel.rem/2"} in labels.(
              "Nx.take/2 can get a negative index",
              "a remainder"
            )

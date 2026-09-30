@@ -165,7 +165,8 @@ can_go_negative(context, function, "result", site, site, "remainder") :-
 // its sum of squares by a negative number.
 can_go_negative(context, function, "result", site, site, "ddof") :-
   negative_asked(context, function, "result", site),
-  ddof_past_count(context, site, "greater", _),
+  ddof_past_count(context, site, tally, ddof),
+  ddof > tally,
   operation_site(site, operation, _),
   nx_trait(operation, "sum_of_squares").
 
@@ -375,13 +376,14 @@ sign_demand(context, function, kind, source) :- start_value(context, _, _, funct
 // of one) divides by zero, and a `ddof` past the count by a negative
 // number, a negative variance whose square root is NaN.
 
-// A spread whose written `ddof` is at least the count it reduces over:
-// `how` is "equal" where it divides by zero, "greater" past it.
-.decl ddof_past_count(context: Context, site: symbol, how: symbol, ddof: number)
-ddof_past_count(context, site, how, ddof) :-
+// A spread whose written `ddof` is at least the count it reduces over,
+// `tally`: it divides by zero where they are equal, and by a negative
+// number past it.
+.decl ddof_past_count(context: Context, site: symbol, tally: number, ddof: number)
+ddof_past_count(context, site, tally, ddof) :-
   spread_count(context, site, tally),
   written_ddof(site, ddof),
-  ( ddof = tally, how = "equal" ; ddof > tally, how = "greater" ).
+  ddof >= tally.
 
 // A spread with a written `ddof`.
 .decl written_ddof(site: symbol, ddof: number)
@@ -436,7 +438,8 @@ quotient_demand(total, rest) :-
   axes_product(first, total),
   axes_product(kept, rest).
 
-nonfinite(site, "ddof_not_below_count", how, "") :- ddof_past_count(_, site, how, _).
+nonfinite(site, "ddof_not_below_count", cat("ddof: ", to_string(ddof), ", count: ", to_string(tally)), "") :-
+  ddof_past_count(_, site, tally, ddof).
 
 // A negative `ddof`, which Nx takes: it divides by more than the count.
 call_error(site, "negative_ddof", to_string(ddof), "") :-
@@ -481,22 +484,23 @@ call_error(site, "random_range_outside_type", cat(low, " to ", high, " as ", nam
   min(min(minimum - smallest, largest + 1.0 - maximum), largest - smallest - (maximum - minimum)) < 0.0.
 
 // A randint that makes a tensor of a type other than an integer, which Nx
-// rejects: given one, or given none and a bound written as a float.
-call_error(site, "random_type_not_integer", class, "") :-
+// rejects, by the type's name: given one, or given none and a bound
+// written as a float, which Nx makes f32.
+call_error(site, "random_type_not_integer", name, "") :-
   random_sampling(site, "randint"),
-  given_type(_, site, _, class),
+  given_type(_, site, name, class),
   class != "integer".
-call_error(site, "random_type_not_integer", "float", "") :-
+call_error(site, "random_type_not_integer", "f32", "") :-
   random_sampling(site, "randint"),
   !type_given(site),
-  float_bound(_, site).
+  float_bound(_, site, _).
 
 // A randint given an integer type with a bound written as a float, which
-// it truncates.
-call_error(site, "random_bound_truncated", "float", "") :-
+// it truncates: the bound as written, and the type.
+call_error(site, "random_bound_truncated", cat(spelled, " as ", name), "") :-
   random_sampling(site, "randint"),
-  given_type(context, site, _, "integer"),
-  float_bound(context, site).
+  given_type(context, site, name, "integer"),
+  float_bound(context, site, spelled).
 
 // The calls that sample a range, bounds at positions 1 and 2, by sampler.
 // A random range sampler's type is asked, whatever else asks for it.
@@ -530,13 +534,14 @@ random_bound(context, site, position, to_float(spelled), spelled) :-
   term_spelling(text, start, spelled),
   written_number(spelled, "range", "f32").
 
-// A bound written as a float.
-.decl float_bound(context: Context, site: symbol)
-float_bound(context, site) :-
+// A bound written as a float, as written.
+.decl float_bound(context: Context, site: symbol, spelled: symbol)
+float_bound(context, site, spelled) :-
   random_sampling(site, "randint"),
   argument_value(context, site, position, $Term(text, start)),
   position >= 1, position <= 2,
-  term_float(text, start).
+  term_float(text, start),
+  term_spelling(text, start, spelled).
 
 // The values each integer type of up to 16 bits holds, as Nx names it.
 .decl integer_range(name: symbol, smallest: float, largest: float)

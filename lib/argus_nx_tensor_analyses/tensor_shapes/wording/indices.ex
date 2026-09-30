@@ -47,12 +47,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
           "backend raises that it is out of bounds, EXLA clamps a gathered index to 0 and drops " <>
           "an indexed update, and EMLX wraps -1 to the last element and drops an update out " <>
           "of range.",
-      label: "reads the indices here",
+      label: "gets indices that can be below 0: #{Causes.negative_value(cause)}",
       help:
         "keep the indices of #{without_arity(operation)} in range: replace the ones the code ignores " <>
           "with a valid index through Nx.select and mask their results, and take a modulo that " <>
           "stays positive as Nx.remainder(i + n, n)",
-      frame: "the index can go negative because of this",
+      frame: "can make an index negative:",
       severity: :warning
     }
   end
@@ -64,11 +64,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
         "Its start can be negative: #{Causes.negative(cause)}. Nx does not count a negative start " <>
           "from the end, as NumPy does, nor raise: it moves the start to 0, and the slice " <>
           "#{verb(operation)} the first elements (Nx.slice(Nx.iota({6}), [-1], [1]) is [0]).",
-      label: "#{verb(operation)} from here",
+      label:
+        "#{verb(operation)} from a start that can be below 0: #{Causes.negative_value(cause)}",
       help:
         "count a start from the end yourself, such as Nx.axis_size(t, axis) - length, and " <>
           "keep a window's start at least 0 where its first steps are shorter",
-      frame: "the start can go negative because of this",
+      frame: "can make the start negative:",
       severity: :warning
     }
   end
@@ -77,10 +78,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "slices past the end of an axis",
       detail:
-        "Its start and length run past the end (#{detail}). Nx does not raise: it moves the " <>
+        "Its start and length run past the end of the axis (#{detail}). Nx does not raise: it moves the " <>
           "start back until the slice fits, and the slice #{verb(operation)} other elements " <>
           "than the code names (Nx.slice(Nx.iota({6}), [5], [3]) is [3, 4, 5]).",
-      label: "#{verb(operation)} here",
+      label: "#{verb(operation)} #{detail}",
       help: "keep the start plus the length within the axis: start earlier, or slice less",
       frame: "because of this",
       severity: :warning
@@ -94,7 +95,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
         "Its ddof is #{ddof}. Nx divides by the count less ddof and does not check it, so a " <>
           "negative ddof divides by more than the count and gives a smaller spread than any " <>
           "estimator means.",
-      label: "given ddof: #{ddof} here",
+      label: "given ddof: #{ddof}, so it divides by more than the count",
       help: "use ddof: 0 for the population's spread, or ddof: 1 for the sample's",
       frame: "because of this",
       severity: :warning
@@ -109,7 +110,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
           "takes the remainder of random bits by the maximum less the minimum, which is zero: " <>
           "the binary backend raises dividing by zero, and other backends give what the bits " <>
           "hold.",
-      label: "samples #{range} here",
+      label: "samples #{range}, which holds no integer",
       help: "make the maximum at least one more than the minimum",
       frame: "because of this",
       severity: :error
@@ -124,7 +125,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
           "order: randint takes the remainder by the span as an unsigned integer, which wraps " <>
           "to a huge one and gives values outside the range, and uniform clamps at the " <>
           "minimum, which gives the minimum alone.",
-      label: "samples #{range} here",
+      label: "samples #{range}, its minimum above its maximum",
       help: "pass the minimum first and the maximum second",
       frame: "because of this",
       severity: :warning
@@ -132,6 +133,8 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
   end
 
   def call_error("random_range_outside_type", range, operation) do
+    [_bounds, name] = String.split(range, " as ")
+
     %{
       title: "samples a range its type cannot hold",
       detail:
@@ -140,34 +143,39 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
           "the result in the type, unchecked: a span as wide as the type wraps to zero (the " <>
           "binary backend raises), a wider one wraps short (0 to 300 as u8 gives values " <>
           "below 44), and bounds past the type wrap around it.",
-      label: "samples #{range} here",
+      label: "samples #{range}, which holds #{holds(name)}",
       help: "sample a range the type holds, or a wider type",
       frame: "because of this",
       severity: :warning
     }
   end
 
-  def call_error("random_type_not_integer", class, operation) do
+  def call_error("random_type_not_integer", name, operation) do
+    class = if String.starts_with?(name, "c"), do: "complex", else: "float"
+
     %{
       title: "samples integers of a #{class} type",
       detail:
-        "#{without_arity(operation)} samples integers only, and the type it would make is a #{class}: " <>
-          "the type given, or with none given, the type of a bound written as a #{class}. Nx " <>
-          "raises that it expects an integer type.",
-      label: "samples here",
+        "#{without_arity(operation)} samples integers only, and the type it would make is " <>
+          "#{name}: the type given, or with none given, the type of a bound written as a " <>
+          "float. Nx raises: expected integer type, got type #{type_tuple(name)}.",
+      label: "samples integers as #{name}",
       help: "give it an integer type (type: :s32), and integer bounds",
       frame: "because of this",
       severity: :error
     }
   end
 
-  def call_error("random_bound_truncated", _class, operation) do
+  def call_error("random_bound_truncated", detail, operation) do
+    [bound, name] = String.split(detail, " as ")
+
     %{
       title: "truncates a float bound",
       detail:
-        "A bound is written as a float, and #{without_arity(operation)} makes the integer type it is given: " <>
-          "it truncates the bound, and samples another range than the code writes.",
-      label: "samples here",
+        "A bound is written as a float, #{bound}, and #{without_arity(operation)} makes #{name}, " <>
+          "the integer type it is given: it truncates the bound to #{truncated(bound)}, and " <>
+          "samples another range than the code writes.",
+      label: "truncates the bound #{bound} to #{truncated(bound)} in #{name}",
       help: "round the bound to the integer meant, or sample floats with Nx.Random.uniform",
       frame: "because of this",
       severity: :warning
@@ -177,15 +185,17 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
   def call_error(_kind, _detail, _operation), do: nil
 
   @impl true
-  def hazard("ddof_not_below_count", how, operation) do
+  def hazard("ddof_not_below_count", detail, operation) do
+    ["ddof: " <> ddof, "count: " <> count] = String.split(detail, ", ")
+    left = String.to_integer(count) - String.to_integer(ddof)
+
     %{
-      title:
-        "divides by a count its ddof leaves #{if(how == "equal", do: "zero", else: "negative")}",
+      title: "divides by a count its ddof leaves #{if(left == 0, do: "zero", else: "negative")}",
       detail:
-        "Its written ddof is #{if(how == "equal", do: "equal to", else: "more than")} the count " <>
-          "of values it reduces, and #{without_arity(operation)} divides by the count less ddof, " <>
-          "unchecked. " <> ddof_consequence(how),
-      label: "divides here",
+        "Its written ddof, #{ddof}, is #{if(left == 0, do: "equal to", else: "more than")} the " <>
+          "count of values it reduces, #{count}, and #{without_arity(operation)} divides by the " <>
+          "count less ddof, unchecked. " <> ddof_consequence(left),
+      label: "divides by its count #{count} less ddof: #{ddof}, which is #{left}",
       help:
         "reduce over more values than ddof, or use ddof: 0 where a count can be 1, as a batch of one",
       frame: "because of this"
@@ -199,9 +209,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
     %{
       title: "starts a slice at a #{class}",
       detail:
-        "A start can be a #{class}. #{without_arity(operation)} takes integer starts only, and Nx raises " <>
-          "that an index must be of an integer type.",
-      label: "gets a #{class} start here",
+        "A start can be a #{class}. #{without_arity(operation)} takes integer starts only, and " <>
+          "Nx raises: index must be integer type.",
+      label: "gets a #{class} start",
       help: "make the start an integer: round it and then Nx.as_type(start, :s32)",
       frame: "makes it a #{class}:"
     }
@@ -238,15 +248,41 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Indices do
   def type_error(_kind, _subject, _operation, _position, _certain), do: nil
 
   # A spread's result where its ddof leaves the count zero or negative.
-  defp ddof_consequence("equal"),
+  defp ddof_consequence(0),
     do:
       "The count less ddof is zero: the result is NaN, or infinite where the values differ, " <>
         "as a variance over axis 0 of a batch of one with ddof: 1 is."
 
-  defp ddof_consequence(_greater),
+  defp ddof_consequence(_negative),
     do:
       "The count less ddof is negative: a variance or covariance comes out negative, and a " <>
         "standard deviation, its square root, NaN."
+
+  # The values an integer type holds, by its name: u8 holds 0 to 255.
+  defp holds(name) do
+    {signed, bits} = String.split_at(name, 1)
+    width = String.to_integer(bits)
+
+    case signed do
+      "u" -> "0 to #{Integer.pow(2, width) - 1}"
+      _signed -> "#{-Integer.pow(2, width - 1)} to #{Integer.pow(2, width - 1) - 1}"
+    end
+  end
+
+  # A type's name as Nx's messages write it: f32 as {:f, 32}, and a name
+  # of another form as its atom.
+  defp type_tuple(name) do
+    case Regex.run(~r/^([a-z]+)(\d+)$/, name, capture: :all_but_first) do
+      [letters, bits] -> "{:#{letters}, #{bits}}"
+      nil -> ":#{name}"
+    end
+  end
+
+  # A bound written as a float, truncated to an integer as a cast does.
+  defp truncated(bound) do
+    {number, _rest} = Float.parse(bound)
+    number |> trunc() |> Integer.to_string()
+  end
 
   # A slice reads its elements, and `put_slice` writes them.
   defp verb(operation) do
