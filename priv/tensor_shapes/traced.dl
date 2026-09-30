@@ -271,13 +271,9 @@ reads_data(site, function) :-
   remote_call(site, function, "Nx", name, _),
   nx_trait(cat("Nx.", name), "reads_data").
 
-// The calls that read a tensor's data: those that give it on the host,
-// but `Nx.serialize`, or move it to another backend, and
-// `Nx.backend_deallocate`.
-nx_trait(operation, "reads_data") :-
-  nx_class(operation, "gives", gives),
-  in_set("reads_data", gives),
-  operation != "Nx.serialize".
+// The calls that read a tensor's data: those that give it on the host or
+// move it to another backend, and `Nx.backend_deallocate`.
+nx_trait(operation, "reads_data") :- nx_class(operation, "gives", gives), in_set("reads_data", gives).
 nx_members("set", "reads_data", " host moved ").
 nx_members("trait", "reads_data", " Nx.backend_deallocate ").
 
