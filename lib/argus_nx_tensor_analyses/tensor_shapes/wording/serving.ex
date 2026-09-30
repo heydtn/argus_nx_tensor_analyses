@@ -17,7 +17,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       detail:
         "#{@slices}, and #{detail}. Nx raises \"given axis (0) invalid for shape with rank 0\" " <>
           "on every batch.",
-      label: "the serving's computation",
+      label: "compiles a computation whose output is a scalar, with no batch axis",
       help:
         "reduce each entry along its own axes and keep the batch axis first, such as " <>
           "Nx.sum(x, axes: [1]) rather than Nx.sum(x), or reduce in the client postprocessing",
@@ -27,13 +27,18 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
   end
 
   def call_error("serving_output_batch_axis", detail, _operation) do
+    [batch, output] = detail |> batched() |> String.split(" gives ", parts: 2)
+    [_, first] = Regex.run(~r/^\{([^,}]*)/, output)
+
     %{
       title: "compiles a serving computation whose output drops the batch axis",
       detail:
-        "#{@slices}, and #{detail}. Nx slices along whatever axis comes first, so each caller " <>
-          "gets part of something else (the batch's total, another axis), or Nx raises where " <>
-          "that axis is shorter than the batch.",
-      label: "the serving's computation",
+        "#{@slices}, and over a batch of #{batch} it gives #{output}, whose first axis is " <>
+          "#{first}. Nx slices along whatever axis comes first, so each caller gets part of " <>
+          "something else (the batch's total, another axis), or Nx raises where that axis is " <>
+          "shorter than the batch.",
+      label:
+        "gives #{output} over a batch of #{batch}: its first axis is #{first}, not the batch",
       help:
         "keep the batch axis first in every output: reduce, transpose and reshape only the " <>
           "entry's own axes (axes: [1], or Nx.transpose(x, axes: [0, 2, 1]))",
@@ -49,7 +54,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
         "This runs inside a serving's computation, whose first axis is the batch, and " <>
           "#{detail}. Each entry's result then depends on the rest of the batch: the zero rows " <>
           "Nx.Batch.pad adds, and under batched_run other callers' requests.",
-      label: "mixes the batch's entries here",
+      label: "#{String.replace_prefix(detail, "it ", "")}, axis 0, mixing the entries",
       help:
         "reduce, sort or contract along the entry's own axes (axes: [1], axis: 1), never axis 0",
       frame: "because of this",
@@ -63,19 +68,25 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       detail:
         "An ahead-of-time compiled computation takes only batches of its template's shape, and " <>
           "#{detail}. #{@template}",
-      label: "compiles for a fixed batch size",
+      label: batch_size_label(detail),
       help:
         "pad every batch to the template's size before the compiled function runs, such as " <>
           "Nx.Batch.pad(batch, size - batch.size) in a function the builder returns, or jit " <>
           "instead of compiling ahead of time",
-      frame: "the batch:",
+      frame: batch_size_frame(detail),
       severity: severity(detail)
     }
   end
 
   def call_error("serving_template_type", detail, _operation) do
     [template, entries] = String.split(detail, " ")
-    entries = if entries in ~w(integer float complex), do: "#{entries}s", else: entries
+
+    entries =
+      Map.get(
+        %{"integer" => "integers", "float" => "floats", "complex" => "complex numbers"},
+        entries,
+        entries
+      )
 
     %{
       title: "compiles a serving computation for another type than its batch's",
@@ -86,7 +97,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       help:
         "make the template's type the entries' (Nx.template(shape, Nx.type(entry))), or convert " <>
           "the entries with Nx.as_type in the client preprocessing",
-      frame: "the batch:",
+      frame: "makes the batch of #{entries_of(entries)}:",
       severity: :error
     }
   end
@@ -98,7 +109,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
         "A batch's entries must all have one template, the same shape (past the first axis for " <>
           "a concatenation) and axis names, and #{detail}. Nx raises \"cannot add to batch due " <>
           "to incompatible tensors/containers\".",
-      label: "joins the entries here",
+      label: String.replace_prefix(detail, "it gets", "joins"),
       help:
         "pad or reshape the entries to one shape first, or give entries of different shapes " <>
           "different batch keys (Nx.Batch.key/2)",
@@ -113,7 +124,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       detail:
         "Nx.Batch.concatenate/2 joins its entries along their first axis, and #{detail}. " <>
           "Nx raises \"cannot concatenate scalar tensor\".",
-      label: "concatenates here",
+      label: "concatenates a scalar, which has no first axis to join",
       help: "stack scalars with Nx.Batch.stack/2, which gives each entry an axis of its own",
       frame: "because of this",
       severity: :error
@@ -126,7 +137,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       detail:
         "A serving runs its computation over a batch's entries, and #{detail}. Nx raises " <>
           "\"cannot run with empty Nx.Batch\".",
-      label: "runs the batch here",
+      label: "runs a batch with no entries",
       help: "add entries to the batch first, with Nx.Batch.stack/2 or Nx.Batch.concatenate/2",
       frame: "makes the empty batch:",
       severity: :error
@@ -141,7 +152,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
           "Nx raises \"cannot merge batches due to incompatible templates\" there, every caller " <>
           "in the batch exits, and the serving's supervisor, which does not restart, dies with " <>
           "them. This holds only where requests' shapes differ.",
-      label: "sets the preprocessing here",
+      label: "sets a preprocessing that batches each request in the shape it comes in",
       help:
         "pad or reshape each request to one shape in the preprocessing, or give each shape its " <>
           "own batch key (Nx.Batch.key/2, and :batch_keys when starting the serving)",
@@ -151,16 +162,19 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
   end
 
   def call_error("serving_run_input", detail, _operation) do
+    input = if detail =~ "list of tensors", do: "a list of tensors", else: "a tensor"
+
     %{
       title: "runs a serving on input its default preprocessing cannot take",
       detail:
-        "A serving without a client preprocessing takes an Nx.Batch, or a stream of them, and " <>
-          "#{detail}. Nx raises before the computation runs.",
-      label: "runs it here",
+        "A serving without a client preprocessing takes an Nx.Batch, or a stream of them (a " <>
+          "list, whose elements it takes for batches), and this one is handed #{input}. Nx " <>
+          "raises before the computation runs.",
+      label: "runs it on #{input}, not a batch",
       help:
         "make a batch of the input (Nx.Batch.stack([tensor])), or set a client preprocessing " <>
           "that returns {batch, info}",
-      frame: "because of this",
+      frame: "the tensor is made by",
       severity: :error
     }
   end
@@ -171,7 +185,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       detail:
         "Nx.Serving.run/2 runs a serving struct inline, in the calling process, and is handed " <>
           "#{name}, a serving process's name. Nx raises FunctionClauseError.",
-      label: "handed #{name} here",
+      label: "handed #{name}, a name, where it takes a serving struct",
       help:
         "run the serving process by its name with Nx.Serving.batched_run(#{name}, input), or " <>
           "hand Nx.Serving.run/2 the serving struct",
@@ -186,7 +200,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       detail:
         "Nx.Serving.batched_run/2 sends its input to a serving process started under a name, " <>
           "and is handed a serving struct. Nx raises FunctionClauseError.",
-      label: "handed the serving struct here",
+      label: "handed a serving struct, where it takes a serving process's name",
       help:
         "start the serving as a process ({Nx.Serving, serving: serving, name: MyServing}) and " <>
           "call Nx.Serving.batched_run(MyServing, input), or run the struct inline with " <>
@@ -206,7 +220,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
           "with batch_size: #{given}. Nx raises \"the batch size set via " <>
           "Nx.Serving.batch_size/2 (#{size}) does not match the batch size given to the " <>
           "serving process (#{given})\" when the process starts.",
-      label: "sets batch size #{size} here",
+      label: "sets batch size #{size}, where the process starts with batch_size: #{given}",
       help:
         "give the batch size once: drop batch_size: from the start options, or this " <>
           "Nx.Serving.batch_size/2 call",
@@ -222,9 +236,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
         "A serving's client preprocessing must return a batch, or a stream of batches, and any " <>
           "information for the postprocessing, as a pair, and #{detail}. Nx raises " <>
           "\"client_preprocessing function ... must return a two element tuple\".",
-      label: "sets the preprocessing here",
+      label: String.replace_prefix(detail, "the preprocessing", "sets a preprocessing that"),
       help: "return {Nx.Batch.stack([input]), info} from the preprocessing",
-      frame: "because of this",
+      frame: "the tensor it returns is made by",
       severity: :error
     }
   end
@@ -236,22 +250,23 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
         "Nx.Serving.new/2 takes a function of the compiler options that returns the " <>
           "computation, jitted or compiled, and #{detail}. It is called with a keyword list " <>
           "when the serving starts, and Nx raises there.",
-      label: "the builder is handed here",
+      label: "is handed a builder that returns a tensor",
       help:
         "wrap the computation: Nx.Serving.new(fn options -> Nx.Defn.jit(&computation/1, options) end), " <>
           "or use Nx.Serving.jit(&computation/1)",
-      frame: "because of this",
+      frame: "the tensor the builder returns is made by",
       severity: :error
     }
   end
 
-  def call_error("serving_computation_arity", detail, _operation) do
+  def call_error("serving_computation_arity", arity, _operation) do
     %{
       title: "compiles a serving computation that takes more than the batch",
       detail:
-        "A serving calls its computation with the batch alone, and #{detail}. Nx raises " <>
-          "\"should return an AOT or JIT compiled function that expects one argument\".",
-      label: "compiles it here",
+        "A serving calls its computation with the batch alone, and this one takes #{arity} " <>
+          "arguments. Nx raises \"should return an AOT or JIT compiled function that expects " <>
+          "one argument\".",
+      label: "compiles a function of #{arity} arguments, where a serving hands it one",
       help:
         "capture the other arguments in a closure of one argument, such as " <>
           "fn batch -> predict(params, batch) end",
@@ -266,15 +281,43 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Serving do
       detail:
         "A two-argument client postprocessing is handed {output, metadata} and the " <>
           "preprocessing's information, and #{detail}. Nx raises on the tuple.",
-      label: "takes the pair as a tensor here",
+      label: "takes the {output, metadata} pair it is handed as a tensor",
       help:
         "match the pair in the postprocessing's head: fn {output, _metadata}, info -> ... end",
-      frame: "because of this",
+      frame: "the postprocessing is set by",
       severity: :error
     }
   end
 
   def call_error(_kind, _detail, _operation), do: nil
+
+  # The batch size the rules name a batch's first axis by, its parameter's
+  # path, `$0#{0}`, which the shapes they spell show as `arg0#{0}`.
+  defp batched(detail), do: String.replace(detail, "arg0\#{0}", "batch")
+
+  # A template's batch size against a batch's, `it is compiled for batches
+  # of 4 and runs over a batch of 1`, or against a serving process's
+  # smaller batches.
+  defp batch_size_label(detail) do
+    case Regex.run(~r/batches of (\d+)(?: and runs over a batch of (\d+))?/, detail) do
+      [_, size, entries] ->
+        "compiles for batches of #{size}, and runs a batch of #{entries}"
+
+      [_, size] ->
+        "compiles for batches of #{size}, and a serving process runs smaller ones on a timeout"
+    end
+  end
+
+  # Entries of a type, `s32 entries`, or of a class, `integers`.
+  defp entries_of(entries),
+    do: if(String.ends_with?(entries, "s"), do: entries, else: "#{entries} entries")
+
+  defp batch_size_frame(detail) do
+    case Regex.run(~r/runs over a batch of (\d+)/, detail) do
+      [_, entries] -> "makes the batch of #{entries}:"
+      nil -> "starts the serving process:"
+    end
+  end
 
   # A batch of a known size raises at once; a process serving's smaller
   # batches only when its batch times out.

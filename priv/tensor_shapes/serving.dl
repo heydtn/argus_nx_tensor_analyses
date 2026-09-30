@@ -64,11 +64,18 @@ call_error(serving, "serving_scalar_output", cat("it runs ", operation, ", which
   active_site(serving).
 
 // Over a batch the program says the shape of, an output leaf's first axis
-// is another size than the batch's.
-call_error(compile, "serving_output_batch_axis", cat("its output's first axis is ", spelled, ", where the batch axis should be"), "") :-
+// is another size than the batch's (`detail`, the batch's shape, then the
+// leaf's, the batch size spelled as its parameter's path, `arg0#{0}`).
+call_error(compile, "serving_output_batch_axis", cat(batch_spelled, " gives ", output_spelled), "") :-
   batched_run(_, compile, computation, batched),
-  output_off_batch(batched, computation, [first, _, _]),
-  size_spelled(first, spelled).
+  output_off_batch(batched, computation, [first, second, rest]),
+  batched = $Canonical(computation, [$Tensor([nil, batch]), _captures]),
+  sizes_spelled(batch, batch_spelled),
+  sizes_spelled([first, second, rest], output_spelled).
+spelling_demand(axes) :- output_off_batch(_, _, axes), axes != nil.
+spelling_demand(batch) :-
+  output_off_batch(batched, computation, _),
+  batched = $Canonical(computation, [$Tensor([nil, batch]), _captures]).
 
 // Over a batch the program says the shape of, an operation runs along the
 // batch axis, and the output keeps it first.
@@ -104,7 +111,7 @@ call_error(site, "serving_mixes_batch", detail, "") :-
 
 // The computation is compiled for a batch size, and the serving runs over
 // a batch of another, which nothing pads.
-call_error(compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), " and runs over a batch of ", to_string(entries)), "") :-
+call_error(compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), " and runs over a batch of ", to_string(entries)), batch) :-
   serving_compiled_template(_, compile, serving, _, size),
   size > 0,
   serving_batch(serving, batch),
@@ -115,28 +122,35 @@ call_error(compile, "serving_template_batch_size", cat("it is compiled for batch
 // The computation is compiled for a batch size, and a serving process
 // runs it, which runs smaller batches when its batch times out, and
 // nothing pads them.
-call_error(compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), ", and a serving process runs smaller ones when its batch times out"), "") :-
+call_error(compile, "serving_template_batch_size", cat("it is compiled for batches of ", to_string(size), ", and a serving process runs smaller ones when its batch times out"), start) :-
   serving_compiled_template(_, compile, serving, _, size),
   size > 1,
-  started(_, serving),
+  started(start, serving),
   !padded(serving).
 
 // The computation is compiled for a type its batch's entries are not
-// (`detail`, the template's type, then the entries').
-call_error(compile, "serving_template_type", cat(name, " ", type), "") :-
+// (`detail`, the template's type, then the entries'), which the call
+// `batch` makes.
+call_error(compile, "serving_template_type", cat(name, " ", type), batch) :-
   serving_compiled_template(_, compile, serving, template, _),
   template_type(template, name, _),
   entry_type(serving, type),
-  type != name.
+  type != name,
+  serving_batch(serving, batch),
+  tensors_at(batch, _, entries),
+  entries != "template".
 
 // ... or, where the entries' exact type is not known, of another class of
 // number.
-call_error(compile, "serving_template_type", cat(name, " ", class), "") :-
+call_error(compile, "serving_template_type", cat(name, " ", class), batch) :-
   serving_compiled_template(_, compile, serving, template, _),
   template_type(template, name, template_class),
   entry_class(serving, class),
   class != template_class,
-  !entry_type(serving, _).
+  !entry_type(serving, _),
+  serving_batch(serving, batch),
+  tensors_at(batch, _, entries),
+  entries != "template".
 
 // A batch's entries do not share one template.
 call_error(site, "batch_incompatible_entries", cat("it gets entries of shapes ", first_shown, " and ", entry_shown), "") :-
@@ -178,7 +192,7 @@ call_error(setting, "serving_entry_shape_varies", "its batch's entry is the requ
 
 // A serving with the default preprocessing, which takes only batches, is
 // run on a tensor.
-call_error(run, "serving_run_input", "it is handed a tensor, and the serving has no client preprocessing to make a batch of it", "") :-
+call_error(run, "serving_run_input", "it is handed a tensor, and the serving has no client preprocessing to make a batch of it", made) :-
   run_without_preprocessing(run, _),
   run_argument(run, 1, _, "result", made),
   operation_site(made, _, _),
@@ -226,29 +240,30 @@ call_error(setting, "serving_preprocessing_result", "the preprocessing returns a
 
 // A preprocessing returns a tensor first in its pair, where the batch
 // goes.
-call_error(setting, "serving_preprocessing_result", "the preprocessing returns a tensor first in its pair, where the batch goes", "") :-
+call_error(setting, "serving_preprocessing_result", "the preprocessing returns a tensor first in its pair, where the batch goes", made) :-
   serving_callback(setting, "client_preprocessing", function),
   returns_first(function, "result", made),
   operation_site(made, _, _),
   active_site(setting).
 
 // A builder returns a tensor, not a jitted or compiled function.
-call_error(serving, "serving_builder_result", "its builder returns a tensor, not a jitted or compiled function", "") :-
+call_error(serving, "serving_builder_result", "its builder returns a tensor, not a jitted or compiled function", made) :-
   builder_returns(serving, made),
   operation_site(made, _, _),
   active_site(serving).
 
-// The computation takes more than the batch, after its captures.
-call_error(compile, "serving_computation_arity", cat("it compiles a function of ", to_string(arity - captured), " arguments, and a serving hands its computation one, the batch"), "") :-
+// The computation takes more than the batch, after its captures
+// (`detail`, how many it takes).
+call_error(compile, "serving_computation_arity", to_string(arity - captured), "") :-
   serving_computation(_, compile, function, captured),
   function_def(function, _, _, arity, _),
   arity != captured + 1,
   active_site(compile).
 
 // A two-argument postprocessing takes the `{output, metadata}` pair it is
-// handed as a tensor.
-call_error(site, "serving_postprocessing_input", "the postprocessing takes the output as a tensor, where it is handed an {output, metadata} pair", "") :-
-  callback_input(_, "client_postprocessing", context, path),
+// handed as a tensor, and `setting` sets it.
+call_error(site, "serving_postprocessing_input", "the postprocessing takes the output as a tensor, where it is handed an {output, metadata} pair", setting) :-
+  callback_input(setting, "client_postprocessing", context, path),
   argument_unshaped(context, site, _, path).
 
 // ══ Words: servings and batches as values ═══════════════════════════
