@@ -12,8 +12,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
   def type_error("integer_past_s32", subject, operation, _position, _certain) do
     {spelled, _type} = literal(subject)
     value = String.to_integer(spelled)
-    wrapped = wrap(value, "s", 32)
-    saturated = saturate(value, "s", 32)
+    wrapped = wrapped_integer(value, "s32")
+    {low, high} = integer_range("s32")
+    saturated = value |> max(low) |> min(high)
 
     how =
       if data?(operation),
@@ -99,9 +100,9 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
   def type_error("literal_wraps", subject, _operation, _position, _certain) do
     {spelled, type} = literal(subject)
     value = String.to_integer(spelled)
-    {family, size} = family_size(type)
-    {low, high} = integer_range(family, size)
-    wrapped = wrap(value, family, size)
+    {_family, size} = family_size(type)
+    {low, high} = integer_range(type)
+    wrapped = wrapped_integer(value, type)
 
     %{
       title: "makes #{value} #{article(type)} #{type}, which holds #{low} to #{high}",
@@ -193,25 +194,6 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     "{:#{family}, #{size}}"
   end
 
-  defp integer_range("s", size), do: {-Integer.pow(2, size - 1), Integer.pow(2, size - 1) - 1}
-  defp integer_range("u", size), do: {0, Integer.pow(2, size) - 1}
-
-  # What Nx writes for an integer in a type of the width: its low bits.
-  defp wrap(value, "s", size) do
-    <<wrapped::signed-size(^size)>> = <<value::size(size)>>
-    wrapped
-  end
-
-  defp wrap(value, "u", size) do
-    <<wrapped::unsigned-size(^size)>> = <<value::size(size)>>
-    wrapped
-  end
-
-  defp saturate(value, family, size) do
-    {low, high} = integer_range(family, size)
-    value |> max(low) |> min(high)
-  end
-
   defp past_s32_help(value, data?) do
     type =
       if value <= Integer.pow(2, 63) - 1 and value >= -Integer.pow(2, 63), do: :s64, else: :u64
@@ -226,8 +208,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
   defp wraps_help(value, low, high) do
     holding =
       Enum.find(~w(s16 u16 s32 u32 s64 u64), fn type ->
-        {family, size} = family_size(type)
-        {type_low, type_high} = integer_range(family, size)
+        {type_low, type_high} = integer_range(type)
         value >= type_low and value <= type_high
       end)
 

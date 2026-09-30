@@ -2,7 +2,8 @@ defmodule ArgusNxTensorAnalyses.Text do
   @moduledoc false
   # How the findings of both analyses write what they share: the article
   # before a type, a function without its arity, an argument's position,
-  # a list in a sentence.
+  # what an integer type holds and makes of an integer, a list in a
+  # sentence.
 
   @ordinals ~w(first second third fourth fifth)
 
@@ -21,6 +22,30 @@ defmodule ArgusNxTensorAnalyses.Text do
   def ordinal(position, spelled) do
     index = String.to_integer(position)
     if index in 0..(spelled - 1), do: Enum.at(@ordinals, index), else: "#{index + 1}th"
+  end
+
+  # The integers an integer type holds, by its name: `u8` as `{0, 255}`.
+  @spec integer_range(String.t()) :: {integer(), integer()}
+  def integer_range(type) do
+    {family, size} = integer_type(type)
+
+    case family do
+      "s" -> {-Integer.pow(2, size - 1), Integer.pow(2, size - 1) - 1}
+      "u" -> {0, Integer.pow(2, size) - 1}
+    end
+  end
+
+  # What Nx makes of an integer in an integer type, by its name: its low
+  # bits, as 300 is 44 in `u8` and 128 is -128 in `s8`.
+  @spec wrapped_integer(integer(), String.t()) :: integer()
+  def wrapped_integer(value, type) do
+    {low, high} = integer_range(type)
+    Integer.mod(value - low, high - low + 1) + low
+  end
+
+  defp integer_type(type) do
+    [_whole, family, size] = Regex.run(~r/^([su])(\d+)$/, type)
+    {family, String.to_integer(size)}
   end
 
   # Items as a sentence lists them: `a`, `a and b`, `a, b and c`, with
