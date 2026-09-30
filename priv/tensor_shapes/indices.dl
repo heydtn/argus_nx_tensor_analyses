@@ -333,9 +333,11 @@ start_literal(site, function, 0, text) :-
   operation != "Nx.slice_along_axis",
   flow_argument(site, function, 1, "literal", text),
   term_list(text, 0).
-start_literal(site, function, index + 1, text) :-
-  start_cell(site, function, index, cell),
-  flow_field(function, cell, "tail", "literal", text),
+start_literal(site, function, offset, text) :-
+  slices_from(site, operation),
+  operation != "Nx.slice_along_axis",
+  flow_argument(site, function, 1, "object", list),
+  list_rest(list, offset, text),
   term_list(text, 0).
 
 // A start at `axis` past 0 that the code writes, or the rules know.

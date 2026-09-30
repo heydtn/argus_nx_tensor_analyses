@@ -157,8 +157,9 @@ list_asked(list) :- runs_branches(site), flow_argument(site, _, 1, "object", lis
 // is the last clause's ("last") or an earlier one's.
 .decl clause_predicate(site: symbol, function: symbol, pair: symbol, order: symbol, kind: symbol, source: symbol)
 clause_predicate(site, function, pair, "last", kind, source) :-
-  clause(site, function, _, cell, pair),
-  flow_field(function, cell, "tail", "literal", "[]"),
+  clause(site, function, index, _, pair),
+  flow_argument(site, function, 1, "object", list),
+  list_rest(list, index + 1, "[]"),
   flow_field(function, pair, "{0}", kind, source).
 clause_predicate(site, function, pair, "earlier", kind, source) :-
   clause(site, function, _, cell, pair),
