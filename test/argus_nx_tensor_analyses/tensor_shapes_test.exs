@@ -4590,7 +4590,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
 
       shown = if made in [:infinity, :neg_infinity], do: "an infinity", else: to_string(made)
 
-      assert label =~ ~r/ becomes #{Regex.escape(shown)} here$/,
+      assert label =~ ~r/ becomes #{Regex.escape(shown)} in /,
              "#{subject}: #{label}, and Nx makes #{inspect(made)}"
     end
   end

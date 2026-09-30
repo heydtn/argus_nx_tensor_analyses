@@ -27,7 +27,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
       detail:
         "#{how}: #{value} becomes #{wrapped} (EMLX saturates a scalar to #{saturated} " <>
           "instead).",
-      label: "#{value} becomes #{wrapped} here",
+      label: "#{value} becomes #{wrapped} in s32",
       help: past_s32_help(value, data?(operation)),
       frame: "",
       severity: :warning
@@ -52,7 +52,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     %{
       title: "gets the type #{subject}, which it takes only as a tuple",
       detail: detail,
-      label: "raises for #{subject} here",
+      label: "gets #{subject}, not #{tuple}",
       help: atom_type_help(tuple),
       frame: "",
       severity: :error
@@ -69,7 +69,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
         "#{without_arity(operation)} matches a type only in its tuple form, and falls through " <>
           "to its catch-all clause for the short atom #{subject}: it returns #{given}, where " <>
           "for #{tuple} it returns #{expected}.",
-      label: "returns #{given} here",
+      label: "returns #{given} for #{subject}, where #{tuple} gives #{expected}",
       help: atom_type_help(tuple),
       frame: "",
       severity: :warning
@@ -89,7 +89,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
         "#{raised}. Nx's types are s8, s16, s32, s64, u8, u16, u32, u64 (and s2, s4, u2, u4), " <>
           "f8, f16, bf16, f32, f64, f8_e4m3fn, c64 and c128, written as an atom (:f32) or a " <>
           "tuple ({:f, 32}).",
-      label: "raises for #{subject} here",
+      label: invalid_type_label(subject),
       help: invalid_type_help(subject),
       frame: "",
       severity: :error
@@ -109,7 +109,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
         "Nx writes an integer into #{type} modulo 2^#{size}, so the tensor holds #{wrapped} " <>
           "where the code writes #{value} (EMLX saturates a scalar that does not fit 32 bits " <>
           "instead).",
-      label: "#{value} becomes #{wrapped} here",
+      label: "#{value} becomes #{wrapped} in #{type}",
       help: wraps_help(value, low, high),
       frame: "",
       severity: :warning
@@ -125,7 +125,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
       detail:
         "The largest finite #{type} is #{largest}, and #{spelled} is past it, so it becomes " <>
           "an infinity: math over the tensor gives infinities and NaNs.",
-      label: "#{spelled} becomes an infinity here",
+      label: "#{spelled} becomes an infinity in #{type} (largest #{largest})",
       help: "make the tensor #{wider}, or scale the value into #{type}'s range",
       frame: "",
       severity: :warning
@@ -142,10 +142,10 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
         "The smallest #{type} above zero is #{smallest}, and #{spelled} is too near zero " <>
           "to round to it, so it becomes 0.0: an epsilon written this way guards nothing, and " <>
           "a division by it divides by zero.",
-      label: "#{spelled} becomes 0.0 here",
+      label: "#{spelled} becomes 0.0 in #{type} (smallest #{smallest})",
       help:
-        "make the tensor a type whose range holds it (f32, or bf16, which has f32's range), or " <>
-          "use a value #{type} holds, such as Nx.Constants.smallest_positive_normal(:#{type})",
+        "make the tensor a type whose range holds it (#{finer(type)}), or use a value " <>
+          "#{type} holds, such as Nx.Constants.smallest_positive_normal(:#{type})",
       frame: "",
       severity: :warning
     }
@@ -160,7 +160,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
         "Nx cannot write a float, NaN or an infinity as an integer: it raises ArgumentError, " <>
           "\"construction of binary failed\", building the data (EMLX truncates a scalar float " <>
           "instead).",
-      label: "raises for #{spelled} here",
+      label: "raises writing #{spelled} as #{type}",
       help:
         "write an integer, or make the tensor a float type and round it into an integer one: " <>
           "Nx.as_type(Nx.round(tensor), :#{type})",
@@ -243,6 +243,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
   defp float_limits("bf16"), do: {"3.3895314e38", "f64 (on a backend that has it)"}
   defp float_limits(type) when type in ["f32", "c64"], do: {"3.4028235e38", "f64 or c128"}
 
+  # The types that hold numbers nearer zero than a float type does.
+  defp finer(type) when type in ["f8", "f16"], do: "f32, or bf16, which has f32's range"
+  defp finer("bf16"), do: "f32"
+  defp finer("f32"), do: "f64"
+  defp finer("c64"), do: "c128"
+
   defp smallest_subnormal("f16"), do: "5.960464477539063e-8"
   defp smallest_subnormal("f8"), do: "1.52587890625e-5"
   defp smallest_subnormal("bf16"), do: "9.183549615799121e-41"
@@ -313,6 +319,13 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Literals do
     "{:int, 32}" => "{:s, 32}",
     "{:int, 64}" => "{:s, 64}"
   }
+
+  defp invalid_type_label(subject) do
+    case Map.fetch(@meant, subject) do
+      {:ok, meant} -> "raises for #{subject}, which Nx names #{meant}"
+      :error -> "raises for #{subject}, not a type Nx has"
+    end
+  end
 
   defp invalid_type_help(subject) do
     case Map.fetch(@meant, subject) do
