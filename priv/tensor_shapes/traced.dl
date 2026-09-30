@@ -145,7 +145,7 @@ holds(function, "param", to_string(position), "expression", "") :-
 holds(function, "result", site, "expression", "") :-
   held_asked(function, "result", site, "expression"),
   operation_site(site, operation, arity),
-  tensor_constructor(operation, arity).
+  nx_argument(operation, arity, 0, "data").
 holds(function, "result", site, "expression", "") :-
   held_asked(function, "result", site, "expression"),
   operation_site(site, operation, _),

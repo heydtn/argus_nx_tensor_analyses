@@ -129,7 +129,7 @@ made_as(site, 0, text, element, name, "written") :-
 inferred_operand(site, position) :-
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
-  !tensor_constructor(operation, arity),
+  !nx_argument(operation, arity, 0, "data"),
   operation != "Nx.as_type",
   operation != "Nx.bitcast".
 inferred_operand(site, position) :-
@@ -154,7 +154,7 @@ data_given(context, site, text, 0) :-
   site_active(context, site).
 
 .decl data_site(site: symbol)
-data_site(site) :- operation_site(site, operation, arity), tensor_constructor(operation, arity).
+data_site(site) :- operation_site(site, operation, arity), nx_argument(operation, arity, 0, "data").
 data_site(site) :- operation_site(site, "Nx.as_type", 2).
 
 // Data `Nx.tensor/1,2` is given with no type, which it types by what the

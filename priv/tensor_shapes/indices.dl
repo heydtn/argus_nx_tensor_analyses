@@ -285,14 +285,17 @@ slice_past_end(context, site, cat("axis ", to_string(axis), ": start ", to_strin
   ( option_integer(site, "axis", axis), axis >= 0 ; option_absent(site, "axis"), axis = 0 ),
   length = cat(path, "#{", to_string(axis), "}").
 
-// The calls that slice from starts: `Nx.slice/3,4`, `Nx.slice_along_axis/3,4`
-// and `Nx.put_slice/3`, which take a list of one per axis or, for
-// `slice_along_axis`, the one.
+// The calls that slice from starts ("starts"): `Nx.slice/3,4`,
+// `Nx.slice_along_axis/3,4` and `Nx.put_slice/3`, which take a list of one
+// per axis or, for `slice_along_axis`, the one.
 .decl slices_from(site: symbol, operation: symbol)
 slices_from(site, operation) :-
   operation_site(site, operation, arity),
-  arity >= 3,
-  match("Nx\\.(slice|slice_along_axis|put_slice)", operation).
+  nx_argument(operation, arity, 1, "starts").
+
+nx_members("argument", "starts", cat(
+  " Nx.slice/3:1 Nx.slice/4:1 Nx.slice_along_axis/3:1 Nx.slice_along_axis/4:1",
+  " Nx.put_slice/3:1 ")).
 
 // A start, as the code writes it: `slice_along_axis`'s argument, and each
 // element of a list of them the call's function builds.

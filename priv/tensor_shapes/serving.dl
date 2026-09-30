@@ -361,7 +361,7 @@ nx_reduction_of_every_axis(function, cat("Nx.", name, "/1")) :-
   serving_computation(_, _, function, 0),
   match("Nx:[a-z_]+/1", function),
   name = substr(function, 3, strlen(function) - 5),
-  ( reduction(cat("Nx.", name)) ; axis_reduction(cat("Nx.", name)) ).
+  ( nx_trait(cat("Nx.", name), "reduction") ; nx_trait(cat("Nx.", name), "axis_reduction") ).
 
 // A list of tensors a call is handed: the entries of
 // `Nx.Batch.stack/1,2` and `Nx.Batch.concatenate/1,2`, and the templates
@@ -607,7 +607,7 @@ operates_along(context, site, first, axis, "it reduces the batch axis") :-
   in_batched_run(_, context, _),
   instance(context, site, [first, _, _], _),
   operation_site(site, operation, _),
-  axis_reduction(operation),
+  nx_trait(operation, "axis_reduction"),
   option(site, "axis", text, start),
   term_axis(first, text, start, axis).
 operates_along(context, site, first, axis, "it sorts or accumulates along the batch axis") :-
@@ -650,13 +650,13 @@ runs_along_first_axis(context, site, path, "it reduces the batch axis") :-
   batch_parameter(context, _, path),
   argument_unshaped(context, site, 0, path),
   operation_site(site, operation, _),
-  reduction(operation),
+  nx_trait(operation, "reduction"),
   ( option_absent(site, "axes") ; option(site, "axes", text, start), term_element_integer(text, start, _, 0) ).
 runs_along_first_axis(context, site, path, detail) :-
   batch_parameter(context, _, path),
   argument_unshaped(context, site, 0, path),
   operation_site(site, operation, _),
-  ( axis_reduction(operation), detail = "it reduces the batch axis"
+  ( nx_trait(operation, "axis_reduction"), detail = "it reduces the batch axis"
   ; nx_trait(operation, "axis_preserving"), detail = "it sorts or accumulates along the batch axis" ),
   ( option_absent(site, "axis") ; option_integer(site, "axis", 0) ).
 
@@ -670,5 +670,5 @@ returns_reduction_of_every_axis(computation, site) :-
   ( flow_return(computation, _, "result", site)
   ; flow_return(computation, _, "result", call), program_call(call, computation, callee), flow_return(callee, _, "result", site) ),
   operation_site(site, operation, _),
-  ( reduction(operation), operation != "Nx.reduce", option_absent(site, "axes"), option_flag(site, "keep_axes", 0)
-  ; axis_reduction(operation), option_absent(site, "axis"), option_flag(site, "keep_axis", 0) ).
+  ( nx_trait(operation, "reduction"), operation != "Nx.reduce", option_absent(site, "axes"), option_flag(site, "keep_axes", 0)
+  ; nx_trait(operation, "axis_reduction"), option_absent(site, "axis"), option_flag(site, "keep_axis", 0) ).

@@ -368,7 +368,7 @@ written_misfit(site, "nonpositive", cat("top_k k must be an integer greater than
   option_integer(site, "k", k),
   k < 1.
 written_misfit(site, "nonpositive", cat("expected an integer or :power_of_two as length, got: ", to_string(length))) :-
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   operation != "Nx.irfft",
   operation_site(site, operation, _),
   option_integer(site, "length", length),
@@ -378,7 +378,7 @@ written_misfit(site, "nonpositive", cat("expected a positive integer as length, 
   option_integer(site, "length", length),
   length < 1.
 written_misfit(site, "nonpositive", cat("no case clause matching: ", to_string(length), " (CaseClauseError)")) :-
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   operation_site(site, operation, _),
   option(site, "lengths", text, start),
   term_element_integer(text, start, _, length),
@@ -539,7 +539,7 @@ call_error(context, site, "transposed_weights", cat(weights, " over axes ", axes
 // different shapes: Nx builds no tensor of those.
 written_misfit(site, "ragged_data", detail) :-
   operation_site(site, operation, arity),
-  tensor_constructor(operation, arity),
+  nx_argument(operation, arity, 0, "data"),
   argument_literal(site, 0, text),
   ragged_detail(text, detail).
 
@@ -548,7 +548,7 @@ written_misfit(site, "ragged_data", detail) :-
 .decl data_ragged(text: symbol, start: number, index: number, first: Axes, other: Axes)
 data_ragged(text, start, index, first, other) :-
   operation_site(site, operation, arity),
-  tensor_constructor(operation, arity),
+  nx_argument(operation, arity, 0, "data"),
   argument_literal(site, 0, text),
   term_list(text, start),
   term_child(text, start, 0, head),

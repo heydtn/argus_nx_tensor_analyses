@@ -485,7 +485,7 @@ nan_operand(site, origin) :-
 not_a_number("result", site, site) :- remote_call(site, _, "Nx.Constants", "nan", _).
 not_a_number("result", site, site) :-
   operation_site(site, operation, arity),
-  tensor_constructor(operation, arity),
+  nx_argument(operation, arity, 0, "data"),
   flow_argument(site, _, 0, "literal", ":nan").
 not_a_number("literal", ":nan", "").
 

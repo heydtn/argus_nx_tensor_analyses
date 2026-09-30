@@ -720,7 +720,7 @@ casts_written_negative(context, site) :-
   site_active(context, site),
   flow_argument(site, _, 0, "result", made),
   operation_site(made, operation, _),
-  tensor_constructor(operation, _),
+  nx_argument(operation, _, 0, "data"),
   flow_argument(made, _, 0, "literal", text),
   match(".*-[0-9].*", text).
 

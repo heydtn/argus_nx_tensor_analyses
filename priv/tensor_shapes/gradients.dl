@@ -607,8 +607,8 @@ stopped_result(site) :-
 
 // A Fourier transform: `fft`, `ifft`, `rfft`, `irfft`, `fft2`, `ifft2`.
 .decl fourier_transform(site: symbol)
-fourier_transform(site) :- operation_site(site, operation, _), fourier(operation).
-fourier_transform(site) :- operation_site(site, operation, _), fourier2(operation).
+fourier_transform(site) :- operation_site(site, operation, _), nx_trait(operation, "fourier").
+fourier_transform(site) :- operation_site(site, operation, _), nx_trait(operation, "fourier2").
 
 // A transform's operand is complex: another transform's result, or a
 // complex number made of parts.

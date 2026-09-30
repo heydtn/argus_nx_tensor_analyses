@@ -518,11 +518,15 @@ function_capture(site) :- remote_call(site, _, ":erlang", "make_fun", 3).
 .decl nx_members(facet: symbol, value: symbol, members: symbol)
 
 // The Nx functions the program names, by arity: those it calls, `Nx.Defn`'s
-// among them. Read from the code alone, so that rules may negate what the
-// views derive from it.
+// among them, and those of Nx it hands as a literal external fun
+// (`&Nx.sum/1`). Read from the code alone, so that rules may negate what
+// the views derive from it.
 .decl nx_named(operation: symbol, arity: number)
 nx_named(operation, arity) :- called_name(_, operation, arity).
 nx_named(cat("Nx.Defn.", name), arity) :- remote_call(_, _, "Nx.Defn", name, arity).
+nx_named(cat("Nx.", substr(function, 3, strlen(function) - 5)), 1) :-
+  fun_handed(_, _, function, _),
+  match("Nx:[a-z_]+/1", function).
 
 // A function the program names has the trait.
 .decl nx_trait(operation: symbol, trait: symbol)
@@ -2439,7 +2443,7 @@ shape_argument(context, site, position, axes) :-
   argument_value(context, site, position, $Tensor([nil, axes])),
   shape_position(site, position),
   operation_site(site, operation, _),
-  tensor_as_shape(operation).
+  nx_trait(operation, "tensor_as_shape").
 shape_argument(context, site, 0, [size, "nil", [size, "nil", nil]]) :-
   argument_value(context, site, 0, $Integer(size)),
   operation_site(site, "Nx.eye", _),
@@ -2450,10 +2454,9 @@ shape_position(site, position) :-
   operation_site(site, operation, arity),
   shape_slot(operation, arity, _, position).
 
-.decl tensor_as_shape(operation: symbol)
-tensor_as_shape("Nx.reshape").
-tensor_as_shape("Nx.broadcast").
-tensor_as_shape("Nx.eye").
+// The operations that take a tensor where they take a shape, for its
+// shape.
+nx_members("trait", "tensor_as_shape", " Nx.reshape Nx.broadcast Nx.eye ").
 
 // A tuple of sizes the code builds, `:auto` among them.
 .decl shape_tuple_demand(tuple: Value)
@@ -2538,7 +2541,7 @@ opaque_result(context, site, "") :-
   operation_site(site, operation, arity),
   operand_slot(operation, arity, _, position),
   !shape_query(operation),
-  !reshapes_unknown(operation).
+  !nx_trait(operation, "reshapes_unknown").
 opaque_result(context, site, kept) :-
   shape_path(context, site, path),
   kept_path(path, kept).
@@ -2566,10 +2569,7 @@ opaque_result(context, site, "") :-
 
 // Operations whose result takes its shape from their arguments, whatever
 // the operand's shape: the vectorized axes stay unknown.
-.decl reshapes_unknown(operation: symbol)
-reshapes_unknown("Nx.reshape").
-reshapes_unknown("Nx.broadcast").
-reshapes_unknown("Nx.rename").
+nx_members("trait", "reshapes_unknown", " Nx.reshape Nx.broadcast Nx.rename ").
 
 // The shape the operation gives a tensor of a shape not known.
 .decl unshaped_given(context: Context, site: symbol, shape: Axes)
@@ -3962,17 +3962,13 @@ per_axis_length_mismatch(site, key, rank, length) :-
 .decl created(site: symbol, tensor: Tensor)
 
 // Operations that set the vectorized axes of their result themselves.
-.decl vectorizing(operation: symbol)
-vectorizing("Nx.vectorize").
-vectorizing("Nx.devectorize").
-vectorizing("Nx.iota").
-vectorizing("Nx.eye").
+nx_members("trait", "vectorizing", " Nx.vectorize Nx.devectorize Nx.iota Nx.eye ").
 
 result_tensor(context, site, [vectorized, axes]) :-
   instance(context, site, operands, vectorized),
   result_axes(site, operands, axes),
   operation_site(site, operation, _),
-  !vectorizing(operation).
+  !nx_trait(operation, "vectorizing").
 .plan 1:(2,1,3)
 result_tensor(context, site, [nil, axes]) :-
   instance(context, site, operands, nil),
@@ -4363,11 +4359,9 @@ violation(context, site, "broadcast", cat("cannot broadcast tensor of dimensions
 
 // Reducing the `:axes` option names, all axes without it, and keeping them
 // at size 1 with `keep_axes: true`.
-.decl reduction(operation: symbol)
-reduction("Nx.sum"). reduction("Nx.product"). reduction("Nx.reduce_max"). reduction("Nx.reduce_min").
-reduction("Nx.all"). reduction("Nx.any"). reduction("Nx.mean"). reduction("Nx.logsumexp").
-reduction("Nx.variance"). reduction("Nx.standard_deviation"). reduction("Nx.reduce").
-reduction("Nx.weighted_mean"). reduction("Nx.LinAlg.norm").
+nx_members("trait", "reduction", cat(
+  " Nx.sum Nx.product Nx.reduce_max Nx.reduce_min Nx.all Nx.any Nx.mean Nx.logsumexp",
+  " Nx.variance Nx.standard_deviation Nx.reduce Nx.weighted_mean Nx.LinAlg.norm ")).
 
 nx_members("argument", "first_operand", cat(
   " Nx.LinAlg.norm/1:0 Nx.LinAlg.norm/2:0 Nx.reduce_max/1:0 Nx.reduce_max/2:0 Nx.all/1:0",
@@ -4381,18 +4375,18 @@ nx_members("argument", "second_operand", cat(
 .decl reduction_axes(site: symbol, axes: Axes, mask: number, keep: number)
 term_axes_demand(site, first, text, start) :-
   site_instance(site, operation, _, [first, _, _]),
-  reduction(operation),
+  nx_trait(operation, "reduction"),
   option(site, "axes", text, start).
 reduction_axes(site, first, mask, keep) :-
   site_instance(site, operation, _, [first, _, _]),
-  reduction(operation),
+  nx_trait(operation, "reduction"),
   option(site, "axes", text, start),
   term_axes_mask(first, text, start, mask),
   option_flag(site, "keep_axes", keep).
 .plan 1:(4,3,1,5,2)
 reduction_axes(site, first, mask, keep) :-
   site_instance(site, operation, _, [first, _, _]),
-  reduction(operation),
+  nx_trait(operation, "reduction"),
   option_absent(site, "axes"),
   axes_rank(first, rank),
   mask = (1 bshl rank) - 1,
@@ -4403,7 +4397,7 @@ contract_demand(first, mask, keep, 0) :- reduction_axes(_, first, mask, keep).
 
 result_axes(site, operands, axes) :-
   site_instance(site, operation, _, operands),
-  reduction(operation),
+  nx_trait(operation, "reduction"),
   operation != "Nx.LinAlg.norm",
   operation != "Nx.weighted_mean",
   operands = [first, _, _],
@@ -4474,8 +4468,7 @@ violation(context, site, "weighted_mean", "weights tensor must have rank equal t
 
 // Reducing the `:axis` option names, keeping it at size 1 with
 // `keep_axis: true`; without it, every axis.
-.decl axis_reduction(operation: symbol)
-axis_reduction("Nx.argmax"). axis_reduction("Nx.argmin"). axis_reduction("Nx.median"). axis_reduction("Nx.mode").
+nx_members("trait", "axis_reduction", " Nx.argmax Nx.argmin Nx.median Nx.mode ").
 
 nx_members("argument", "first_operand", cat(
   " Nx.mode/1:0 Nx.mode/2:0 Nx.argmax/1:0 Nx.argmax/2:0 Nx.argmin/1:0 Nx.argmin/2:0",
@@ -4483,11 +4476,11 @@ nx_members("argument", "first_operand", cat(
 
 term_axis_demand(site, first, text, start) :-
   site_instance(site, operation, _, [first, _, _]),
-  axis_reduction(operation),
+  nx_trait(operation, "axis_reduction"),
   option(site, "axis", text, start).
 contract_demand(first, 1 bshl axis, keep, 0) :-
   site_instance(site, operation, _, [first, _, _]),
-  axis_reduction(operation),
+  nx_trait(operation, "axis_reduction"),
   option(site, "axis", text, start),
   term_axis(first, text, start, axis),
   option_flag(site, "keep_axis", keep).
@@ -4495,7 +4488,7 @@ contract_demand(first, 1 bshl axis, keep, 0) :-
 
 result_axes(site, operands, axes) :-
   site_instance(site, operation, _, operands),
-  axis_reduction(operation),
+  nx_trait(operation, "axis_reduction"),
   operands = [first, _, _],
   option(site, "axis", text, start),
   term_axis(first, text, start, axis),
@@ -4507,7 +4500,7 @@ result_axes(site, operands, axes) :-
 // no names, when asked to.
 output_unvectorized(site, operands, nil) :-
   site_instance(site, operation, _, operands),
-  axis_reduction(operation),
+  nx_trait(operation, "axis_reduction"),
   option_absent(site, "axis"),
   ( operation != "Nx.mode" ; option_flag(site, "keep_axis", 0) ).
 output_unvectorized(site, operands, axes) :-
@@ -5563,9 +5556,7 @@ violation(context, site, "gather", ":axes must be an ordered list") :-
 // scalar update; indices of rank 2 address one element per row, and the
 // updates have a row each, their remaining axes no larger than the
 // tensor's axes the indices leave free.
-.decl indexed(operation: symbol)
-indexed("Nx.indexed_add").
-indexed("Nx.indexed_put").
+nx_members("trait", "indexed", " Nx.indexed_add Nx.indexed_put ").
 
 nx_members("argument", "first_operand", cat(
   " Nx.indexed_add/3:0 Nx.indexed_add/4:0 Nx.indexed_put/3:0 Nx.indexed_put/4:0 ")).
@@ -5576,26 +5567,26 @@ nx_members("argument", "third_operand", cat(
 
 result_axes(site, operands, first) :-
   site_instance(site, operation, _, operands),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   operands = [first, _, _].
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, operation, _, [first, _, _]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   option(site, "axes", text, start).
 
 // The tensor's axes the indices address.
 .decl indexed_mask(site: symbol, operands: Operands, mask: number)
 indexed_mask(site, [first, second, third], (1 bshl width) - 1) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   option_absent(site, "axes"),
   axes_rank(second, 2),
   axes_axis(second, 1, [width, nil], _),
   width > 0.
 indexed_mask(site, [first, second, third], mask) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   option(site, "axes", text, start),
   term_axes_mask(first, text, start, mask).
 
@@ -5622,7 +5613,7 @@ free_axis(axes, mask, before, axis) :-
 
 violation(context, site, "indexed", detail) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   instance(context, site, [first, second, third], _),
   axes_rank(first, rank),
   axes_rank(second, 1),
@@ -5632,20 +5623,20 @@ violation(context, site, "indexed", detail) :-
   detail = cat("expected indices to have shape {", to_string(rank), "}, got: {", to_string(width), "}").
 violation(context, site, "indexed", cat("updates must be a scalar tensor when indices has rank 1, got: ", spelled)) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   instance(context, site, [first, second, third], _),
   axes_rank(second, 1),
   third != nil,
   sizes_spelled(third, spelled).
 violation(context, site, "indexed", cat("indices must be a rank 1 or 2 tensor, got: ", to_string(indices))) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   instance(context, site, [first, second, third], _),
   axes_rank(second, indices),
   indices != 1, indices != 2.
 violation(context, site, "indexed", cat("expected the leading axis of indices (", given, ") and leading axis of updates (", updates, ") to match")) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   instance(context, site, [first, second, third], _),
   axes_axis(second, 0, rows, _),
   axes_rank(second, 2),
@@ -5655,7 +5646,7 @@ violation(context, site, "indexed", cat("expected the leading axis of indices ("
   sizes_spelled(third, updates).
 violation(context, site, "indexed", detail) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   instance(context, site, [first, second, third], _),
   axes_rank(first, rank),
   axes_rank(second, 2),
@@ -5667,7 +5658,7 @@ violation(context, site, "indexed", detail) :-
   detail = cat("expected the rank of the input (", to_string(rank), ") to be equal to the rank of the updates (", to_string(updates), ") plus the trailing axis of indices (", given, ") minus one").
 violation(context, site, "indexed", detail) :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   instance(context, site, [first, second, third], _),
   indexed_mask(site, [first, second, third], mask),
   free_axis(first, mask, ordinal, axis),
@@ -5680,7 +5671,7 @@ violation(context, site, "indexed", detail) :-
   detail = cat("axis (", to_string(ordinal + 1), ") of updates (", updates, ") must be less than or equal to the axis (", to_string(axis), ") of ", tensor).
 violation(context, site, "indexed", ":axes must have the same number of elements as the last dimension of indices") :-
   site_instance(site, operation, _, [first, second, third]),
-  indexed(operation),
+  nx_trait(operation, "indexed"),
   instance(context, site, [first, second, third], _),
   option(site, "axes", text, start),
   term_length(text, start, length),
@@ -6573,28 +6564,27 @@ violation(context, site, "top_k", cat("top_k input last axis size must be greate
   size < k.
 
 // The Fourier transforms replace the transformed axis with its length.
-.decl fourier(operation: symbol)
-fourier("Nx.fft"). fourier("Nx.ifft"). fourier("Nx.rfft"). fourier("Nx.irfft").
+nx_members("trait", "fourier", " Nx.fft Nx.ifft Nx.rfft Nx.irfft ").
 
 nx_members("argument", "first_operand", cat(
   " Nx.rfft/1:0 Nx.rfft/2:0 Nx.irfft/1:0 Nx.irfft/2:0 Nx.fft/1:0 Nx.fft/2:0 Nx.ifft/1:0",
   " Nx.ifft/2:0 ")).
-option_default(site, "axis", -1) :- operation_site(site, operation, _), fourier(operation).
+option_default(site, "axis", -1) :- operation_site(site, operation, _), nx_trait(operation, "fourier").
 axis_option_demand(site, "axis", -1, first) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   first != nil.
 
 // The length the transform computes along the axis.
 .decl fourier_length(site: symbol, axes: Axes, length: number)
 fourier_length(site, first, length) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   option_integer(site, "length", length),
   length > 0.
 fourier_length(site, first, power) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   operation != "Nx.irfft",
   option_atom(site, "length", ":power_of_two"),
   axis_option(site, "axis", first, axis),
@@ -6604,7 +6594,7 @@ fourier_length(site, first, power) :-
 .plan 1:(4,3,1,5,2), 2:(5,4,3,1,2)
 fourier_length(site, first, size) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   operation != "Nx.irfft",
   option_absent(site, "length"),
   axis_option(site, "axis", first, axis),
@@ -6621,20 +6611,20 @@ fourier_length(site, first, 2 * (size - 1)) :-
 
 build_rank(site, [first, second, third], rank) :-
   site_instance(site, operation, _, [first, second, third]),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   axis_option(site, "axis", first, _),
   axes_rank(first, rank).
 .plan 1:(3,1,2,4), 2:(4,3,1,2)
 build_axis(site, [first, second, third], axis, size, name) :-
   site_instance(site, operation, _, [first, second, third]),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   axis_option(site, "axis", first, transformed),
   axes_axis(first, axis, size, name),
   axis != transformed.
 .plan 1:(3,1,2,4), 2:(4,3,1,2)
 build_axis(site, [first, second, third], transformed, [size, nil], name) :-
   site_instance(site, operation, _, [first, second, third]),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   axis_option(site, "axis", first, transformed),
   axes_axis(first, transformed, _, name),
   fourier_length(site, first, length),
@@ -6643,29 +6633,28 @@ build_axis(site, [first, second, third], transformed, [size, nil], name) :-
 
 result_axes(site, operands, axes) :-
   site_instance(site, operation, _, operands),
-  fourier(operation),
+  nx_trait(operation, "fourier"),
   built(site, operands, axes).
 .plan 1:(3,1,2)
 
 violation(context, site, "rank", "expected a tensor with rank > 0, got tensor with rank 0") :-
   site_instance(site, operation, _, [nil, second, third]),
-  ( fourier(operation) ; operation = "Nx.diff" ),
+  ( nx_trait(operation, "fourier") ; operation = "Nx.diff" ),
   instance(context, site, [nil, second, third], _).
 
 // `Nx.fft2/2` and `Nx.ifft2/2` transform two axes, the last two by
 // default.
-.decl fourier2(operation: symbol)
-fourier2("Nx.fft2"). fourier2("Nx.ifft2").
+nx_members("trait", "fourier2", " Nx.fft2 Nx.ifft2 ").
 
 nx_members("argument", "first_operand", " Nx.fft2/1:0 Nx.fft2/2:0 Nx.ifft2/1:0 Nx.ifft2/2:0 ").
 
 term_axes_demand(site, first, text, start) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   option(site, "axes", text, start).
 integer_axis_demand(site, first, value) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   option_absent(site, "axes"),
   ( value = -2 ; value = -1 ).
 
@@ -6673,7 +6662,7 @@ integer_axis_demand(site, first, value) :-
 .decl fourier2_axis(site: symbol, axes: Axes, index: number, axis: number)
 fourier2_axis(site, first, index, axis) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   option(site, "axes", text, start),
   term_length(text, start, 2),
   term_axes_mask(first, text, start, _),
@@ -6681,7 +6670,7 @@ fourier2_axis(site, first, index, axis) :-
 .plan 1:(5,3,4,6,1,2), 2:(6,3,4,5,1,2)
 fourier2_axis(site, first, index, axis) :-
   site_instance(site, operation, _, [first, _, _]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   option_absent(site, "axes"),
   ( index = 0, value = -2 ; index = 1, value = -1 ),
   integer_axis(first, value, axis).
@@ -6712,7 +6701,7 @@ fourier2_length(site, first, index, power) :-
 
 build_rank(site, [first, second, third], rank) :-
   site_instance(site, operation, _, [first, second, third]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   fourier2_axis(site, first, 0, _),
   fourier2_axis(site, first, 1, _),
   axes_rank(first, rank),
@@ -6720,7 +6709,7 @@ build_rank(site, [first, second, third], rank) :-
 .plan 1:(3,4,1,2,5), 2:(4,3,1,2,5), 3:(5,3,4,1,2)
 build_axis(site, [first, second, third], axis, size, name) :-
   site_instance(site, operation, _, [first, second, third]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   fourier2_axis(site, first, 0, one),
   fourier2_axis(site, first, 1, other),
   axes_axis(first, axis, size, name),
@@ -6729,7 +6718,7 @@ build_axis(site, [first, second, third], axis, size, name) :-
 .plan 1:(3,4,1,2,5), 2:(4,3,1,2,5), 3:(5,3,4,1,2)
 build_axis(site, [first, second, third], axis, [length, nil], name) :-
   site_instance(site, operation, _, [first, second, third]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   fourier2_axis(site, first, index, axis),
   fourier2_length(site, first, index, length),
   axes_axis(first, axis, _, name).
@@ -6737,13 +6726,13 @@ build_axis(site, [first, second, third], axis, [length, nil], name) :-
 
 result_axes(site, operands, axes) :-
   site_instance(site, operation, _, operands),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   built(site, operands, axes).
 .plan 1:(3,1,2)
 
 violation(context, site, "rank", cat("expected a tensor with rank > 1, got tensor with rank ", to_string(rank))) :-
   site_instance(site, operation, _, [first, second, third]),
-  fourier2(operation),
+  nx_trait(operation, "fourier2"),
   instance(context, site, [first, second, third], _),
   axes_rank(first, rank),
   rank < 2.
@@ -6817,10 +6806,14 @@ square(axes) :-
   sizes_compatible(rows, columns).
 .plan 1:(2,3,1), 2:(3,1,2)
 
-.decl square_operation(operation: symbol)
-square_operation("Nx.LinAlg.cholesky"). square_operation("Nx.LinAlg.lu").
-square_operation("Nx.LinAlg.invert"). square_operation("Nx.LinAlg.matrix_power").
-square_operation("Nx.LinAlg.determinant"). square_operation("Nx.LinAlg.eigh").
+// The operations of a square matrix or a batch of them, by what Nx says of
+// another shape (their "square_message" class).
+nx_members("square_message", "tensor must be a square matrix or a batch of square matrices, got shape: ", cat(
+  " Nx.LinAlg.cholesky Nx.LinAlg.lu Nx.LinAlg.invert Nx.LinAlg.eigh ")).
+nx_members("square_message", "determinant/1 expects a square tensor, got tensor with shape: ", cat(
+  " Nx.LinAlg.determinant ")).
+nx_members("square_message", "matrix_power/2 expects a square matrix or a batch of square matrices, got tensor with shape: ", cat(
+  " Nx.LinAlg.matrix_power ")).
 
 nx_members("argument", "first_operand", cat(
   " Nx.LinAlg.cholesky/1:0 Nx.LinAlg.invert/1:0 Nx.LinAlg.matrix_power/2:0 Nx.LinAlg.lu/1:0",
@@ -6831,20 +6824,11 @@ nx_members("argument", "first_operand", cat(
 
 violation(context, site, "square", cat(prefix, spelled)) :-
   site_instance(site, operation, _, [first, second, third]),
-  square_operation(operation),
+  nx_class(operation, "square_message", prefix),
   instance(context, site, [first, second, third], _),
   axes_sized(first),
   !square(first),
-  square_message(operation, prefix),
   sizes_spelled(first, spelled).
-
-.decl square_message(operation: symbol, prefix: symbol)
-square_message(operation, "tensor must be a square matrix or a batch of square matrices, got shape: ") :-
-  square_operation(operation),
-  operation != "Nx.LinAlg.determinant",
-  operation != "Nx.LinAlg.matrix_power".
-square_message("Nx.LinAlg.determinant", "determinant/1 expects a square tensor, got tensor with shape: ").
-square_message("Nx.LinAlg.matrix_power", "matrix_power/2 expects a square matrix or a batch of square matrices, got tensor with shape: ").
 violation(context, site, "rank", cat("tensor must have at least rank 2, got rank ", to_string(rank), " with shape ", spelled)) :-
   site_instance(site, operation, _, [first, second, third]),
   ( operation = "Nx.LinAlg.qr" ; operation = "Nx.LinAlg.svd" ),
@@ -7161,10 +7145,9 @@ violation(context, site, "broadcast", cat("cannot broadcast the mean of shape ",
 // shifted right by a positive `:offset` and down by a negative one; no
 // names.
 nx_members("argument", "first_operand", " Nx.take_diagonal/1:0 Nx.take_diagonal/2:0 ").
-option_default(site, "offset", 0) :- operation_site(site, operation, _), diagonal_operation(operation).
+option_default(site, "offset", 0) :- operation_site(site, operation, _), nx_trait(operation, "diagonal_operation").
 
-.decl diagonal_operation(operation: symbol)
-diagonal_operation("Nx.take_diagonal"). diagonal_operation("Nx.make_diagonal"). diagonal_operation("Nx.put_diagonal").
+nx_members("trait", "diagonal_operation", " Nx.take_diagonal Nx.make_diagonal Nx.put_diagonal ").
 
 // The length of the diagonal of a {rows, columns} matrix at an offset.
 .decl diagonal_length(site: symbol, axes: Axes, length: number)
@@ -7288,35 +7271,35 @@ violation(context, site, "diagonal", cat("expected diagonal tensor of length: ",
 .decl creation(site: symbol, axes: Axes)
 
 // Operations that take no options: their calls have none to resolve.
-.decl takes_no_options(operation: symbol)
-takes_no_options(cat("Nx.", name)) :- type_shorthand(name).
-takes_no_options("Nx.Random.key").
-takes_no_options("Nx.Random.fold_in").
+nx_members("trait", "takes_no_options", " Nx.Random.key Nx.Random.fold_in ").
+nx_trait(operation, "takes_no_options") :-
+  type_shorthand(name),
+  operation = cat("Nx.", name),
+  nx_named(operation, _).
 
 site_options_known(site) :-
   operation_site(site, operation, _),
-  takes_no_options(operation).
+  nx_trait(operation, "takes_no_options").
 
 // `Nx.tensor/2` and its shorthands (`Nx.f32/1`, ...), from data or from a
-// tensor, whose names they drop: one for each type named for its family
-// and size.
+// tensor, whose names they drop, given as their first argument ("data"):
+// a shorthand for each type named for its family and size.
 .decl type_shorthand(name: symbol)
 type_shorthand(name) :- nx_dtype(name, family, _, _), family != name.
 
-.decl tensor_constructor(operation: symbol, arity: number)
-tensor_constructor("Nx.tensor", 1).
-tensor_constructor("Nx.tensor", 2).
-tensor_constructor(cat("Nx.", name), 1) :- type_shorthand(name).
+nx_members("argument", "data", " Nx.tensor/1:0 Nx.tensor/2:0 ").
+nx_argument(operation, 1, 0, "data") :-
+  type_shorthand(name),
+  operation = cat("Nx.", name),
+  nx_named(operation, 1).
 
 creation(site, axes) :-
   operation_site(site, operation, arity),
-  tensor_constructor(operation, arity),
+  nx_argument(operation, arity, 0, "data"),
   argument_literal(site, 0, text),
   data_axes(text, 0, axes).
 
-nx_argument(operation, arity, 0, "first_operand") :-
-  tensor_constructor(operation, arity),
-  nx_named(operation, arity).
+nx_argument(operation, arity, 0, "first_operand") :- nx_argument(operation, arity, 0, "data").
 
 // `Nx.eye/2` of an integer, `Nx.tri/3` of two.
 creation(site, [[size, nil], "nil", [[size, nil], "nil", nil]]) :-
@@ -7360,10 +7343,7 @@ creation(site, nil) :-
 axes_needed(axes) :- creation(_, axes).
 
 // Operations whose result is a shape they are given, named by `:names`.
-.decl shaped_creation(operation: symbol)
-shaped_creation("Nx.iota").
-shaped_creation("Nx.template").
-shaped_creation("Nx.eye").
+nx_members("trait", "shaped_creation", " Nx.iota Nx.template Nx.eye ").
 
 nx_members("argument", "first_shape", cat(
   " Nx.iota/1:0 Nx.iota/2:0 Nx.template/2:0 Nx.template/3:0 Nx.eye/1:0 Nx.eye/2:0 ")).
@@ -7373,7 +7353,7 @@ nx_members("argument", "first_shape", cat(
 named_by_option(site, base) :- creation(site, base).
 named_by_option(site, first) :-
   site_instance(site, operation, arity, [first, nil, nil]),
-  ( shaped_creation(operation) ; tensor_constructor(operation, arity) ).
+  ( nx_trait(operation, "shaped_creation") ; nx_argument(operation, arity, 0, "data") ).
 
 build_rank(site, [base, nil, nil], rank) :-
   named_by_option(site, base),
@@ -7415,7 +7395,7 @@ result_axes(site, [first, nil, nil], axes) :-
 .plan 1:(2,1)
 result_axes(site, [first, nil, nil], axes) :-
   site_instance(site, operation, arity, [first, nil, nil]),
-  tensor_constructor(operation, arity),
+  nx_argument(operation, arity, 0, "data"),
   built(site, [first, nil, nil], axes).
 .plan 1:(3,1,2)
 
@@ -7695,7 +7675,7 @@ violation(context, site, "vectorize", cat("cannot use name ", name, " for new ve
 nx_members("argument", "first_operand", " Nx.revectorize/2:0 Nx.revectorize/3:0 ").
 nx_members("argument", "options", " Nx.revectorize/2:2 Nx.revectorize/3:2 ").
 option_key("target_shape"). option_key("target_names").
-vectorizing("Nx.revectorize").
+nx_members("trait", "vectorizing", " Nx.revectorize ").
 
 // The vectorized axis at `index` asked for, its size -1 for `:auto`.
 .decl revectorize_target(site: symbol, index: number, name: symbol, size: Size)
