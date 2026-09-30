@@ -227,15 +227,15 @@ defmodule ArgusNxTensorAnalyses.SolveTest do
       solve(context)
 
       # The same souffle, by another file.
-      bin = Path.join(context.directory, "bin")
-      File.mkdir_p!(bin)
-      wrapper = Path.join(bin, "souffle")
+      solver_directory = Path.join(context.directory, "solver")
+      File.mkdir_p!(solver_directory)
+      wrapper = Path.join(solver_directory, "souffle")
       File.write!(wrapper, "#!/bin/sh\nexec '#{Argus.Souffle.executable()}' \"$@\"\n")
       File.chmod!(wrapper, 0o755)
       path = System.get_env("PATH")
 
       try do
-        System.put_env("PATH", bin <> ":" <> path)
+        System.put_env("PATH", solver_directory <> ":" <> path)
         assert {_rows, [solve: :rules, solve: :stage0]} = solve(context)
       after
         System.put_env("PATH", path)

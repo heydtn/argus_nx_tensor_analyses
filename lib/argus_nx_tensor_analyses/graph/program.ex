@@ -13,17 +13,18 @@ defmodule ArgusNxTensorAnalyses.Graph.Program do
   # input (`.input name`) and names anywhere outside that declaration.
   # Souffle loads no input no rule reads, so an input named nowhere else
   # decides nothing a solve writes, and its rows are no part of what a
-  # solve is keyed on: Argus declares every relation of its facts an input
-  # (`line_info` among them, which moves with every comment in the code
-  # analyzed), and a program reads a few. Naming is read as text, a whole
-  # word, so a name in a string or a field counts too: a solve may be keyed
-  # on more than it loads, never on less. Where the text does not say
-  # plainly — an input declared with parameters or several to a line, one
-  # inside a component, a macro that could spell a name — every relation
-  # counts. Souffle's own answer (`Argus.Souffle.input_relations/2`) is
-  # exact, but it compiles the whole program to say, which is most of what
-  # solving it costs, and a run would pay it before it could tell whether
-  # it needs to solve at all.
+  # solve is keyed on: a file of declarations declares every relation of
+  # the facts, `line_info` among them, which moves with every comment in
+  # the code analyzed, and a program reads a few. Naming is read as text,
+  # a whole word, so a name in a string or a field counts too: a solve may
+  # be keyed on more than it loads, never on less. Where the text does not
+  # say plainly — an input declared with parameters or several to a line,
+  # one inside a component, a macro that could spell a name — every
+  # relation counts. Souffle's own answer
+  # (`Argus.Souffle.input_relations/2`) is exact, but it compiles the
+  # whole program to say, which is most of what solving it costs, and a
+  # run would pay it before it could tell whether it needs to solve at
+  # all.
 
   alias Argus.Souffle.Program
   alias Roux.Blob

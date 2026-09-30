@@ -6,12 +6,14 @@ defmodule ArgusNxTensorAnalyses.Graph.Extraction do
   # first), kept in the blob store as one segment, and named by each
   # relation's chunk digest.
   #
-  # Keyed by the beam's content (`beam`) and by the extractors and the
-  # code they run (`extraction`): an edit to an extractor moves that code,
-  # and every module is extracted again; an edit anywhere else leaves it.
-  # A module that outlived the pipeline's per-module timeout is its one
-  # error row, which depends on the machine's load: it is not kept, nor is
-  # anything that read it, and the next run extracts it again.
+  # Keyed by the beam's content (`beam`), by the extractors and the code
+  # extraction runs (`extraction`), and by this query's code: an edit to an
+  # extractor moves that code, and every module is extracted again; an edit
+  # to the rules, or to code extraction does not run (the findings'
+  # wording), extracts nothing. A module that outlived the pipeline's
+  # per-module timeout is its one error row, which depends on the
+  # machine's load: it is not kept, nor is anything that read it, and the
+  # next run extracts it again.
 
   use Roux.Query, code: true
 

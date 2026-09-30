@@ -166,15 +166,16 @@ defmodule ArgusNxTensorAnalyses.Graph.Solve do
         reads -> reads
       end
 
-    Enum.reduce_while(relations, {:ok, []}, fn relation, {:ok, inputs} ->
+    relations
+    |> Enum.reduce_while([], fn relation, inputs ->
       case source(db, program, relation, extraction, options, staged) do
         {:error, _reason} = error -> {:halt, error}
-        source -> {:cont, {:ok, [{relation, source} | inputs]}}
+        source -> {:cont, [{relation, source} | inputs]}
       end
     end)
     |> case do
-      {:ok, inputs} -> {:ok, Enum.reverse(inputs)}
-      error -> error
+      {:error, _reason} = error -> error
+      inputs -> {:ok, Enum.reverse(inputs)}
     end
   end
 

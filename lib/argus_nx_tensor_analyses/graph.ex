@@ -108,12 +108,12 @@ defmodule ArgusNxTensorAnalyses.Graph do
 
   # Sets what the graph extracts: the beams at `paths` (absolute, in the
   # order their rows are written) and the analysis's extractors, with the
-  # digest of the code extraction runs. `sources` is the beams' metadata
-  # the session's last run left (`Roux.Sources`); returns the metadata to
-  # commit.
-  defp set_program(db, paths, extractors, sources) do
-    %{meta: meta} =
-      Roux.Sources.sync(db, :beam, Map.new(paths, &{&1, &1}), sources,
+  # digest of the code extraction runs. `last_sources` is the beams'
+  # metadata the session's last run left (`Roux.Sources`); returns the
+  # metadata to commit.
+  defp set_program(db, paths, extractors, last_sources) do
+    %{meta: sources} =
+      Roux.Sources.sync(db, :beam, Map.new(paths, &{&1, &1}), last_sources,
         hash: &Blob.digest/1,
         value: fn %{hash: hash} -> %{hash: hash} end
       )
@@ -127,7 +127,7 @@ defmodule ArgusNxTensorAnalyses.Graph do
         relations: extracted_relations(extractors)
       })
 
-    meta
+    sources
   end
 
   # The code extraction runs: `Argus.Pipeline` and the extractors, which
@@ -141,7 +141,7 @@ defmodule ArgusNxTensorAnalyses.Graph do
   defp code(roots, store) do
     case Roux.Code.digest(roots, store: store) do
       {:ok, digest} -> digest
-      {:error, reason} -> {:unversioned, reason, vm_token()}
+      {:error, reason} -> {:unversioned, reason, runtime_token()}
     end
   end
 
@@ -151,8 +151,9 @@ defmodule ArgusNxTensorAnalyses.Graph do
         do: module
   end
 
-  defp vm_token do
-    key = {__MODULE__, :vm_token}
+  # A token of this runtime's own, the same for every call in it.
+  defp runtime_token do
+    key = {__MODULE__, :runtime_token}
 
     case :persistent_term.get(key, nil) do
       nil ->
