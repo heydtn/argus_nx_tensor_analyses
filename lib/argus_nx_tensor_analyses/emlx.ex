@@ -100,9 +100,12 @@ defmodule ArgusNxTensorAnalyses.EMLX do
           {:func, :func_id, "the function making it"},
           {:operation, :symbol, "the Nx function, as Nx.add/2"},
           {:backend, :symbol, "the backend of one tensor it gets, as EXLA.Backend"},
+          {:operand, :symbol,
+           "which operand that tensor is: its argument's position, then a list cell for an element of a list (0, 1)"},
           {:origin, :symbol, "the call that puts that tensor there"},
           {:origin_operation, :symbol, "that call's function, as Nx.Defn.jit/2"},
           {:other, :symbol, "the backend of another tensor it gets, as EMLX.Backend"},
+          {:other_operand, :symbol, "which operand that tensor is"},
           {:other_origin, :symbol, "the call that puts that tensor there"},
           {:other_origin_operation, :symbol, "that call's function, as Nx.iota/2"}
         ],
@@ -125,10 +128,10 @@ defmodule ArgusNxTensorAnalyses.EMLX do
 
   def finding(
         :tensor_emlx_mixed_backends = relation,
-        [id, _func, operation, backend | rest] = row
+        [id, _func, operation, backend, operand | rest] = row
       ) do
-    [origin, shown, other, other_origin, other_shown] = rest
-    wording = Wording.mixed_backends(backend, other, shown)
+    [origin, shown, other, other_operand, other_origin, other_shown] = rest
+    wording = Wording.mixed_backends(backend, operand, other, other_operand, shown)
 
     related =
       Finding.origin_frame(Wording.placed_by(shown, backend), origin, shown) ++

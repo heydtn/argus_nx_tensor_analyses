@@ -5,20 +5,60 @@ defmodule ArgusNxTensorAnalyses.EMLX.Wording do
 
   import ArgusNxTensorAnalyses.Text
 
-  # What a call over tensors of two backends says, the tensor of `backend`
-  # put there by the call `shown`.
-  @spec mixed_backends(String.t(), String.t(), String.t()) :: map()
-  def mixed_backends(backend, other, shown) do
+  # What a call over tensors of two backends says: the tensor of `backend`
+  # is the operand `operand` (as `tensor_argument` spells it: a position,
+  # then a cell for an element of a list) and put there by the call
+  # `shown`, the tensor of `other` the operand `other_operand`.
+  @spec mixed_backends(String.t(), String.t(), String.t(), String.t(), String.t()) :: map()
+  def mixed_backends(backend, operand, other, other_operand, shown) do
+    [{first, first_operand}, {second, second_operand}] =
+      Enum.sort_by(
+        [{backend, operand}, {other, other_operand}],
+        &(&1 |> elem(1) |> position() |> String.to_integer())
+      )
+
     %{
       title: "gets tensors of #{backend} and #{other}, which cannot meet",
       detail:
-        "Nx raises Nx.Defn.IncompatibleBackendsError for a call over tensors of two backends, " <>
-          "unless one of them is Nx.BinaryBackend.#{compiled(shown, backend)}",
-      label: "gets #{backend} and #{other} here",
+        "An Nx call runs on the one backend of the tensors it gets, and takes a tensor of " <>
+          "another only from Nx.BinaryBackend. Nx raises Nx.Defn.IncompatibleBackendsError: " <>
+          "cannot invoke Nx function because it relies on two incompatible tensor " <>
+          "implementations#{named(first, first_operand, second, second_operand)}." <>
+          compiled(shown, backend),
+      label: "gets #{gets(first, first_operand, second, second_operand)}",
       help:
-        "move one tensor to the other's backend first, such as Nx.backend_transfer(tensor, EMLX.Backend)"
+        "move one tensor onto the other's backend first, such as Nx.backend_transfer(tensor, #{other}) for the one on #{backend}"
     }
   end
+
+  # How Nx names the backends raising: in the order of the arguments that
+  # hold them. The rules do not keep the order of a list's elements, so
+  # for those it only says that Nx names them.
+  defp named(first, first_operand, second, second_operand) do
+    if listed?(first_operand) or listed?(second_operand),
+      do: ", naming the two",
+      else: ": #{first} and #{second}"
+  end
+
+  defp gets(first, first_operand, second, second_operand) do
+    if listed?(first_operand) and position(first_operand) == position(second_operand),
+      do: "tensors on #{first} and #{second} in #{argument(first_operand)}'s list",
+      else: "#{holder(first_operand)} on #{first} and #{holder(second_operand)} on #{second}"
+  end
+
+  # What holds an operand: an argument, or an element of one's list.
+  defp holder(operand) do
+    if listed?(operand),
+      do: "an element of #{argument(operand)}",
+      else: argument(operand)
+  end
+
+  defp argument(operand), do: "its #{ordinal(position(operand), 4)} argument"
+
+  # The position of the argument that holds an operand.
+  defp position(operand), do: operand |> String.split(" ", parts: 2) |> hd()
+
+  defp listed?(operand), do: String.contains?(operand, " ")
 
   # What a compiled function's results are on, where one puts the tensor
   # on its backend.

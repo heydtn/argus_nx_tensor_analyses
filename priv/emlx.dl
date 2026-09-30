@@ -370,9 +370,9 @@ reaches_shift_width(amount, type) :-
 // the code, so they are not reported (it errs quiet there).
 
 // An Nx call run eagerly gets two tensors whose backends cannot meet.
-.decl mixed_backends(context: Context, site: symbol, backend: symbol, origin: symbol, other: symbol, other_origin: symbol)
-mixed_backends(context, site, backend, origin, other, other_origin) :-
-  operands_on(context, site, backend, origin, other, other_origin),
+.decl mixed_backends(context: Context, site: symbol, backend: symbol, operand: symbol, origin: symbol, other: symbol, other_operand: symbol, other_origin: symbol)
+mixed_backends(context, site, backend, operand, origin, other, other_operand, other_origin) :-
+  operands_on(context, site, backend, operand, origin, other, other_operand, other_origin),
   backends_conflict(backend, other),
   site_function(site, function),
   !runs_in_trace(function).
@@ -597,11 +597,12 @@ handed_placed_tensor(site) :-
   tensor_argument(site, function, _, kind, source),
   placed_on(_, function, kind, source, _, _).
 
-// The backends of two tensors a call gets, and the calls that put them
-// there, but a backend a tensor has only as part of a mix it carries
-// from an earlier call, which is that call's finding.
-.decl operands_on(context: Context, site: symbol, backend: symbol, origin: symbol, other: symbol, other_origin: symbol)
-operands_on(context, site, backend, origin, other, other_origin) :-
+// The backends of two tensors a call gets, which operands they are
+// (`tensor_argument`), and the calls that put them there, but a backend
+// a tensor has only as part of a mix it carries from an earlier call,
+// which is that call's finding.
+.decl operands_on(context: Context, site: symbol, backend: symbol, operand: symbol, origin: symbol, other: symbol, other_operand: symbol, other_origin: symbol)
+operands_on(context, site, backend, operand, origin, other, other_operand, other_origin) :-
   operand_on(context, site, operand, backend, origin),
   operand_on(context, site, other_operand, other, other_origin),
   operand != other_operand.
@@ -749,16 +750,17 @@ tensor_emlx_divergence(site, function, operation, kind, detail, certain, cause, 
 named_call(site) :- emlx_divergence(_, site, _, _, _, _, _).
 named_call(origin) :- emlx_divergence(_, _, _, _, _, _, origin).
 
-// A tensor on another backend than EMLX's (`backend`, put there by
-// `origin`) and a tensor it cannot meet (`other`, put there by
-// `other_origin`), both handed to one Nx call.
-.decl tensor_emlx_mixed_backends(id: symbol, func: symbol, operation: symbol, backend: symbol, origin: symbol, origin_operation: symbol, other: symbol, other_origin: symbol, other_origin_operation: symbol)
+// A tensor on another backend than EMLX's (`backend`, the operand
+// `operand`, put there by `origin`) and a tensor it cannot meet
+// (`other`, the operand `other_operand`, put there by `other_origin`),
+// both handed to one Nx call.
+.decl tensor_emlx_mixed_backends(id: symbol, func: symbol, operation: symbol, backend: symbol, operand: symbol, origin: symbol, origin_operation: symbol, other: symbol, other_operand: symbol, other_origin: symbol, other_origin_operation: symbol)
 .output tensor_emlx_mixed_backends
-tensor_emlx_mixed_backends(site, function, operation, backend, origin, origin_operation, other, other_origin, other_origin_operation) :-
-  mixed_backends(_, site, backend, origin, other, other_origin),
+tensor_emlx_mixed_backends(site, function, operation, backend, operand, origin, origin_operation, other, other_operand, other_origin, other_origin_operation) :-
+  mixed_backends(_, site, backend, operand, origin, other, other_operand, other_origin),
   finding_call(site, function, operation),
   call_spelled(origin, origin_operation),
   call_spelled(other_origin, other_origin_operation).
-named_call(site) :- mixed_backends(_, site, _, _, _, _).
-named_call(origin) :- mixed_backends(_, _, _, origin, _, _).
-named_call(origin) :- mixed_backends(_, _, _, _, _, origin).
+named_call(site) :- mixed_backends(_, site, _, _, _, _, _, _).
+named_call(origin) :- mixed_backends(_, _, _, _, origin, _, _, _).
+named_call(origin) :- mixed_backends(_, _, _, _, _, _, _, origin).
