@@ -258,7 +258,7 @@ The halves of a float `Nx.split` have sizes that are not known.
 |---|---|---|---|
 | `data_read_in_trace` | error | Reading a tensor's data (`to_number`, `to_list`, `to_binary`, ...) in code Nx traces: a `defn`, or a function handed to `Nx.Defn.jit`, `compile`, a grad or `EXLA.jit`. | `Nx.Defn.jit(fn x -> Nx.add(x, Nx.to_number(Nx.sum(x))) end).(t)` |
 | `jit_in_trace` | error | A jitted or compiled function, or `jit_apply`, run in traced code with no `on_conflict:` in its options. | `inner = Nx.Defn.jit(fn y -> Nx.add(y, 1) end); Nx.Defn.jit(fn x -> inner.(x) end).(t)` |
-| `compiled_template` | error | A compiled function called with an argument whose known sizes its template does not fit. | `Nx.Defn.compile(&Nx.exp/1, [Nx.template({2}, :s32)]).(Nx.iota({3}))` |
+| `compiled_template` | error | A compiled function called with an argument its template does not fit: other known sizes, another known type, or an axis both name otherwise. | `Nx.Defn.compile(&Nx.exp/1, [Nx.template({2}, :f32)]).(Nx.iota({2}))` |
 | `template_computed` | error | A template computed with, or handed to a jitted function. | `Nx.add(Nx.template({1}, :s32), t)` |
 | `captured_tensor` | warning | A closure handed to a jit, compile or grad that captures a tensor. EMLX and EXLA raise. | `data = Nx.iota({1}); Nx.Defn.jit(fn x -> Nx.add(x, data) end).(t)` |
 | `tensor_arithmetic` | error | Elixir arithmetic (`+`, `*`, `/`, `div`, `band`, ...) on a tensor outside a `defn`. | `x = Nx.iota({2}); x * x` |

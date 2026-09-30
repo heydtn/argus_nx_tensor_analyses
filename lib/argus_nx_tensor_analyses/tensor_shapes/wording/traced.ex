@@ -122,7 +122,7 @@ defmodule ArgusNxTensorAnalyses.TensorShapes.Wording.Traced do
           "takes only tensors of their shapes, names and types. Nx raises: #{detail}.",
       label: "calls it here",
       help:
-        "call it with tensors of the template's shape, or compile it for the shapes it is called with",
+        "call it with tensors of the template's shape, type and names (Nx.as_type/2, Nx.rename/2), or compile it for the tensors it is called with",
       frame: "the template is made by"
     }
   end

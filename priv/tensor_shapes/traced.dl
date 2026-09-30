@@ -504,14 +504,38 @@ jit_in_trace(site, function, maker) :-
   runs_in_trace(function).
 
 // A compiled function called with an argument its template does not fit,
-// the one tensor the argument is in the context, both of sizes all known:
-// Nx raises, as a compiled function takes tensors of only the shapes and
-// types it was compiled for. `got` and `expected` are the two shapes.
+// the one tensor the argument is in the context: of other sizes, both all
+// known; of another type, where the argument is of one; or with an axis
+// named otherwise than the template's axis at its place, where both name
+// it. Nx raises, as a compiled function takes tensors of only the shapes,
+// types and names it was compiled for (`Nx.compatible?/2`). `got` and
+// `expected` show what differs: the sizes, the types, or the shapes with
+// their names.
 .decl template_misfit(context: Context, site: symbol, position: number, template: symbol, got: symbol, expected: symbol)
 template_misfit(context, site, position, template, got, expected) :-
-  compiled_template(site, position, template, expected),
-  compiled_argument(context, site, position, got),
-  got != expected.
+  compiled_template(site, position, template, template_axes),
+  compiled_argument(context, site, position, argument_axes),
+  sizes_spelled(template_axes, expected),
+  sizes_spelled(argument_axes, got),
+  got != expected,
+  match("\\{[0-9, ]*\\}", expected),
+  match("\\{[0-9, ]*\\}", got).
+template_misfit(context, site, position, template, got, expected) :-
+  compiled_template(site, position, template, _),
+  argument_dtype(context, site, position, got, _),
+  1 = count : { argument_dtype(context, site, position, _, _) },
+  value_dtype(_, _, "result", template, expected, _),
+  got != expected,
+  got != "configured",
+  expected != "configured".
+template_misfit(context, site, position, template, got, expected) :-
+  compiled_template(site, position, template, template_axes),
+  compiled_argument(context, site, position, argument_axes),
+  axes_axis(template_axes, axis, _, expected_name),
+  axes_axis(argument_axes, axis, _, got_name),
+  names_differ(got_name, expected_name),
+  shape_shown(template_axes, expected),
+  shape_shown(argument_axes, got).
 
 // ── Words ──────────────────────────────────────────────────────────
 
@@ -528,30 +552,45 @@ runs_jitted(site, function, "") :-
   !resolves_conflict(site),
   !runs_own_body(site).
 
-// The template, and its sizes spelled, that the compiled function a call
-// runs takes at `position`: an `Nx.template` call's of sizes all known,
-// of a written list of as many templates as the call hands arguments.
-.decl compiled_template(site: symbol, position: number, template: symbol, sizes: symbol)
-compiled_template(site, position, template, sizes) :-
+// The template, and its axes, that the compiled function a call runs
+// takes at `position`: an `Nx.template` call's, of a written list of as
+// many templates as the call hands arguments.
+.decl compiled_template(site: symbol, position: number, template: symbol, axes: Axes)
+compiled_template(site, position, template, axes) :-
   runs_jitted(site, _, maker),
   flow_dynamic(site, _, arity),
   compiled_argument_cell(maker, function, position, cell),
   arity = count : { compiled_argument_cell(maker, function, _, _) },
   flow_field(function, cell, "head", "result", template),
   operation_site(template, "Nx.template", _),
-  result_value(_, template, $Tensor([_, axes])),
-  sizes_spelled(axes, sizes),
-  match("\\{[0-9, ]*\\}", sizes).
+  result_value(_, template, $Tensor([_, axes])).
 
-// The sizes, all known, of the one tensor a compiled call's argument at
-// `position` is in the context.
-.decl compiled_argument(context: Context, site: symbol, position: number, sizes: symbol)
-compiled_argument(context, site, position, sizes) :-
+// The axes of the one tensor a compiled call's argument at `position` is
+// in the context.
+.decl compiled_argument(context: Context, site: symbol, position: number, axes: Axes)
+compiled_argument(context, site, position, axes) :-
   compiled_template(site, position, _, _),
   argument_value(context, site, position, $Tensor([_, axes])),
-  1 = count : { argument_value(context, site, position, _) },
-  sizes_spelled(axes, sizes),
-  match("\\{[0-9, ]*\\}", sizes).
+  1 = count : { argument_value(context, site, position, _) }.
+
+// Their names are asked of every template, and of every tensor a fun is
+// called with: the lattice these words read cannot wait for which funs
+// the calls run, which is known only after it (`runs_jitted`).
+axes_needed(axes) :-
+  operation_site(template, "Nx.template", _),
+  result_value(_, template, $Tensor([_, axes])).
+axes_needed(axes) :-
+  flow_dynamic(site, _, _),
+  argument_value(_, site, _, $Tensor([_, axes])).
+
+// The types of a compiled call's arguments are asked, and of its
+// templates.
+typed_site(context, site) :- compiled_template(site, _, _, _), site_active(context, site).
+dtype_operand(site, position) :- compiled_template(site, position, _, _).
+dtype_demand(context, function, "result", template) :-
+  compiled_template(_, _, template, _),
+  site_function(template, function),
+  site_active(context, template).
 
 // ══ Tensors captured by a traced closure ════════════════════════════
 
