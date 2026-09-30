@@ -1121,8 +1121,8 @@ held_number(value, "integer") :-
   coefficient > 0.
 held_number(value, "integer") :- value = $Integer([0, nil]).
 
-// The numbers typed calls take as operands, whose spellings are asked
-// about.
+// The numbers typed calls take as operands, and joined lists hold, whose
+// spellings are asked about.
 .decl number_demand(number: symbol)
 number_demand(number) :- argument_number(_, _, _, number).
 number_asked(number) :- number_demand(number).
@@ -1540,11 +1540,18 @@ joined_element_type(context, site, cell, type, origin) :-
   joined_element(site, function, cell, kind, source, _),
   typed_site(context, site).
 joined_element_type(context, site, cell, type, site) :-
+  joined_number(context, site, cell, number),
+  number_type(number, type).
+
+// A number a joined list holds at a cell, in a context (`held_number`),
+// whose type is asked.
+.decl joined_number(context: Context, site: symbol, cell: symbol, number: symbol)
+joined_number(context, site, cell, number) :-
   typed_site(context, site),
   joined_element(site, function, cell, kind, source, _),
-  value_of(context, function, kind, source, $Term(text, start)),
-  term_spelling(text, start, spelled),
-  number_type(spelled, type).
+  value_of(context, function, kind, source, value),
+  held_number(value, number).
+number_demand(number) :- joined_number(_, _, _, number).
 
 // The merged type of the elements from a cell on.
 .decl joined_type(context: Context, site: symbol, cell: symbol, type: symbol)

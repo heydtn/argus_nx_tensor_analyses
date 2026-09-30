@@ -2872,6 +2872,12 @@ defmodule ArgusNxTensorAnalyses.TensorShapesTest do
      "Nx.add(Nx.u64([1]), Nx.s8([0]))"},
     {{:finds, {"tensor_type_error", "narrowing_merge", "bf16 f16"}, :nonfinite},
      "Nx.concatenate([Nx.bf16([1.0e5]), Nx.f16([1])])"},
+    # a written number in a joined list, whatever else the code writes
+    {{:finds, {"tensor_type_error", "upcast", "bf16 f32"}, :accepted},
+     "Nx.stack([0.625, Nx.bf16(1.0)])"},
+    {{:finds_none, :accepted}, "Nx.stack([Nx.bf16(0.625), Nx.bf16(1.0)])"},
+    {{:finds, {"tensor_type_error", "narrowing_merge", "u64 s64"}, :accepted},
+     "Nx.stack([77, Nx.u64(18446744073709551615)])"},
     {{:finds, {"tensor_type_error", "narrowing_merge", "f16 f8_e4m3fn"}, :accepted},
      "Nx.add(Nx.tensor([1], type: :f8_e4m3fn), Nx.f16([1]))"},
     {{:finds_none, :accepted}, "Nx.add(Nx.f16([1]), Nx.tensor([1], type: :f8_e4m3fn))"},
